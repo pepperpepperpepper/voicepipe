@@ -69,3 +69,4 @@ Thumbs.db
 # Project specific
 *.wav
 /tmp/voicepipe-*
+voicepipe.service

@@ -74,7 +74,7 @@ def run_recording_subprocess():
         recorder = AudioRecorder(device_index=device_index)
         
         print(f"Recording started (PID: {os.getpid()})...", file=sys.stderr)
-        recorder.start_recording()
+        recorder.start_recording(output_file=session['audio_file'])
         
         # Block until terminated
         signal.pause()
@@ -148,7 +148,10 @@ def start(device):
 @main.command()
 @click.option('--type', is_flag=True, help='Type the transcribed text using xdotool')
 @click.option('--language', help='Language code for transcription (e.g., en, es, fr)')
-def stop(type, language):
+@click.option('--prompt', help='Context prompt to guide transcription style. For dictation with quotes, say "open quote" and "close quote"')
+@click.option('--model', default='gpt-4o-transcribe', help='Transcription model to use (default: gpt-4o-transcribe, options: gpt-4o-transcribe, gpt-4o-mini-transcribe, whisper-1)')
+@click.option('--temperature', default=0.0, type=float, help='Temperature for transcription (0.0 for deterministic, default: 0.0)')
+def stop(type, language, prompt, model, temperature):
     """Stop recording and transcribe the audio."""
     try:
         # Try daemon first
@@ -176,8 +179,8 @@ def stop(type, language):
         
         # Transcribe the audio
         try:
-            transcriber = WhisperTranscriber()
-            text = transcriber.transcribe(audio_file, language=language)
+            transcriber = WhisperTranscriber(model=model)
+            text = transcriber.transcribe(audio_file, language=language, prompt=prompt, temperature=temperature)
             
             # Output to stdout
             print(text)
@@ -234,6 +237,36 @@ def stop(type, language):
 
 
 @main.command()
+def status():
+    """Check recording status."""
+    try:
+        # Try daemon first
+        response = daemon_request('status')
+        if response:
+            if 'error' in response:
+                print(f"Error: {response['error']}", file=sys.stderr)
+                sys.exit(1)
+            else:
+                status = response.get('status', 'unknown')
+                if status == 'recording':
+                    print(f"Status: recording (daemon mode)")
+                else:
+                    print(f"Status: {status}")
+                return
+        
+        # Fallback to subprocess method
+        try:
+            session = RecordingSession.get_current_session()
+            print(f"Status: recording (PID: {session['pid']})")
+        except RuntimeError:
+            print("Status: not recording")
+            
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+@main.command()
 def cancel():
     """Cancel active recording without transcribing."""
     try:
@@ -268,6 +301,19 @@ def cancel():
         sys.exit(1)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+@main.command()
+def daemon():
+    """Run the voicepipe daemon service."""
+    try:
+        daemon = RecordingDaemon()
+        daemon.start()
+    except KeyboardInterrupt:
+        print("\nDaemon stopped by user")
+    except Exception as e:
+        print(f"Daemon error: {e}", file=sys.stderr)
         sys.exit(1)
 
 

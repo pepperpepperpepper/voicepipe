@@ -7,9 +7,13 @@ import socket
 import json
 import threading
 import tempfile
+import time
 from pathlib import Path
 
-from .recorder import AudioRecorder
+import pyaudio
+
+from .recorder import FastAudioRecorder
+from .systray import get_systray
 
 
 class RecordingDaemon:
@@ -22,6 +26,21 @@ class RecordingDaemon:
         self.recording = False
         self.audio_file = None
         self.running = True
+        self.timeout_timer = None
+        self.pyaudio = None
+        self.default_device = None
+        self._initialize_audio()
+    
+    def _initialize_audio(self):
+        """Pre-initialize PyAudio to reduce startup delay."""
+        try:
+            self.pyaudio = pyaudio.PyAudio()
+            # Get default device index
+            info = self.pyaudio.get_default_input_device_info()
+            self.default_device = info['index']
+            print(f"Audio initialized. Default device: {info['name']}", file=sys.stderr)
+        except Exception as e:
+            print(f"Warning: Could not pre-initialize audio: {e}", file=sys.stderr)
         
     def start(self):
         """Start the daemon service."""
@@ -54,6 +73,8 @@ class RecordingDaemon:
         self.running = False
         if self.recorder:
             self.recorder.cleanup()
+        if self.pyaudio:
+            self.pyaudio.terminate()
         if self.socket:
             self.socket.close()
         if self.SOCKET_PATH.exists():
@@ -96,13 +117,29 @@ class RecordingDaemon:
             
         try:
             # Create temp file
-            fd, self.audio_file = tempfile.mkstemp(suffix='.wav', prefix='voicepipe_')
+            fd, self.audio_file = tempfile.mkstemp(suffix='.mp3', prefix='voicepipe_')
             os.close(fd)
             
-            # Start recording
-            self.recorder = AudioRecorder(device_index=device_index)
-            self.recorder.start_recording()
+            # Start recording with pre-initialized PyAudio
+            self.recorder = FastAudioRecorder(
+                pyaudio_instance=self.pyaudio,
+                device_index=device_index or self.default_device
+            )
+            self.recorder.start_recording(output_file=self.audio_file)
             self.recording = True
+            
+            # Set up timeout (5 minutes)
+            self.timeout_timer = threading.Timer(300, self._timeout_callback)
+            self.timeout_timer.start()
+            
+            # Show systray icon if available
+            systray = get_systray()
+            # Use icon from project assets
+            icon_path = Path(__file__).parent / "assets" / "recording_icon.tiff"
+            if icon_path.exists():
+                systray.show(str(icon_path))
+            else:
+                systray.show()  # Use default red recording icon
             
             return {
                 'status': 'recording',
@@ -114,6 +151,12 @@ class RecordingDaemon:
             if self.audio_file and os.path.exists(self.audio_file):
                 os.unlink(self.audio_file)
             return {'error': str(e)}
+    
+    def _timeout_callback(self):
+        """Called when recording timeout is reached."""
+        if self.recording:
+            print("Recording timeout reached (5 minutes), stopping...", file=sys.stderr)
+            self._stop_recording()
             
     def _stop_recording(self):
         """Stop recording and save audio."""
@@ -121,10 +164,20 @@ class RecordingDaemon:
             return {'error': 'No recording in progress'}
             
         try:
+            # Cancel timeout timer
+            if self.timeout_timer:
+                self.timeout_timer.cancel()
+                self.timeout_timer = None
+            
             # Stop recording
             audio_data = self.recorder.stop_recording()
-            self.recorder.save_to_file(audio_data, self.audio_file)
+            if audio_data:
+                # WAV mode fallback
+                self.recorder.save_to_file(audio_data, self.audio_file)
             self.recorder.cleanup()
+            
+            # Hide systray icon
+            get_systray().hide()
             
             response = {
                 'status': 'stopped',
@@ -147,6 +200,11 @@ class RecordingDaemon:
             return {'error': 'No recording in progress'}
             
         try:
+            # Cancel timeout timer
+            if self.timeout_timer:
+                self.timeout_timer.cancel()
+                self.timeout_timer = None
+            
             # Stop and cleanup
             if self.recorder:
                 self.recorder.stop_recording()
@@ -160,6 +218,9 @@ class RecordingDaemon:
             self.recording = False
             self.recorder = None
             self.audio_file = None
+            
+            # Hide systray icon
+            get_systray().hide()
             
             return {'status': 'cancelled'}
             

@@ -4,16 +4,16 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python -m voicepipe.daemon
+ExecStart=VOICEPIPE_COMMAND daemon
 Restart=on-failure
 RestartSec=5
-Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+Environment="PATH=/usr/local/bin:/usr/bin:/bin:HOME_DIR/.local/bin"
 
 # Security hardening
-PrivateTmp=yes
+PrivateTmp=no
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/tmp
+ReadWritePaths=/tmp %t
 NoNewPrivileges=true
 
 [Install]

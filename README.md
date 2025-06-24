@@ -1,16 +1,16 @@
 # Voicepipe
 
-A robust CLI tool for voice recording and transcription using OpenAI's Whisper API. Record your voice, automatically transcribe it, and optionally type the result directly into any application.
+Voice recording and transcription daemon for Linux.
 
 ## Features
 
-- 🎤 Simple voice recording with automatic device detection
-- 🔤 High-quality transcription using OpenAI Whisper API
-- ⌨️ Optional automatic typing of transcribed text via xdotool
-- 🔒 Robust PID-based session management (no double recordings)
-- 🧹 Automatic cleanup of temporary files
-- 🌍 Multi-language transcription support
-- 📦 pip and pipx friendly installation
+- Simple voice recording with automatic device detection
+- High-quality transcription using OpenAI Whisper API
+- Optional automatic typing of transcribed text via xdotool
+- Robust daemon-based session management
+- Automatic cleanup of temporary files
+- Multi-language transcription support
+- pip and pipx friendly installation
 
 ## Installation
 

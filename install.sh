@@ -1,60 +1,86 @@
 #!/bin/bash
-# Installation script for voicepipe with systemd user service
+#
+# Voicepipe Installation Script
+# Installs voicepipe using pipx for isolated Python environment
+#
 
 set -e
 
-echo "Installing voicepipe..."
+echo "Voicepipe Installation Script"
+echo "============================"
+echo
 
 # Check if we're in the project directory
-if [ ! -f "setup.py" ]; then
-    echo "Error: setup.py not found. Please run this script from the voicepipe project directory."
+if [ ! -f "pyproject.toml" ] || [ ! -d "voicepipe" ]; then
+    echo "Error: This script must be run from the voicepipe project directory"
+    echo "Make sure pyproject.toml and voicepipe/ directory exist"
     exit 1
 fi
 
-# Determine installation method
-if command -v pipx &> /dev/null; then
-    echo "Using pipx for installation (recommended)..."
-    # For development, use pipx install with --editable
-    pipx install --editable .
-elif command -v pip &> /dev/null; then
-    echo "Using pip for installation..."
-    # Install with --user flag for local installation
-    pip install --user -e .
-else
-    echo "Error: Neither pipx nor pip found. Please install Python and pip first."
+# Check for pipx
+if ! command -v pipx &> /dev/null; then
+    echo "Error: pipx is required but not installed."
+    echo
+    echo "Please install pipx first:"
+    echo "  # On Ubuntu/Debian:"
+    echo "  sudo apt install pipx"
+    echo "  # On Arch Linux:"
+    echo "  sudo pacman -S python-pipx"
+    echo "  # Or with pip:"
+    echo "  pip install --user pipx"
+    echo
+    echo "Then ensure pipx is in your PATH:"
+    echo "  pipx ensurepath"
     exit 1
 fi
 
-# Wait a moment for the installation to complete
-sleep 2
+echo "Installing with pipx..."
 
-# Find the voicepipe command location
+# Uninstall any existing version
+pipx uninstall voicepipe 2>/dev/null || true
+
+# Install with systray support
+pipx install --editable ".[systray]"
+
+echo "✓ Installation complete!"
+
+echo
+
+# Find voicepipe command location
 VOICEPIPE_CMD=$(which voicepipe 2>/dev/null || echo "")
 if [ -z "$VOICEPIPE_CMD" ]; then
     # Try common locations
-    if [ -f "$HOME/.local/bin/voicepipe" ]; then
-        VOICEPIPE_CMD="$HOME/.local/bin/voicepipe"
-    elif [ -f "$HOME/.local/pipx/venvs/voicepipe/bin/voicepipe" ]; then
-        VOICEPIPE_CMD="$HOME/.local/pipx/venvs/voicepipe/bin/voicepipe"
-    else
-        echo "Error: Could not find voicepipe command after installation"
-        exit 1
-    fi
+    for path in "$HOME/.local/bin/voicepipe" "$HOME/.local/pipx/venvs/voicepipe/bin/voicepipe"; do
+        if [ -f "$path" ]; then
+            VOICEPIPE_CMD="$path"
+            break
+        fi
+    done
 fi
 
-echo "Found voicepipe at: $VOICEPIPE_CMD"
-
-# Create systemd user directory if it doesn't exist
-mkdir -p ~/.config/systemd/user/
-
-# Generate the service file from template
-if [ -f "voicepipe.service.template" ]; then
-    sed -e "s|VOICEPIPE_COMMAND|$VOICEPIPE_CMD|g" \
-        -e "s|HOME_DIR|$HOME|g" \
-        voicepipe.service.template > ~/.config/systemd/user/voicepipe.service
+if [ -z "$VOICEPIPE_CMD" ]; then
+    echo "Warning: Could not find voicepipe command after installation"
+    echo "You may need to add ~/.local/bin to your PATH"
+    VOICEPIPE_CMD="voicepipe"
 else
-    # Fallback: create service file directly
-    cat > ~/.config/systemd/user/voicepipe.service << EOF
+    echo "Found voicepipe at: $VOICEPIPE_CMD"
+fi
+
+# Setup systemd service
+if command -v systemctl &> /dev/null; then
+    echo "Setting up systemd user service..."
+    
+    # Create systemd user directory
+    mkdir -p ~/.config/systemd/user/
+    
+    # Generate service file
+    if [ -f "voicepipe.service.template" ]; then
+        sed -e "s|VOICEPIPE_COMMAND|$VOICEPIPE_CMD|g" \
+            -e "s|HOME_DIR|$HOME|g" \
+            voicepipe.service.template > ~/.config/systemd/user/voicepipe.service
+    else
+        # Create service file directly
+        cat > ~/.config/systemd/user/voicepipe.service << EOF
 [Unit]
 Description=Voicepipe Recording Service
 After=graphical-session.target
@@ -76,24 +102,39 @@ NoNewPrivileges=true
 [Install]
 WantedBy=default.target
 EOF
+    fi
+    
+    # Reload systemd
+    systemctl --user daemon-reload
+    
+    echo "✓ Systemd service configured"
+    echo
+    echo "To enable and start the service:"
+    echo "  systemctl --user enable voicepipe.service"
+    echo "  systemctl --user start voicepipe.service"
+    echo
+    echo "To check service status:"
+    echo "  systemctl --user status voicepipe.service"
 fi
 
-# Reload systemd user daemon
-systemctl --user daemon-reload
-
-echo "Installation complete!"
-echo ""
-echo "To enable and start the voicepipe service:"
-echo "  systemctl --user enable voicepipe.service"
-echo "  systemctl --user start voicepipe.service"
-echo ""
-echo "To check service status:"
-echo "  systemctl --user status voicepipe.service"
-echo ""
-echo "The service will:"
-echo "- Start automatically when you log in (if enabled)"
-echo "- Provide better performance than subprocess mode"
-echo "- Handle multiple recording requests efficiently"
-echo ""
-echo "The CLI will automatically use the service if it's running,"
-echo "or fall back to subprocess mode if it's not."
+echo
+echo "Installation Summary:"
+echo "===================="
+echo "• Voicepipe CLI tool installed with systray support"
+echo "• Systemd user service configured (if available)"
+echo "• Command: $VOICEPIPE_CMD"
+echo
+echo "Usage:"
+echo "  $VOICEPIPE_CMD --help          # Show help"
+echo "  $VOICEPIPE_CMD start           # Start recording"
+echo "  $VOICEPIPE_CMD stop            # Stop and transcribe"
+echo "  $VOICEPIPE_CMD status          # Check status"
+echo
+echo "The service provides:"
+echo "• Fast recording startup (daemon mode)"
+echo "• Systray icon during recording"
+echo "• Automatic transcription with OpenAI"
+echo
+echo "Remember to set your OpenAI API key:"
+echo "  export OPENAI_API_KEY='your-api-key-here'"
+echo "  # or create a .env file with OPENAI_API_KEY=your-api-key-here"

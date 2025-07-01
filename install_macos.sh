@@ -85,9 +85,11 @@ fi
 VOICEPIPE_EXE_PATH=""
 PYTHON_VENV_PATH=""
 
+INSTALL_EXTRAS="[systray,typing]" # Include both systray and typing extras
+
 if [ "$INSTALL_METHOD" == "pipx" ]; then
-    echo "Installing Voicepipe with systray support using pipx..."
-    pipx install "voicepipe[systray]"
+    echo "Installing Voicepipe with systray and typing support using pipx..."
+    pipx install "voicepipe$INSTALL_EXTRAS"
     # Ensure pipx path is in current PATH (pipx ensurepath might have already done this for the shell config)
     if ! command -v voicepipe &> /dev/null; then
          export PATH="$HOME/.local/bin:$PATH" # Common pipx path
@@ -105,8 +107,8 @@ else # pip_venv
     echo "Activating virtual environment..."
     source .venv/bin/activate
     PYTHON_VENV_PATH=$(pwd)/.venv
-    echo "Installing Voicepipe with systray support in .venv using pip..."
-    pip install "voicepipe[systray]"
+    echo "Installing Voicepipe with systray and typing support in .venv using pip..."
+    pip install "voicepipe$INSTALL_EXTRAS"
     VOICEPIPE_EXE_PATH="$PYTHON_VENV_PATH/bin/voicepipe"
     if [ ! -f "$VOICEPIPE_EXE_PATH" ]; then
         echo "ERROR: Could not find voicepipe executable in .venv after pip installation."

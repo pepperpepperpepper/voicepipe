@@ -51,8 +51,9 @@ mypy = "^1.0"
 
 [tool.poetry.extras]
 systray = ["pystray", "pillow"]
-windows-support = ["pywin32", "pyautogui"] # Added pyautogui here for Windows --type functionality
-all = ["pystray", "pillow", "pywin32", "pyautogui"]
+windows-support = ["pywin32"] # pyautogui removed, will be in 'typing' extra
+typing = ["pyautogui"]       # New extra for typing functionality
+all = ["pystray", "pillow", "pywin32", "pyautogui"] # pyautogui still here for 'all'
 
 [tool.poetry.scripts]
 voicepipe = "voicepipe.cli:main"

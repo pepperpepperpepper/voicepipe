@@ -17,7 +17,7 @@ Write-Host
 
 # --- Configuration ---
 $ProjectFiles = @("pyproject.toml", "voicepipe")
-$PoetryInstallCommand = 'poetry install --extras "systray windows-support"' # Assuming windows-support extra for pywin32
+$PoetryInstallCommand = 'poetry install --extras "systray windows-support typing"' # Added 'typing' extra
 
 # --- Helper Functions ---
 function Test-CommandExists {

@@ -278,40 +278,56 @@ def stop(type, language, prompt, model, temperature):
             # Output to stdout
             print(text)
             
+            # Output to stdout
+            print(text)
+
             # Type if requested
             if type:
-                try:
-                    # Use xdotool to type the text
-                    result = subprocess.run(
-                        ['xdotool', 'type', '--', text],
-                        capture_output=True,
-                        text=True,
-                        check=True
-                    )
-                except subprocess.CalledProcessError as e:
-                    error_msg = f"Error typing text: {e}"
-                    print(error_msg, file=sys.stderr)
-                    # Try to type the error message
-                    subprocess.run(
-                        ['xdotool', 'type', '--', error_msg],
-                        capture_output=True
-                    )
-                except FileNotFoundError:
-                    error_msg = "Error: xdotool not found. Install with: sudo pacman -S xdotool"
-                    print(error_msg, file=sys.stderr)
+                if sys.platform == "win32":
+                    try:
+                        import pyautogui
+                        print("Typing text using pyautogui (Windows)...", file=sys.stderr)
+                        pyautogui.typewrite(text, interval=0.01)
+                        print("Typing complete.", file=sys.stderr)
+                    except ImportError:
+                        print("Error: pyautogui library not found. Please install with the [typing] extra (e.g., pip install 'voicepipe[typing]').", file=sys.stderr)
+                    except Exception as e:
+                        print(f"Error using pyautogui to type text on Windows: {e}", file=sys.stderr)
+                elif sys.platform == "darwin": # macOS
+                    try:
+                        import pyautogui
+                        print("Typing text using pyautogui (macOS)...", file=sys.stderr)
+                        pyautogui.typewrite(text, interval=0.01)
+                        print("Typing complete.", file=sys.stderr)
+                    except ImportError:
+                        print("Error: pyautogui library not found. Please install with the [typing] extra (e.g., pip install 'voicepipe[typing]').", file=sys.stderr)
+                    except Exception as e:
+                        # Catching all exceptions from pyautogui on macOS is important due to potential permission issues.
+                        print(f"Error using pyautogui to type text on macOS: {e}", file=sys.stderr)
+                        print("IMPORTANT: On macOS, you may need to grant Accessibility permissions to your terminal or Python.", file=sys.stderr)
+                        print("Go to System Settings > Privacy & Security > Accessibility, and add your terminal application or the Python executable used.", file=sys.stderr)
+                elif sys.platform.startswith("linux"):
+                    try:
+                        # Use xdotool to type the text
+                        subprocess.run(
+                            ['xdotool', 'type', '--', text],
+                            capture_output=True,
+                            text=True,
+                            check=True
+                        )
+                    except subprocess.CalledProcessError as e:
+                        error_msg = f"Error typing text with xdotool: {e}"
+                        print(error_msg, file=sys.stderr)
+                        subprocess.run(['xdotool', 'type', '--', error_msg], capture_output=True, text=True) # Try to type the error
+                    except FileNotFoundError:
+                        error_msg = "Error: xdotool not found. Please install it (e.g., sudo apt install xdotool or sudo pacman -S xdotool)."
+                        print(error_msg, file=sys.stderr)
+                else:
+                    print(f"Warning: --type functionality is not implemented for this platform ({sys.platform}). Text was not typed.", file=sys.stderr)
                     
         except Exception as e:
             error_msg = str(e)
-            print(f"Error: {error_msg}", file=sys.stderr)
-            if type:
-                # Try to type the error
-                try:
-                    subprocess.run(
-                        ['xdotool', 'type', '--', f"Error: {error_msg}"],
-                        capture_output=True
-                    )
-                except:
-                    pass
+            print(f"Error during transcription or typing: {error_msg}", file=sys.stderr)
             sys.exit(1)
         finally:
             # Clean up session (only for subprocess method)

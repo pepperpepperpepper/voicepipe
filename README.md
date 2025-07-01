@@ -92,9 +92,9 @@ Voicepipe uses PyAudio for recording. On Windows, `pip` (and therefore Poetry) u
     *   Guide you through setting up a `launchd` user agent to run the `voicepipe daemon` automatically on login. This includes copying a template plist file to `~/Library/LaunchAgents` and helping you configure it.
 
 5.  **Manual Installation (Voicepipe CLI only, or for custom daemon setup):**
-    *   After installing PortAudio (step 2), install Voicepipe using `pipx` or `pip`:
-        *   `pipx install "voicepipe[systray]"` (recommended)
-        *   Or, in a Python virtual environment: `pip install "voicepipe[systray]"`
+    *   After installing PortAudio (step 2), install Voicepipe using `pipx` or `pip`. To include optional systray and typing support:
+        *   `pipx install "voicepipe[systray,typing]"` (recommended)
+        *   Or, in a Python virtual environment: `pip install "voicepipe[systray,typing]"`
     *   To set up the daemon manually, you'll need to:
         *   Copy `scripts/macos/voicepipe.daemon.plist.template` to `~/Library/LaunchAgents/com.yourusername.voicepipe.daemon.plist` (replace `yourusername` with your actual username or desired convention).
         *   Edit the copied plist file to set the correct `ProgramArguments` (path to the `voicepipe` executable from `which voicepipe`), `WorkingDirectory`, log paths, and `PATH` environment variable.
@@ -137,8 +137,8 @@ The Voicepipe CLI automatically detects and communicates with the running servic
 - **Click**: For the command-line interface.
 - **python-dotenv**: For loading API keys from `.env` files.
 - **pystray & Pillow** (optional, for systray icon): Installed with `[systray]` extra or by `install.sh`/`install.ps1`.
-- **pywin32** (Windows only, for IPC): Installed by `install.ps1` or with `[windows-support]` extra.
-- **pyautogui** (Optional, for `--type` functionality on Windows): Installed with the `windows-support` extra (e.g., via `install.ps1`) or if you install `voicepipe[windows-support]`.
+- **pywin32** (Windows only, for IPC): Installed by `install.ps1` or with the `[windows-support]` extra.
+- **pyautogui** (Optional, for `--type` functionality on Windows & macOS): Installed with the `[typing]` extra.
 - **xdotool** (Linux only, optional, for `--type` functionality):
     - On Arch Linux: `sudo pacman -S xdotool`
     - On Ubuntu/Debian: `sudo apt-get install xdotool`
@@ -344,9 +344,12 @@ There are several ways to run the daemon on Windows:
 ### Direct Typing (`--type`)
 
 This option simulates typing the transcribed text into the currently active window.
--   **On Linux:** Uses `xdotool`. Ensure it's installed.
--   **On Windows:** Uses `pyautogui`. This library is included if you install Voicepipe using `install.ps1` or with the `windows-support` extra (e.g., `pip install "voicepipe[windows-support]"`).
--   **On macOS:** This functionality is **currently not implemented**.
+To use this feature, you must install Voicepipe with the `typing` extra, e.g., `pip install "voicepipe[typing]"`. The platform-specific installation scripts (`install.ps1` for Windows, `install_macos.sh` for macOS) include this extra by default.
+
+-   **On Linux:** Uses `xdotool`. Ensure `xdotool` is installed separately (e.g., `sudo apt install xdotool`).
+-   **On Windows:** Uses `pyautogui` (installed via the `typing` extra).
+-   **On macOS:** Uses `pyautogui` (installed via the `typing` extra).
+    -   **IMPORTANT (macOS):** You may need to grant Accessibility permissions for `pyautogui` to control your computer. Go to **System Settings > Privacy & Security > Accessibility**. Add your terminal application (e.g., Terminal, iTerm2) or the specific Python executable used by Voicepipe to the list of allowed applications. If you don't, `pyautogui` commands might fail silently or raise an error.
 
 ## Window Manager Integration (Linux)
 

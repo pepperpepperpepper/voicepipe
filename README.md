@@ -138,6 +138,7 @@ The Voicepipe CLI automatically detects and communicates with the running servic
 - **python-dotenv**: For loading API keys from `.env` files.
 - **pystray & Pillow** (optional, for systray icon): Installed with `[systray]` extra or by `install.sh`/`install.ps1`.
 - **pywin32** (Windows only, for IPC): Installed by `install.ps1` or with `[windows-support]` extra.
+- **pyautogui** (Optional, for `--type` functionality on Windows): Installed with the `windows-support` extra (e.g., via `install.ps1`) or if you install `voicepipe[windows-support]`.
 - **xdotool** (Linux only, optional, for `--type` functionality):
     - On Arch Linux: `sudo pacman -S xdotool`
     - On Ubuntu/Debian: `sudo apt-get install xdotool`
@@ -342,7 +343,10 @@ There are several ways to run the daemon on Windows:
 
 ### Direct Typing (`--type`)
 
-The `--type` option uses `xdotool` on Linux to simulate typing. This functionality is **currently not implemented for Windows or macOS**. Pull requests for cross-platform typing support (e.g., using `pyautogui` or platform-specific APIs) are welcome!
+This option simulates typing the transcribed text into the currently active window.
+-   **On Linux:** Uses `xdotool`. Ensure it's installed.
+-   **On Windows:** Uses `pyautogui`. This library is included if you install Voicepipe using `install.ps1` or with the `windows-support` extra (e.g., `pip install "voicepipe[windows-support]"`).
+-   **On macOS:** This functionality is **currently not implemented**.
 
 ## Window Manager Integration (Linux)
 

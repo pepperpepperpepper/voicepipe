@@ -107,10 +107,12 @@ if (-not (Test-PoetryInstalled)) {
 
 # 4. Install Voicepipe
 Write-Host "`nAttempting to install Voicepipe using Poetry..."
+Write-Host "This will install core dependencies, plus extras for systray (`pystray`, `Pillow`),"
+Write-Host "Windows IPC (`pywin32`), and Windows typing (`pyautogui`)."
 try {
     Invoke-Expression -Command $PoetryInstallCommand
     Write-Host "✓ Voicepipe installation command executed." -ForegroundColor Green
-    Write-Host "If there were no errors above, Voicepipe should be installed."
+    Write-Host "If there were no errors above, Voicepipe and its optional Windows features should be installed."
 } catch {
     Write-Error "An error occurred during Voicepipe installation: $($_.Exception.Message)"
     Write-Host "Please check the output above for details."

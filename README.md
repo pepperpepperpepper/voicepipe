@@ -65,6 +65,44 @@ Voicepipe uses PyAudio for recording. On Windows, `pip` (and therefore Poetry) u
 *   Check that no other application is exclusively using the microphone.
 *   For advanced scenarios (e.g., needing ASIO support, which is not common for this tool's purpose), you might need to compile PyAudio and PortAudio manually. Refer to PyAudio documentation.
 
+### macOS
+
+1.  **Prerequisites:**
+    *   **Homebrew:** If you don't have Homebrew, install it from [https://brew.sh/](https://brew.sh/).
+    *   **Python 3.9+:** macOS usually comes with Python, but it's often best to manage your Python versions (e.g., via Homebrew `brew install python` or `pyenv`). Ensure `python3` and `pip3` are available.
+
+2.  **Install PortAudio:**
+    ```bash
+    brew install portaudio
+    ```
+
+3.  **Clone the repository (if installing from source/to use install script):**
+    ```bash
+    git clone https://github.com/yourusername/voicepipe.git
+    cd voicepipe
+    ```
+
+4.  **Run the installation script (recommended for daemon setup):**
+    ```bash
+    ./install_macos.sh
+    ```
+    This script will:
+    *   Verify Homebrew and PortAudio.
+    *   Install Voicepipe using `pipx` (recommended) or `pip` in a virtual environment.
+    *   Guide you through setting up a `launchd` user agent to run the `voicepipe daemon` automatically on login. This includes copying a template plist file to `~/Library/LaunchAgents` and helping you configure it.
+
+5.  **Manual Installation (Voicepipe CLI only, or for custom daemon setup):**
+    *   After installing PortAudio (step 2), install Voicepipe using `pipx` or `pip`:
+        *   `pipx install "voicepipe[systray]"` (recommended)
+        *   Or, in a Python virtual environment: `pip install "voicepipe[systray]"`
+    *   To set up the daemon manually, you'll need to:
+        *   Copy `scripts/macos/voicepipe.daemon.plist.template` to `~/Library/LaunchAgents/com.yourusername.voicepipe.daemon.plist` (replace `yourusername` with your actual username or desired convention).
+        *   Edit the copied plist file to set the correct `ProgramArguments` (path to the `voicepipe` executable from `which voicepipe`), `WorkingDirectory`, log paths, and `PATH` environment variable.
+        *   Load the agent: `launchctl load ~/Library/LaunchAgents/com.yourusername.voicepipe.daemon.plist`.
+
+**PyAudio on macOS:**
+Make sure PortAudio is installed via Homebrew (`brew install portaudio`) before installing PyAudio (which `voicepipe` depends on). This usually resolves most PyAudio installation issues on macOS.
+
 ### Linux
 
 The `install.sh` script is provided for Linux users, especially if setting up the `systemd` user service is desired for performance and background operation.
@@ -219,14 +257,46 @@ voicepipe start && voicepipe stop | tr '[:lower:]' '[:upper:]'
 For features like the systray icon and instant recording start, the Voicepipe daemon should be running in the background.
 
 **Linux:**
-The `install.sh` script sets up a systemd user service (`voicepipe.service`) which is the recommended way to run the daemon.
+The `install.sh` script sets up a systemd user service (`voicepipe.service`) which is the recommended way to run the daemon on Linux.
 - Start/Stop: `systemctl --user start/stop voicepipe.service`
 - Enable/Disable auto-start: `systemctl --user enable/disable voicepipe.service`
 - Check status: `systemctl --user status voicepipe.service`
+- Logs: `journalctl --user -u voicepipe.service`
 
-If not using the service, you can run it manually (e.g., for debugging):
+If not using the systemd service, you can run it manually (e.g., for debugging):
 ```bash
 voicepipe daemon
+```
+
+**macOS:**
+The `install_macos.sh` script helps set up a `launchd` user agent. The plist file is typically named `com.yourusername.voicepipe.daemon.plist` (where `yourusername` is your actual username) and located in `~/Library/LaunchAgents/`.
+
+- **Load/Start Agent (and enable on login):**
+  ```bash
+  launchctl load ~/Library/LaunchAgents/com.yourusername.voicepipe.daemon.plist
+  ```
+  (If it's already loaded, this command won't error but won't restart it. You might need `unload` then `load`.)
+- **Unload Agent (and disable on login):**
+  ```bash
+  launchctl unload ~/Library/LaunchAgents/com.yourusername.voicepipe.daemon.plist
+  ```
+- **Manually Start (if loaded but not running, or to force a start):**
+  ```bash
+  launchctl start com.yourusername.voicepipe.daemon
+  ```
+- **Manually Stop (if running):**
+  ```bash
+  launchctl stop com.yourusername.voicepipe.daemon
+  ```
+- **Check if Loaded:**
+  ```bash
+  launchctl list | grep voicepipe
+  ```
+- **Logs:** Check the `StandardOutPath` and `StandardErrorPath` defined in your plist file (e.g., `~/Library/Logs/VoicepipeDaemon.out.log`).
+
+If not using the launchd agent, you can run it manually from the terminal (e.g., for debugging):
+```bash
+voicepipe daemon # Or poetry run voicepipe daemon if in project dir
 ```
 
 **Windows:**
@@ -342,8 +412,11 @@ Contributions welcome! Please submit issues and pull requests on GitHub.
 
 ### PyAudio Installation Issues
 
+**General:**
+PyAudio is used for recording audio. It depends on the PortAudio library.
+
 **Linux:**
-If `pip install pyaudio` (or `poetry install`) fails with errors related to missing PortAudio headers:
+If `pip install pyaudio` (or `poetry install`) fails with errors related to missing PortAudio headers (e.g., `portaudio.h: No such file or directory`), you need to install the PortAudio development package:
 ```bash
 # Ubuntu/Debian
 sudo apt-get install portaudio19-dev python3-dev
@@ -354,19 +427,23 @@ sudo dnf install portaudio-devel python3-devel
 # Arch Linux
 sudo pacman -S portaudio python
 ```
-Then try installing PyAudio again.
+Then try installing Voicepipe or PyAudio again.
 
 **macOS:**
+Ensure PortAudio is installed via Homebrew:
 ```bash
 brew install portaudio
-pip install pyaudio
 ```
+If you still encounter issues when `pip install pyaudio` runs (either directly or via Voicepipe installation), make sure your Command Line Tools (Xcode) are up to date and that pip can find the Homebrew-installed PortAudio (this is usually automatic).
 
 **Windows:**
-As mentioned in the Windows Installation section, `pip` usually installs a pre-compiled PyAudio wheel with PortAudio included. If you face issues, ensure your Python environment is standard and your pip is up to date. If problems persist, consult PyAudio's documentation for Windows-specific troubleshooting.
+As mentioned in the Windows Installation section, `pip` usually installs a pre-compiled PyAudio wheel that bundles PortAudio. If you face issues:
+*   Ensure your Python is an official distribution.
+*   Make sure pip is up to date: `python -m pip install --upgrade pip`.
+*   If problems persist (e.g., "Failed to build wheel for pyaudio" or "PortAudio library not found"), consult PyAudio's documentation or look for Windows-specific troubleshooting guides for PyAudio.
 
 ### Permission Denied on /tmp (or equivalent temp directory)
-Ensure your system's temporary directory (usually `/tmp` on Linux, or `%TEMP%` on Windows) has proper write permissions for your user. Voicepipe stores temporary audio files there.
+Ensure your system's temporary directory (usually `/tmp` on Linux/macOS, or `%TEMP%` on Windows) has proper write permissions for your user. Voicepipe stores temporary audio files there during recording.
 ```bash
 ls -ld /tmp  # Should show: drwxrwxrwt
 ```

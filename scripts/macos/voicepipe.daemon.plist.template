@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.USERNAME.voicepipe.daemon</string> <!-- FIXME: Replace USERNAME or use a generic label -->
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/FULL/PATH/TO/voicepipe</string> <!-- FIXME: Replace with actual path to voicepipe executable -->
+        <string>daemon</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/> <!-- Restart if it exits, even successfully (unless explicitly stopped by launchctl unload) -->
+        <key>Crashed</key>
+        <true/> <!-- Restart if it crashes -->
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/USERNAME/.config/voicepipe</string> <!-- FIXME: Replace USERNAME or use a more generic/configurable path. User's home is often better: /Users/USERNAME -->
+                                                 <!-- Or, if voicepipe executable is self-contained or uses absolute paths for its own config, this might not be strictly needed or could be the user's home dir. -->
+                                                 <!-- For resolving .env files, it should be the project root if run from source, or user's home/config if installed globally. -->
+
+    <key>StandardOutPath</key>
+    <string>/Users/USERNAME/Library/Logs/VoicepipeDaemon.out.log</string> <!-- FIXME: Replace USERNAME -->
+
+    <key>StandardErrorPath</key>
+    <string>/Users/USERNAME/Library/Logs/VoicepipeDaemon.err.log</string> <!-- FIXME: Replace USERNAME -->
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <!-- FIXME: This PATH will be replaced by install_macos.sh. Ensure it includes directories for voicepipe & its Python. -->
+        <string>PATH_PLACEHOLDER_SED_REPLACEMENT_STRING</string>
+        <key>OPENAI_API_KEY</key>
+        <string>YOUR_API_KEY_HERE_OR_LEAVE_EMPTY_TO_USE_DOTENV</string> <!-- FIXME: User should ideally set this via .env or shell environment -->
+    </dict>
+
+    <!-- Optional: If the daemon needs GUI interaction for the systray, this might be needed, -->
+    <!-- but pystray usually handles this. For user agents, it's generally implied they can access the window server. -->
+    <!-- <key>LimitLoadToSessionType</key> -->
+    <!-- <array> -->
+    <!--    <string>Aqua</string> -->
+    <!-- </array> -->
+
+</dict>
+</plist>

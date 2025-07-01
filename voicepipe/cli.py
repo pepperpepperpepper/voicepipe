@@ -6,42 +6,135 @@ import signal
 import socket
 import json
 import subprocess
+import tempfile # For gettempdir
 from pathlib import Path
 
 import click
 
 from .recorder import AudioRecorder, RecordingSession
 from .transcriber import WhisperTranscriber
+# RecordingDaemon is imported for the `daemon` command, not directly for IPC constants here.
 from .daemon import RecordingDaemon
+
+# Define IPC Paths similar to daemon.py for the client to use
+if sys.platform == "win32":
+    NAMED_PIPE_PATH = r'\\.\pipe\voicepipe_daemon'
+    SOCKET_PATH = None
+    import win32pipe
+    import win32file
+    import pywintypes # Required for pywintypes.error
+else:
+    SOCKET_PATH = Path(tempfile.gettempdir()) / 'voicepipe.sock'
+    NAMED_PIPE_PATH = None
 
 
 def daemon_request(command, **kwargs):
-    """Send a request to the daemon service."""
-    socket_path = RecordingDaemon.SOCKET_PATH
+    """Send a request to the daemon service using appropriate IPC."""
+    request_payload = json.dumps({'command': command, **kwargs}).encode('utf-8')
     
-    # Check if daemon is running
-    if not socket_path.exists():
-        # Try the subprocess method as fallback
-        return None
-        
-    try:
-        # Connect to daemon
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.connect(str(socket_path))
-        
-        # Send request
-        request = {'command': command, **kwargs}
-        client.send(json.dumps(request).encode())
-        
-        # Get response
-        response = client.recv(4096).decode()
-        client.close()
-        
-        return json.loads(response)
-        
-    except Exception as e:
-        print(f"Warning: Could not connect to daemon: {e}", file=sys.stderr)
-        return None
+    if sys.platform == "win32":
+        try:
+            pipe_handle = win32file.CreateFile(
+                NAMED_PIPE_PATH,
+                win32file.GENERIC_READ | win32file.GENERIC_WRITE,
+                0, None, win32file.OPEN_EXISTING, 0, None
+            )
+
+            # Set pipe to message mode (optional, but good practice if server expects it)
+            # This might not be strictly necessary if server handles byte streams robustly.
+            # res = win32pipe.SetNamedPipeHandleState(pipe_handle, win32pipe.PIPE_READMODE_MESSAGE, None, None)
+            # if not res:
+            #     print(f"Warning: Failed to set named pipe handle state: {pywintypes.WinError()}", file=sys.stderr)
+
+            win32file.WriteFile(pipe_handle, request_payload)
+
+            # Read response
+            # Loop to read potentially fragmented messages, though for typical short JSON, one read is often enough.
+            response_data = b""
+            while True:
+                hr, data = win32file.ReadFile(pipe_handle, 4096)
+                response_data += data
+                if hr == 0: # ERROR_SUCCESS, read complete for this chunk
+                    # If server uses WriteFile without specific message framing,
+                    # client might need to know response size or use a delimiter.
+                    # Assuming server sends one complete JSON response.
+                    break
+                elif hr == 109: # ERROR_BROKEN_PIPE
+                    print(f"Warning: Pipe broken while reading response from daemon.", file=sys.stderr)
+                    win32file.CloseHandle(pipe_handle)
+                    return None
+                elif hr != 0: # Some other error
+                    print(f"Warning: Error reading from pipe: {hr} - {pywintypes.WinError(hr)}", file=sys.stderr)
+                    win32file.CloseHandle(pipe_handle)
+                    return None
+
+            win32file.CloseHandle(pipe_handle)
+            return json.loads(response_data.decode('utf-8'))
+
+        except pywintypes.error as e:
+            # Common errors:
+            # 2 (ERROR_FILE_NOT_FOUND): Pipe doesn't exist (daemon not running or wrong path)
+            # 231 (ERROR_PIPE_BUSY): Pipe is busy (shouldn't happen with CreateFile if server handles instances)
+            if e.winerror == 2: # File not found, daemon likely not running
+                # This is the expected case for fallback, so no warning here.
+                pass
+            else:
+                print(f"Warning: WindowsNamedPipeError - Could not connect to daemon ({e.winerror}): {e.strerror}", file=sys.stderr)
+            return None
+        except Exception as e:
+            print(f"Warning: Could not connect to daemon (Windows): {e}", file=sys.stderr)
+            return None
+
+    else: # Unix-like platforms
+        if not SOCKET_PATH or not SOCKET_PATH.exists():
+            # Daemon not running or socket path issue
+            return None
+
+        try:
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.connect(str(SOCKET_PATH))
+
+            client.sendall(request_payload) # Use sendall
+
+            # It's good practice to loop recv for sockets too, but for small JSON, one might be okay.
+            # However, server might send in chunks.
+            response_parts = []
+            while True:
+                part = client.recv(4096)
+                if not part:
+                    break # Connection closed
+                response_parts.append(part)
+                # Heuristic: if part is small and ends with '}', assume full JSON received.
+                # A more robust way is Content-Length header or newline delimiter if server supports.
+                if part.strip().endswith(b'}') and len(part) < 4096 :
+                    try: # Try to decode to see if it's complete JSON
+                        json.loads(b"".join(response_parts).decode('utf-8'))
+                        break
+                    except json.JSONDecodeError:
+                        if len(response_parts) > 10 : # Safety break after many parts
+                             print(f"Warning: Potentially incomplete JSON from daemon (Unix)", file=sys.stderr)
+                             break
+                        continue # Incomplete, continue reading
+
+            client.close()
+
+            if not response_parts:
+                print(f"Warning: No response from daemon (Unix)", file=sys.stderr)
+                return None
+
+            return json.loads(b"".join(response_parts).decode('utf-8'))
+
+        except socket.error as e:
+            # Common errors: ENOENT (socket file not found), ECONNREFUSED (daemon not listening)
+            if e.errno == socket.errno.ENOENT or e.errno == socket.errno.ECONNREFUSED:
+                 # Expected if daemon not running, no warning needed for fallback.
+                pass
+            else:
+                print(f"Warning: UnixSocketError - Could not connect to daemon ({e.errno}): {os.strerror(e.errno)}", file=sys.stderr)
+            return None
+        except Exception as e:
+            print(f"Warning: Could not connect to daemon (Unix): {e}", file=sys.stderr)
+            return None
 
 
 def run_recording_subprocess():

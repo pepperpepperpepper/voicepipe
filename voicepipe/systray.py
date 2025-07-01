@@ -28,18 +28,26 @@ class SystrayManager:
             self.available = False
             return
         
-        # Check for display on Linux
-        if sys.platform.startswith('linux'):
-            if not os.environ.get('DISPLAY'):
-                logger.debug("Systray not available (no DISPLAY)")
-                self.available = False
-                return
-    
-    def show(self, icon_path=None):
-        """Show systray icon if available."""
+        # The pystray library itself should handle whether a display is available.
+        # Removing the explicit DISPLAY check for Linux as it might be too restrictive
+        # (e.g., for Wayland or other setups) and pystray might have its own fallbacks
+        # or detection mechanisms. If pystray fails to initialize, it will be caught
+        # during the icon.run() attempt or earlier.
+        # logger.debug(f"Platform: {sys.platform}, Display: {os.environ.get('DISPLAY')}")
+
+    def show(self, daemon_instance=None, icon_path=None):
+        """Show systray icon if available.
+
+        Args:
+            daemon_instance: An optional reference to the daemon, to allow UI actions.
+            icon_path: Optional path to a custom icon image.
+        """
         if not self.available:
             return False
         
+        # Store daemon instance for callbacks like _on_cancel
+        self.daemon_instance = daemon_instance
+
         try:
             # Create icon
             if icon_path and os.path.exists(icon_path):
@@ -94,8 +102,16 @@ class SystrayManager:
     
     def _on_cancel(self, icon, item):
         """Handle cancel from systray."""
-        # This would need to be connected to the daemon
-        logger.info("Cancel requested from systray")
+        logger.info("Cancel requested from systray via menu.")
+        if hasattr(self, 'daemon_instance') and self.daemon_instance:
+            logger.info("Calling daemon's cancel_recording_via_ui method.")
+            # Ensure this method exists on the daemon and is safe to call
+            if hasattr(self.daemon_instance, 'cancel_recording_via_ui'):
+                self.daemon_instance.cancel_recording_via_ui()
+            else:
+                logger.warning("Daemon instance does not have 'cancel_recording_via_ui' method.")
+        else:
+            logger.warning("No daemon_instance available to process cancel request from systray.")
 
 # Global instance
 _systray = None

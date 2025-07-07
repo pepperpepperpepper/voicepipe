@@ -301,7 +301,7 @@ class AudioRecorder(FastAudioRecorder):
 class RecordingSession:
     """Manages recording sessions with PID tracking."""
     
-    STATE_DIR = Path("/tmp")
+    STATE_DIR = Path(tempfile.gettempdir())
     STATE_PREFIX = "voicepipe-"
     
     @classmethod

@@ -6,6 +6,7 @@ Simple systray icon - shows the feh marked icon in system tray
 import sys
 import signal
 import os
+import tempfile
 import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('AppIndicator3', '0.1')
@@ -73,7 +74,7 @@ def main():
     # Convert TIFF to PNG for better compatibility
     # Icon is now bundled with voicepipe project
     icon_tiff = "/home/pepper/.local/share/voicepipe/voicepipe/assets/recording_icon.tiff"
-    icon_png = "/tmp/mail_icon.png"
+    icon_png = os.path.join(tempfile.gettempdir(), "mail_icon.png")
     
     if os.path.exists(icon_tiff):
         try:

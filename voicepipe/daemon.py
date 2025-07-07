@@ -44,6 +44,8 @@ class RecordingDaemon:
         self.default_device = None
         self.pipe_handle = None # For Windows named pipe
         self.socket = None # For Unix domain socket
+        self._active_threads = set()  # Track active client threads
+        self._shutdown_event = threading.Event()  # Signal for graceful shutdown
         self._initialize_audio()
     
     def _initialize_audio(self):
@@ -91,7 +93,9 @@ class RecordingDaemon:
                 win32pipe.ConnectNamedPipe(self.pipe_handle, None)
                 print(f"Client connected to named pipe.", file=sys.stderr)
                 # Pass the handle to a new thread, then loop to create a new pipe instance for the next client
-                threading.Thread(target=self._handle_client_windows, args=(self.pipe_handle,)).start()
+                thread = threading.Thread(target=self._handle_client_windows, args=(self.pipe_handle,))
+                self._active_threads.add(thread)
+                thread.start()
                 self.pipe_handle = None # Reset for the next instance
             except pywintypes.error as e:
                 if e.winerror == 232: # ERROR_NO_DATA (Pipe closing)
@@ -136,7 +140,9 @@ class RecordingDaemon:
             try:
                 conn, _ = self.socket.accept()
                 conn.setblocking(True) # Operations on client socket should be blocking
-                threading.Thread(target=self._handle_client_unix, args=(conn,)).start()
+                thread = threading.Thread(target=self._handle_client_unix, args=(conn,))
+                self._active_threads.add(thread)
+                thread.start()
             except BlockingIOError:
                 # This is expected in non-blocking mode when no connection is pending
                 time.sleep(0.1) # Wait a bit before trying accept() again
@@ -206,20 +212,28 @@ class RecordingDaemon:
         """Handle shutdown signals."""
         print(f"Received signal {signum}, initiating shutdown...", file=sys.stderr)
         self.running = False
-        # The main IPC loop should now exit. Call _shutdown_ipc to clean up.
-        self._shutdown_ipc() # Attempt to close sockets/pipes to unblock accept/connect calls
+        self._shutdown_event.set()  # Signal all threads to shutdown
+        
+        # Close IPC to unblock accept/connect calls
+        self._shutdown_ipc() 
 
-        if self.recorder and self.recording: # Ensure recording is stopped
+        if self.recorder and self.recording:
             print("Stopping active recording due to signal...", file=sys.stderr)
-            self._stop_recording_internal() # Use internal stop to avoid sending response
+            self._stop_recording_internal()
+
+        # Wait for active threads to finish with timeout
+        print("Waiting for active threads to finish...", file=sys.stderr)
+        for thread in list(self._active_threads):
+            if thread.is_alive():
+                thread.join(timeout=2.0)  # Wait up to 2 seconds per thread
+                if thread.is_alive():
+                    print(f"Thread {thread.name} did not finish gracefully", file=sys.stderr)
 
         if self.pyaudio:
             self.pyaudio.terminate()
             print("PyAudio terminated.", file=sys.stderr)
         
-        # Wait for threads to finish? This can be complex.
-        # For now, rely on daemon threads and quick exit.
-        print("Exiting daemon.", file=sys.stderr)
+        print("Daemon shutdown complete.", file=sys.stderr)
         sys.exit(0)
 
     def _handle_client_common(self, request_data):
@@ -255,6 +269,7 @@ class RecordingDaemon:
 
     def _handle_client_windows(self, pipe):
         """Handle client requests on Windows named pipe."""
+        current_thread = threading.current_thread()
         try:
             # Read request
             # ReadFile can return (0, b'') if pipe is closed by client during read
@@ -292,6 +307,8 @@ class RecordingDaemon:
             except Exception as send_error:
                 print(f"Could not send error to client: {send_error}", file=sys.stderr)
         finally:
+            # Clean up thread from active set
+            self._active_threads.discard(current_thread)
             win32file.FlushFileBuffers(pipe)
             win32pipe.DisconnectNamedPipe(pipe)
             win32file.CloseHandle(pipe)
@@ -299,6 +316,7 @@ class RecordingDaemon:
 
     def _handle_client_unix(self, conn):
         """Handle client requests on Unix domain socket."""
+        current_thread = threading.current_thread()
         try:
             data = conn.recv(4096).decode('utf-8') # Increased buffer size
             if not data:
@@ -308,7 +326,7 @@ class RecordingDaemon:
             print(f"Received on socket: {data}", file=sys.stderr)
             response = self._handle_client_common(data)
                 
-            conn.sendall(json.dumps(response).encode('utf--8')) # Use sendall
+            conn.sendall(json.dumps(response).encode('utf-8')) # Fixed encoding typo
             
         except socket.error as e:
             print(f"Unix socket communication error: {e}", file=sys.stderr)
@@ -321,6 +339,8 @@ class RecordingDaemon:
             except Exception as send_error:
                 print(f"Could not send error to client (Unix): {send_error}", file=sys.stderr)
         finally:
+            # Clean up thread from active set
+            self._active_threads.discard(current_thread)
             try:
                 conn.shutdown(socket.SHUT_RDWR) # Graceful shutdown
             except socket.error:

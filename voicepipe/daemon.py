@@ -10,7 +10,7 @@ import tempfile
 import time
 from pathlib import Path
 
-import pyaudio
+import sounddevice as sd
 
 from .recorder import FastAudioRecorder
 from .systray import get_systray
@@ -27,18 +27,16 @@ class RecordingDaemon:
         self.audio_file = None
         self.running = True
         self.timeout_timer = None
-        self.pyaudio = None
         self.default_device = None
         self._initialize_audio()
     
     def _initialize_audio(self):
-        """Pre-initialize PyAudio to reduce startup delay."""
+        """Pre-initialize audio to reduce startup delay."""
         try:
-            self.pyaudio = pyaudio.PyAudio()
             # Get default device index
-            info = self.pyaudio.get_default_input_device_info()
-            self.default_device = info['index']
-            print(f"Audio initialized. Default device: {info['name']}", file=sys.stderr)
+            self.default_device = sd.default.device[0]  # Input device
+            device_info = sd.query_devices(self.default_device, 'input')
+            print(f"Audio initialized. Default device: {device_info['name']}", file=sys.stderr)
         except Exception as e:
             print(f"Warning: Could not pre-initialize audio: {e}", file=sys.stderr)
         
@@ -120,9 +118,8 @@ class RecordingDaemon:
             fd, self.audio_file = tempfile.mkstemp(suffix='.mp3', prefix='voicepipe_')
             os.close(fd)
             
-            # Start recording with pre-initialized PyAudio
+            # Start recording
             self.recorder = FastAudioRecorder(
-                pyaudio_instance=self.pyaudio,
                 device_index=device_index or self.default_device
             )
             self.recorder.start_recording(output_file=self.audio_file)

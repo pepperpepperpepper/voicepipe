@@ -11,23 +11,23 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+import queue
 
-import pyaudio
+import sounddevice as sd
+import numpy as np
 
 from .systray import get_systray
 
 
 class FastAudioRecorder:
-    """Optimized audio recorder that accepts pre-initialized PyAudio."""
+    """Optimized audio recorder using sounddevice."""
     
-    def __init__(self, pyaudio_instance=None, device_index=None, use_mp3=True, max_duration=300):
-        self.audio = pyaudio_instance or pyaudio.PyAudio()
+    def __init__(self, device_index=None, use_mp3=True, max_duration=300):
         self.device_index = device_index
         self.stream = None
-        self.frames = []
+        self.audio_queue = queue.Queue()
         self.recording = False
-        self.chunk = 1024
-        self.format = pyaudio.paInt16
+        self.format = np.int16
         self.channels = 1
         self.rate = 16000
         self.use_mp3 = use_mp3
@@ -36,35 +36,27 @@ class FastAudioRecorder:
         self.max_duration = max_duration
         self.start_time = None
         self.timeout_timer = None
-        self.owns_pyaudio = pyaudio_instance is None
         
     def start_recording(self, output_file=None):
         """Start recording with minimal delay."""
-        device = self.device_index if self.device_index is not None else None
-        
         try:
-            # Start stream immediately - don't wait for ffmpeg
-            self.stream = self.audio.open(
-                format=self.format,
-                channels=self.channels,
-                rate=self.rate,
-                input=True,
-                input_device_index=device,
-                frames_per_buffer=self.chunk,
-                stream_callback=self._audio_callback,
-                start=False  # Don't start yet
-            )
-            
-            self.frames = []
-            self.recording = True
-            
             # Start ffmpeg in parallel if needed
             if self.use_mp3 and output_file:
                 self.mp3_file = output_file
                 self._start_ffmpeg_async(output_file)
             
-            # Now start the stream
-            self.stream.start_stream()
+            self.recording = True
+            
+            # Start sounddevice stream
+            self.stream = sd.InputStream(
+                device=self.device_index,
+                channels=self.channels,
+                samplerate=self.rate,
+                dtype=self.format,
+                callback=self._audio_callback,
+                blocksize=1024
+            )
+            self.stream.start()
             
             # Set up timeout
             self.start_time = time.time()
@@ -92,17 +84,20 @@ class FastAudioRecorder:
         
         threading.Thread(target=start_ffmpeg, daemon=True).start()
         
-    def _audio_callback(self, in_data, frame_count, time_info, status):
+    def _audio_callback(self, indata, frames, time, status):
         """Callback for audio stream."""
+        if status:
+            print(f"Audio callback status: {status}", file=sys.stderr)
+        
         if self.recording:
+            audio_data = indata.copy()
             if self.ffmpeg_process and self.ffmpeg_process.stdin:
                 try:
-                    self.ffmpeg_process.stdin.write(in_data)
+                    self.ffmpeg_process.stdin.write(audio_data.tobytes())
                 except:
                     pass
             else:
-                self.frames.append(in_data)
-        return (in_data, pyaudio.paContinue)
+                self.audio_queue.put(audio_data.tobytes())
     
     def _timeout_callback(self):
         """Called when recording timeout is reached."""
@@ -122,7 +117,7 @@ class FastAudioRecorder:
             self.timeout_timer = None
         
         if self.stream:
-            self.stream.stop_stream()
+            self.stream.stop()
             self.stream.close()
             self.stream = None
             
@@ -131,13 +126,17 @@ class FastAudioRecorder:
             self.ffmpeg_process.wait()
             return None
         else:
-            return b''.join(self.frames)
+            # Collect all audio data from queue
+            frames = []
+            while not self.audio_queue.empty():
+                frames.append(self.audio_queue.get())
+            return b''.join(frames)
     
     def save_to_file(self, audio_data, filename):
         """Save audio data to WAV file."""
         wf = wave.open(filename.replace('.mp3', '.wav'), 'wb')
         wf.setnchannels(self.channels)
-        wf.setsampwidth(self.audio.get_sample_size(self.format))
+        wf.setsampwidth(2)  # 2 bytes for int16
         wf.setframerate(self.rate)
         wf.writeframes(audio_data)
         wf.close()
@@ -154,21 +153,17 @@ class FastAudioRecorder:
                 self.ffmpeg_process.terminate()
             except:
                 pass
-        if self.owns_pyaudio:
-            self.audio.terminate()
 
 
 class AudioRecorder(FastAudioRecorder):
     """Handles audio recording to temporary MP3 files."""
     
     def __init__(self, device_index=None, use_mp3=True, max_duration=300):
-        self.audio = pyaudio.PyAudio()
         self.device_index = device_index
         self.stream = None
-        self.frames = []
+        self.audio_queue = queue.Queue()
         self.recording = False
-        self.chunk = 1024
-        self.format = pyaudio.paInt16
+        self.format = np.int16
         self.channels = 1
         self.rate = 16000  # 16kHz is good for speech
         self.use_mp3 = use_mp3
@@ -181,10 +176,9 @@ class AudioRecorder(FastAudioRecorder):
     def get_default_device(self):
         """Get the default input device index."""
         try:
-            info = self.audio.get_default_input_device_info()
-            return info['index']
+            return sd.default.device[0]  # Input device
         except Exception:
-            return 0
+            return None
             
     def start_recording(self, output_file=None):
         """Start recording audio."""
@@ -205,19 +199,19 @@ class AudioRecorder(FastAudioRecorder):
                     '-y',  # overwrite output file
                     output_file
                 ], stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
-                
-            self.stream = self.audio.open(
-                format=self.format,
-                channels=self.channels,
-                rate=self.rate,
-                input=True,
-                input_device_index=device,
-                frames_per_buffer=self.chunk,
-                stream_callback=self._audio_callback
-            )
-            self.frames = []
+            
             self.recording = True
-            self.stream.start_stream()
+            
+            # Start sounddevice stream
+            self.stream = sd.InputStream(
+                device=device,
+                channels=self.channels,
+                samplerate=self.rate,
+                dtype=self.format,
+                callback=self._audio_callback,
+                blocksize=1024
+            )
+            self.stream.start()
             
             # Set up timeout
             self.start_time = time.time()
@@ -234,17 +228,20 @@ class AudioRecorder(FastAudioRecorder):
             # Signal the main process to stop
             os.kill(os.getpid(), signal.SIGTERM)
     
-    def _audio_callback(self, in_data, frame_count, time_info, status):
+    def _audio_callback(self, indata, frames, time, status):
         """Callback for audio stream."""
+        if status:
+            print(f"Audio callback status: {status}", file=sys.stderr)
+            
         if self.recording:
+            audio_data = indata.copy()
             if self.ffmpeg_process and self.ffmpeg_process.stdin:
                 try:
-                    self.ffmpeg_process.stdin.write(in_data)
+                    self.ffmpeg_process.stdin.write(audio_data.tobytes())
                 except:
                     pass  # Handle broken pipe gracefully
             else:
-                self.frames.append(in_data)
-        return (in_data, pyaudio.paContinue)
+                self.audio_queue.put(audio_data.tobytes())
     
     def stop_recording(self):
         """Stop recording and return the recorded data."""
@@ -259,7 +256,7 @@ class AudioRecorder(FastAudioRecorder):
             self.timeout_timer = None
         
         if self.stream:
-            self.stream.stop_stream()
+            self.stream.stop()
             self.stream.close()
             self.stream = None
             
@@ -270,24 +267,29 @@ class AudioRecorder(FastAudioRecorder):
             self.ffmpeg_process = None
             return None  # MP3 already written to file
             
+        # Collect all audio data from queue
+        frames = []
+        while not self.audio_queue.empty():
+            frames.append(self.audio_queue.get())
+            
         # Make sure we have audio data (WAV mode)
-        if not self.frames:
+        if not frames:
             raise RuntimeError("No audio data recorded")
             
-        return b''.join(self.frames)
+        return b''.join(frames)
     
     def save_to_file(self, data, filepath):
         """Save recorded data to a WAV file."""
         with wave.open(filepath, 'wb') as wf:
             wf.setnchannels(self.channels)
-            wf.setsampwidth(self.audio.get_sample_size(self.format))
+            wf.setsampwidth(2)  # 2 bytes for int16
             wf.setframerate(self.rate)
             wf.writeframes(data)
     
     def cleanup(self):
         """Clean up audio resources."""
         if self.stream:
-            self.stream.stop_stream()
+            self.stream.stop()
             self.stream.close()
         if self.ffmpeg_process:
             try:
@@ -295,7 +297,6 @@ class AudioRecorder(FastAudioRecorder):
                 self.ffmpeg_process.terminate()
             except:
                 pass
-        self.audio.terminate()
 
 
 class RecordingSession:

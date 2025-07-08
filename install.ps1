@@ -155,7 +155,7 @@ Write-Host "   - Robust Windows Service (auto-start / restart on failure / runs 
 Write-Host "     NSSM (Non-Sucking Service Manager) is a free tool to run any application as a service."
 Write-Host "     Download NSSM from: https://nssm.cc/download"
 Write-Host "     Setup Steps (requires Administrator privileges):"
-Write-Host "     a. Extract nssm.exe to a memorable location (e.g., C:\\NSSM)."
+Write-Host "     a. Extract nssm.exe to a memorable location (e.g., C:\NSSM)."
 Write-Host "     b. Open an Administrator PowerShell or Command Prompt."
 Write-Host "     c. Navigate to the directory where you placed nssm.exe."
 Write-Host "     d. Run: '.\nssm.exe install VoicepipeDaemon'"

@@ -18,6 +18,10 @@ import numpy as np
 
 from .systray import get_systray
 
+# Windows-specific constant for hiding console windows
+if sys.platform == "win32":
+    subprocess.CREATE_NO_WINDOW = 0x08000000
+
 
 class FastAudioRecorder:
     """Optimized audio recorder using sounddevice."""
@@ -70,6 +74,20 @@ class FastAudioRecorder:
     def _start_ffmpeg_async(self, output_file):
         """Start ffmpeg process asynchronously."""
         def start_ffmpeg():
+            kwargs = {
+                'stdin': subprocess.PIPE,
+                'stderr': subprocess.DEVNULL,
+                'stdout': subprocess.DEVNULL
+            }
+            
+            # Hide console window on Windows
+            if sys.platform == "win32":
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+                kwargs['startupinfo'] = startupinfo
+                kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+            
             self.ffmpeg_process = subprocess.Popen([
                 'ffmpeg',
                 '-f', 's16le',
@@ -80,7 +98,7 @@ class FastAudioRecorder:
                 '-b:a', '64k',
                 '-y',
                 output_file
-            ], stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            ], **kwargs)
         
         threading.Thread(target=start_ffmpeg, daemon=True).start()
         
@@ -188,6 +206,21 @@ class AudioRecorder(FastAudioRecorder):
             if self.use_mp3 and output_file:
                 # Start ffmpeg process for direct MP3 encoding
                 self.mp3_file = output_file
+                
+                kwargs = {
+                    'stdin': subprocess.PIPE,
+                    'stderr': subprocess.DEVNULL,
+                    'stdout': subprocess.DEVNULL
+                }
+                
+                # Hide console window on Windows
+                if sys.platform == "win32":
+                    startupinfo = subprocess.STARTUPINFO()
+                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    startupinfo.wShowWindow = subprocess.SW_HIDE
+                    kwargs['startupinfo'] = startupinfo
+                    kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+                
                 self.ffmpeg_process = subprocess.Popen([
                     'ffmpeg',
                     '-f', 's16le',  # raw PCM input
@@ -198,7 +231,7 @@ class AudioRecorder(FastAudioRecorder):
                     '-b:a', '64k',  # 64kbps for voice
                     '-y',  # overwrite output file
                     output_file
-                ], stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                ], **kwargs)
             
             self.recording = True
             

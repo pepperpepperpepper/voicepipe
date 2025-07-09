@@ -22,7 +22,7 @@ from .systray import get_systray
 class FastAudioRecorder:
     """Optimized audio recorder using sounddevice."""
     
-    def __init__(self, device_index=None, use_mp3=True, max_duration=300):
+    def __init__(self, device_index=None, use_mp3=True, max_duration=300, pre_open=True):
         self.device_index = device_index
         self.stream = None
         self.audio_queue = queue.Queue()
@@ -37,6 +37,26 @@ class FastAudioRecorder:
         self.start_time = None
         self.timeout_timer = None
         
+        # Pre-open stream for faster start
+        if pre_open:
+            self._pre_open_stream()
+    
+    def _pre_open_stream(self):
+        """Pre-open the audio stream but don't start recording yet."""
+        try:
+            self.stream = sd.InputStream(
+                device=self.device_index,
+                channels=self.channels,
+                samplerate=self.rate,
+                dtype=self.format,
+                callback=self._audio_callback,
+                blocksize=1024
+            )
+            # Don't start it yet, just have it ready
+        except Exception as e:
+            print(f"Warning: Could not pre-open stream: {e}", file=sys.stderr)
+            self.stream = None
+        
     def start_recording(self, output_file=None):
         """Start recording with minimal delay."""
         try:
@@ -47,15 +67,18 @@ class FastAudioRecorder:
             
             self.recording = True
             
-            # Start sounddevice stream
-            self.stream = sd.InputStream(
-                device=self.device_index,
-                channels=self.channels,
-                samplerate=self.rate,
-                dtype=self.format,
-                callback=self._audio_callback,
-                blocksize=1024
-            )
+            # Use pre-opened stream if available, otherwise create new one
+            if not self.stream:
+                self.stream = sd.InputStream(
+                    device=self.device_index,
+                    channels=self.channels,
+                    samplerate=self.rate,
+                    dtype=self.format,
+                    callback=self._audio_callback,
+                    blocksize=1024
+                )
+            
+            # Start the stream
             self.stream.start()
             
             # Set up timeout
@@ -151,6 +174,12 @@ class FastAudioRecorder:
             try:
                 self.ffmpeg_process.stdin.close()
                 self.ffmpeg_process.terminate()
+                # Wait briefly for graceful termination
+                self.ffmpeg_process.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                # Force kill if it doesn't terminate gracefully
+                self.ffmpeg_process.kill()
+                self.ffmpeg_process.wait()
             except:
                 pass
 
@@ -295,6 +324,12 @@ class AudioRecorder(FastAudioRecorder):
             try:
                 self.ffmpeg_process.stdin.close()
                 self.ffmpeg_process.terminate()
+                # Wait briefly for graceful termination
+                self.ffmpeg_process.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                # Force kill if it doesn't terminate gracefully
+                self.ffmpeg_process.kill()
+                self.ffmpeg_process.wait()
             except:
                 pass
 

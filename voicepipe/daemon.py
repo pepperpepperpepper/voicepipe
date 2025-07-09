@@ -31,12 +31,16 @@ class RecordingDaemon:
         self._initialize_audio()
     
     def _initialize_audio(self):
-        """Pre-initialize audio to reduce startup delay."""
+        """Pre-initialize audio and recorder to reduce startup delay."""
         try:
             # Get default device index
             self.default_device = sd.default.device[0]  # Input device
             device_info = sd.query_devices(self.default_device, 'input')
             print(f"Audio initialized. Default device: {device_info['name']}", file=sys.stderr)
+            
+            # Pre-create recorder instance to avoid initialization delay
+            self.recorder = FastAudioRecorder(device_index=self.default_device)
+            print("Recorder pre-initialized for fast startup", file=sys.stderr)
         except Exception as e:
             print(f"Warning: Could not pre-initialize audio: {e}", file=sys.stderr)
         
@@ -68,7 +72,18 @@ class RecordingDaemon:
                     
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals."""
+        print(f"Received signal {signum}, shutting down gracefully...", file=sys.stderr)
         self.running = False
+        
+        # Stop any active recording first
+        if self.recording:
+            print("Stopping active recording...", file=sys.stderr)
+            try:
+                self._stop_recording()
+            except Exception as e:
+                print(f"Error stopping recording: {e}", file=sys.stderr)
+        
+        # Clean up recorder
         if self.recorder:
             self.recorder.cleanup()
         if self.pyaudio:
@@ -77,6 +92,8 @@ class RecordingDaemon:
             self.socket.close()
         if self.SOCKET_PATH.exists():
             self.SOCKET_PATH.unlink()
+        
+        print("Daemon shutdown complete.", file=sys.stderr)
         sys.exit(0)
         
     def _handle_client(self, conn):
@@ -118,10 +135,19 @@ class RecordingDaemon:
             fd, self.audio_file = tempfile.mkstemp(suffix='.mp3', prefix='voicepipe_')
             os.close(fd)
             
-            # Start recording
-            self.recorder = FastAudioRecorder(
-                device_index=device_index or self.default_device
-            )
+            # Use pre-initialized recorder if device matches, otherwise create new one
+            if device_index and device_index != self.default_device:
+                # Different device requested, create new recorder
+                if self.recorder:
+                    self.recorder.cleanup()
+                self.recorder = FastAudioRecorder(device_index=device_index)
+            elif not self.recorder:
+                # No pre-initialized recorder, create one
+                self.recorder = FastAudioRecorder(
+                    device_index=device_index or self.default_device
+                )
+            
+            # Start recording with existing recorder
             self.recorder.start_recording(output_file=self.audio_file)
             self.recording = True
             

@@ -25,8 +25,9 @@ def daemon_request(command, **kwargs):
         return None
         
     try:
-        # Connect to daemon
+        # Connect to daemon with timeout
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.settimeout(0.1)  # 100ms timeout for fast failure
         client.connect(str(socket_path))
         
         # Send request

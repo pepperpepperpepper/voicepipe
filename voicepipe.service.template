@@ -1,6 +1,7 @@
 [Unit]
 Description=Voicepipe Recording Service
 After=graphical-session.target
+Wants=graphical-session.target
 
 [Service]
 Type=simple
@@ -8,6 +9,10 @@ ExecStart=VOICEPIPE_COMMAND daemon
 Restart=on-failure
 RestartSec=5
 Environment="PATH=/usr/local/bin:/usr/bin:/bin:HOME_DIR/.local/bin"
+# Import display environment dynamically
+PassEnvironment=DISPLAY XAUTHORITY WAYLAND_DISPLAY
+# Fallback if not set
+Environment="DISPLAY=:0"
 
 # Security hardening
 PrivateTmp=no

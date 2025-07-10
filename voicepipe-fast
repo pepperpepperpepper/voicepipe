@@ -7,8 +7,9 @@ import os
 import subprocess
 import time
 import fcntl
+from pathlib import Path
 
-SOCKET_PATH = '/tmp/voicepipe.sock'
+SOCKET_PATH = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp')) / 'voicepipe.sock'
 DEBOUNCE_FILE = '/tmp/voicepipe-fast.time'
 DEBOUNCE_MS = 500  # milliseconds
 
@@ -39,7 +40,7 @@ def send_cmd(cmd):
     client.settimeout(0.5)  # Fast timeout
     
     try:
-        client.connect(SOCKET_PATH)
+        client.connect(str(SOCKET_PATH))
         client.sendall(json.dumps({"command": cmd}).encode())
         
         # Read response efficiently

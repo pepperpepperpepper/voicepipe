@@ -44,6 +44,16 @@ pipx install --editable ".[systray]"
 
 echo "✓ Installation complete!"
 
+# Install voicepipe-fast script
+echo "Installing voicepipe-fast control script..."
+if [ -f "voicepipe-fast" ]; then
+    cp voicepipe-fast "$HOME/.local/bin/voicepipe-fast"
+    chmod +x "$HOME/.local/bin/voicepipe-fast"
+    echo "✓ voicepipe-fast installed to ~/.local/bin/"
+else
+    echo "Warning: voicepipe-fast script not found in current directory"
+fi
+
 echo
 
 # Find voicepipe command location
@@ -138,3 +148,14 @@ echo
 echo "Remember to set your OpenAI API key:"
 echo "  export OPENAI_API_KEY='your-api-key-here'"
 echo "  # or create a .env file with OPENAI_API_KEY=your-api-key-here"
+echo
+echo "Hotkey Setup:"
+echo "============="
+echo "voicepipe-fast provides minimal-latency recording control."
+echo "Add to your window manager config:"
+echo
+echo "For Fluxbox (~/.fluxbox/keys):"
+echo "  Mod1 F5 :Exec $HOME/.local/bin/voicepipe-fast toggle"
+echo
+echo "For other window managers, bind '$HOME/.local/bin/voicepipe-fast toggle'"
+echo "to your preferred hotkey (e.g., Alt+F5, Super+V, etc.)"

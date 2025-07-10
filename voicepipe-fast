@@ -1,0 +1,177 @@
+#!/home/pepper/.local/share/pipx/venvs/voicepipe/bin/python
+"""Fast voicepipe control with optimal transcription handling"""
+import sys
+import socket
+import json
+import os
+import subprocess
+import time
+import fcntl
+
+SOCKET_PATH = '/tmp/voicepipe.sock'
+DEBOUNCE_FILE = '/tmp/voicepipe-fast.time'
+DEBOUNCE_MS = 500  # milliseconds
+
+# Global transcriber instance (lazy loaded)
+_transcriber = None
+_openai_client = None
+
+def get_transcriber():
+    """Get or create a cached transcriber instance"""
+    global _transcriber, _openai_client
+    if _transcriber is None:
+        # Import only when needed
+        from voicepipe.transcriber import WhisperTranscriber
+        import openai
+        
+        # Pre-create client to reuse connection pool
+        if _openai_client is None:
+            _openai_client = openai.OpenAI()
+        
+        _transcriber = WhisperTranscriber(model='gpt-4o-transcribe')
+        # Monkey-patch to use our persistent client
+        _transcriber.client = _openai_client
+    return _transcriber
+
+def send_cmd(cmd):
+    """Send command to daemon via Unix socket"""
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(0.5)  # Fast timeout
+    
+    try:
+        client.connect(SOCKET_PATH)
+        client.sendall(json.dumps({"command": cmd}).encode())
+        
+        # Read response efficiently
+        response_data = b""
+        while True:
+            part = client.recv(4096)
+            if not part:
+                break
+            response_data += part
+            # Quick check for complete JSON
+            if response_data.endswith(b'}'):
+                try:
+                    json.loads(response_data)
+                    break
+                except:
+                    continue
+        
+        return json.loads(response_data.decode())
+    finally:
+        client.close()
+
+def check_debounce():
+    """Check if enough time has passed since last invocation"""
+    try:
+        current_time = int(time.time() * 1000)  # milliseconds
+        
+        # Try to read last time
+        if os.path.exists(DEBOUNCE_FILE):
+            with open(DEBOUNCE_FILE, 'r') as f:
+                last_time = int(f.read().strip())
+                
+            if current_time - last_time < DEBOUNCE_MS:
+                return False  # Too soon, ignore
+        
+        # Write current time
+        with open(DEBOUNCE_FILE, 'w') as f:
+            f.write(str(current_time))
+        
+        return True
+    except:
+        # On any error, allow the action
+        return True
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: voicepipe-fast [start|stop|toggle]")
+        sys.exit(1)
+    
+    cmd = sys.argv[1]
+    
+    # Apply debouncing only to toggle command
+    if cmd == "toggle" and not check_debounce():
+        sys.exit(0)  # Exit silently if debounced
+    
+    try:
+        if cmd == "start":
+            status = send_cmd("status")
+            if status.get('status') == 'recording':
+                sys.exit(0)  # Already recording, exit silently
+            
+            result = send_cmd("start")
+            if 'error' in result:
+                print(f"Error: {result['error']}", file=sys.stderr)
+                sys.exit(1)
+                
+        elif cmd == "stop":
+            status = send_cmd("status")
+            if status.get('status') != 'recording':
+                sys.exit(0)  # Not recording, exit silently
+                
+            result = send_cmd("stop")
+            if 'error' not in result and 'audio_file' in result:
+                audio_file = result['audio_file']
+                if os.path.exists(audio_file) and os.path.getsize(audio_file) > 0:
+                    # Transcribe
+                    start_time = time.time()
+                    transcriber = get_transcriber()
+                    text = transcriber.transcribe(audio_file)
+                    transcribe_time = time.time() - start_time
+                    
+                    # Output text
+                    print(text)
+                    
+                    # Log performance (optional)
+                    # print(f"[Transcribed in {transcribe_time:.2f}s]", file=sys.stderr)
+                    
+                # Clean up
+                if os.path.exists(audio_file):
+                    os.unlink(audio_file)
+            else:
+                if 'error' in result:
+                    print(f"Error: {result['error']}", file=sys.stderr)
+                    
+        elif cmd == "toggle":
+            status = send_cmd("status")
+            if status.get('status') == 'recording':
+                # Stop and transcribe
+                result = send_cmd("stop")
+                if 'error' not in result and 'audio_file' in result:
+                    audio_file = result['audio_file']
+                    if os.path.exists(audio_file) and os.path.getsize(audio_file) > 0:
+                        # Transcribe
+                        transcriber = get_transcriber()
+                        text = transcriber.transcribe(audio_file)
+                        
+                        if text:
+                            # Type the text
+                            subprocess.run(
+                                ['xdotool', 'type', '--', text],
+                                capture_output=True,
+                                check=False
+                            )
+                    
+                    # Clean up
+                    if os.path.exists(audio_file):
+                        os.unlink(audio_file)
+            else:
+                # Start recording
+                result = send_cmd("start")
+                if 'error' in result:
+                    print(f"Error: {result['error']}", file=sys.stderr)
+                    
+    except socket.error:
+        print("Error: Cannot connect to voicepipe daemon. Is it running?", file=sys.stderr)
+        print("Start it with: systemctl --user start voicepipe.service", file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        # Handle Ctrl+C gracefully
+        sys.exit(130)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

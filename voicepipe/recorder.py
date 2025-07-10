@@ -23,6 +23,21 @@ if sys.platform == "win32":
     subprocess.CREATE_NO_WINDOW = 0x08000000
 
 
+def get_temp_dir():
+    """Get temp directory, preferring RAM disk if available."""
+    # Check for RAM disk environment variable
+    ram_temp = os.environ.get('VOICEPIPE_TEMP')
+    if ram_temp and os.path.exists(ram_temp):
+        return ram_temp
+    
+    # Check for R: drive directly on Windows
+    if sys.platform == "win32" and os.path.exists('R:\\voicepipe_temp'):
+        return 'R:\\voicepipe_temp'
+    
+    # Fall back to system temp
+    return tempfile.gettempdir()
+
+
 class FastAudioRecorder:
     """Optimized audio recorder using sounddevice."""
     
@@ -140,8 +155,25 @@ class FastAudioRecorder:
             self.stream = None
             
         if self.ffmpeg_process:
-            self.ffmpeg_process.stdin.close()
-            self.ffmpeg_process.wait()
+            try:
+                self.ffmpeg_process.stdin.close()
+            except:
+                pass
+            
+            # Give ffmpeg a chance to exit cleanly
+            try:
+                self.ffmpeg_process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                # Force terminate if it doesn't exit
+                self.ffmpeg_process.terminate()
+                try:
+                    self.ffmpeg_process.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    # Kill if terminate didn't work
+                    self.ffmpeg_process.kill()
+                    self.ffmpeg_process.wait()
+            
+            self.ffmpeg_process = None
             return None
         else:
             # Collect all audio data from queue
@@ -168,9 +200,19 @@ class FastAudioRecorder:
         if self.ffmpeg_process:
             try:
                 self.ffmpeg_process.stdin.close()
-                self.ffmpeg_process.terminate()
             except:
                 pass
+            
+            try:
+                self.ffmpeg_process.terminate()
+                self.ffmpeg_process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                self.ffmpeg_process.kill()
+                self.ffmpeg_process.wait()
+            except:
+                pass
+            
+            self.ffmpeg_process = None
 
 
 class AudioRecorder(FastAudioRecorder):
@@ -335,7 +377,7 @@ class AudioRecorder(FastAudioRecorder):
 class RecordingSession:
     """Manages recording sessions with PID tracking."""
     
-    STATE_DIR = Path(tempfile.gettempdir())
+    STATE_DIR = Path(get_temp_dir())
     STATE_PREFIX = "voicepipe-"
     
     @classmethod
@@ -384,8 +426,8 @@ class RecordingSession:
         if active:
             raise RuntimeError(f"Recording already in progress (PID: {active[0]['pid']})")
         
-        # Create temporary audio file
-        fd, audio_file = tempfile.mkstemp(suffix='.mp3', prefix='voicepipe_')
+        # Create temporary audio file in RAM disk if available
+        fd, audio_file = tempfile.mkstemp(suffix='.mp3', prefix='voicepipe_', dir=get_temp_dir())
         os.close(fd)  # We'll write to it later
         
         # Create session data

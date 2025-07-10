@@ -1,5 +1,14 @@
 ; Direct Voicepipe Toggle - AutoHotkey v2
 ; Stateful version that checks actual daemon status
+; This version ensures no visible window
+
+#NoTrayIcon  ; Hide the tray icon
+#SingleInstance Force  ; Replace any existing instance
+
+; Create a GUI but never show it (prevents taskbar button)
+myGui := Gui()
+myGui.Title := "VoicepipeHidden"  ; If somehow shown, use a better name
+myGui.Opt("-MaximizeBox -MinimizeBox +ToolWindow")  ; No taskbar button if shown
 
 global lastToggleTime := 0
 

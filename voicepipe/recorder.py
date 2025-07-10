@@ -23,21 +23,6 @@ if sys.platform == "win32":
     subprocess.CREATE_NO_WINDOW = 0x08000000
 
 
-def get_temp_dir():
-    """Get temp directory, preferring RAM disk if available."""
-    # Check for RAM disk environment variable
-    ram_temp = os.environ.get('VOICEPIPE_TEMP')
-    if ram_temp and os.path.exists(ram_temp):
-        return ram_temp
-    
-    # Check for R: drive directly on Windows
-    if sys.platform == "win32" and os.path.exists('R:\\voicepipe_temp'):
-        return 'R:\\voicepipe_temp'
-    
-    # Fall back to system temp
-    return tempfile.gettempdir()
-
-
 class FastAudioRecorder:
     """Optimized audio recorder using sounddevice."""
     
@@ -110,7 +95,7 @@ class FastAudioRecorder:
                 '-ac', str(self.channels),
                 '-i', '-',
                 '-acodec', 'mp3',
-                '-b:a', '64k',
+                '-b:a', '32k',  # Reduced bitrate for speech
                 '-y',
                 output_file
             ], **kwargs)
@@ -155,25 +140,8 @@ class FastAudioRecorder:
             self.stream = None
             
         if self.ffmpeg_process:
-            try:
-                self.ffmpeg_process.stdin.close()
-            except:
-                pass
-            
-            # Give ffmpeg a chance to exit cleanly
-            try:
-                self.ffmpeg_process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                # Force terminate if it doesn't exit
-                self.ffmpeg_process.terminate()
-                try:
-                    self.ffmpeg_process.wait(timeout=1)
-                except subprocess.TimeoutExpired:
-                    # Kill if terminate didn't work
-                    self.ffmpeg_process.kill()
-                    self.ffmpeg_process.wait()
-            
-            self.ffmpeg_process = None
+            self.ffmpeg_process.stdin.close()
+            self.ffmpeg_process.wait()
             return None
         else:
             # Collect all audio data from queue
@@ -200,19 +168,9 @@ class FastAudioRecorder:
         if self.ffmpeg_process:
             try:
                 self.ffmpeg_process.stdin.close()
-            except:
-                pass
-            
-            try:
                 self.ffmpeg_process.terminate()
-                self.ffmpeg_process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                self.ffmpeg_process.kill()
-                self.ffmpeg_process.wait()
             except:
                 pass
-            
-            self.ffmpeg_process = None
 
 
 class AudioRecorder(FastAudioRecorder):
@@ -270,7 +228,7 @@ class AudioRecorder(FastAudioRecorder):
                     '-ac', str(self.channels),  # channels
                     '-i', '-',  # read from stdin
                     '-acodec', 'mp3',
-                    '-b:a', '64k',  # 64kbps for voice
+                    '-b:a', '32k',  # 32kbps is fine for voice
                     '-y',  # overwrite output file
                     output_file
                 ], **kwargs)
@@ -377,7 +335,21 @@ class AudioRecorder(FastAudioRecorder):
 class RecordingSession:
     """Manages recording sessions with PID tracking."""
     
-    STATE_DIR = Path(get_temp_dir())
+    @classmethod
+    def _get_temp_dir(cls):
+        """Get temp directory, preferring RAM disk if available."""
+        # Check for RAM disk environment variable
+        ram_temp = os.environ.get('VOICEPIPE_TEMP')
+        if ram_temp and os.path.exists(ram_temp):
+            return Path(ram_temp)
+        
+        # Check for R: drive directly on Windows
+        if sys.platform == "win32" and os.path.exists('R:\\voicepipe_temp'):
+            return Path('R:\\voicepipe_temp')
+        
+        # Fall back to system temp
+        return Path(tempfile.gettempdir())
+    
     STATE_PREFIX = "voicepipe-"
     
     @classmethod
@@ -385,13 +357,13 @@ class RecordingSession:
         """Get the state file path for a given PID."""
         if pid is None:
             pid = os.getpid()
-        return cls.STATE_DIR / f"{cls.STATE_PREFIX}{pid}.json"
+        return cls._get_temp_dir() / f"{cls.STATE_PREFIX}{pid}.json"
     
     @classmethod
     def find_active_sessions(cls):
         """Find all active recording sessions."""
         sessions = []
-        for file in cls.STATE_DIR.glob(f"{cls.STATE_PREFIX}*.json"):
+        for file in cls._get_temp_dir().glob(f"{cls.STATE_PREFIX}*.json"):
             try:
                 with open(file, 'r') as f:
                     data = json.load(f)
@@ -426,8 +398,9 @@ class RecordingSession:
         if active:
             raise RuntimeError(f"Recording already in progress (PID: {active[0]['pid']})")
         
-        # Create temporary audio file in RAM disk if available
-        fd, audio_file = tempfile.mkstemp(suffix='.mp3', prefix='voicepipe_', dir=get_temp_dir())
+        # Create temporary audio file in optimal location
+        temp_dir = cls._get_temp_dir()
+        fd, audio_file = tempfile.mkstemp(suffix='.mp3', prefix='voicepipe_', dir=str(temp_dir))
         os.close(fd)  # We'll write to it later
         
         # Create session data

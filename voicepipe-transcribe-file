@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""
+voicepipe-transcribe-file
+
+Transcribe any audio file using the voicepipe transcriber daemon.
+Usage: voicepipe-transcribe-file <audio_file>
+"""
+
+import asyncio
+import json
+import socket
+import sys
+import os
+from pathlib import Path
+
+
+async def transcribe_file(audio_path: str):
+    """Send audio file to transcriber daemon and stream back results."""
+    if not os.path.exists(audio_path):
+        print(f"Error: File '{audio_path}' not found", file=sys.stderr)
+        sys.exit(1)
+    
+    audio_path = Path(audio_path).resolve()
+    
+    # Read audio file
+    try:
+        with open(audio_path, 'rb') as f:
+            audio_data = f.read()
+    except Exception as e:
+        print(f"Error reading file: {e}", file=sys.stderr)
+        sys.exit(1)
+    
+    # Connect to daemon
+    sock_path = '/tmp/voicepipe_transcriber.sock'
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.connect(sock_path)
+    except Exception as e:
+        print(f"Error connecting to transcriber daemon: {e}", file=sys.stderr)
+        print("Make sure voicepipe-transcriber.service is running", file=sys.stderr)
+        sys.exit(1)
+    
+    # Send request
+    request = {
+        'type': 'transcribe',
+        'audio': audio_data.hex(),
+        'format': 'mp3'  # Daemon will handle format detection
+    }
+    
+    try:
+        sock.send((json.dumps(request) + '\n').encode())
+        
+        # Stream response
+        buffer = ""
+        while True:
+            chunk = sock.recv(4096).decode()
+            if not chunk:
+                break
+            
+            buffer += chunk
+            while '\n' in buffer:
+                line, buffer = buffer.split('\n', 1)
+                if line.strip():
+                    try:
+                        response = json.loads(line)
+                        if response.get('type') == 'transcription':
+                            text = response.get('text', '')
+                            if text:
+                                print(text, end='', flush=True)
+                        elif response.get('type') == 'complete':
+                            print()  # New line at completion
+                            sock.close()
+                            return
+                        elif response.get('type') == 'error':
+                            print(f"\nError: {response.get('message')}", file=sys.stderr)
+                            sock.close()
+                            sys.exit(1)
+                    except json.JSONDecodeError:
+                        continue
+    
+    except Exception as e:
+        print(f"Error communicating with daemon: {e}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        sock.close()
+
+
+def main():
+    if len(sys.argv) != 2:
+        print("Usage: voicepipe-transcribe-file <audio_file>", file=sys.stderr)
+        sys.exit(1)
+    
+    audio_file = sys.argv[1]
+    asyncio.run(transcribe_file(audio_file))
+
+
+if __name__ == "__main__":
+    main()

@@ -22,6 +22,8 @@ ReadWritePaths=/tmp
 
 # Environment
 Environment="PYTHONUNBUFFERED=1"
+PassEnvironment=OPENAI_API_KEY
+PassEnvironment=OPENAI_API_KEY
 
 [Install]
 WantedBy=default.target

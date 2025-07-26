@@ -12,6 +12,7 @@ from pathlib import Path
 SOCKET_PATH = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp')) / 'voicepipe.sock'
 DEBOUNCE_FILE = '/tmp/voicepipe-fast.time'
 DEBOUNCE_MS = 500  # milliseconds
+LOCK_FILE = '/tmp/voicepipe-fast.lock'
 
 # Global transcriber instance (lazy loaded)
 _transcriber = None
@@ -62,6 +63,29 @@ def send_cmd(cmd):
     finally:
         client.close()
 
+class FileLock:
+    """Simple file-based lock using fcntl"""
+    def __init__(self, lockfile):
+        self.lockfile = lockfile
+        self.fd = None
+        
+    def __enter__(self):
+        self.fd = open(self.lockfile, 'w')
+        try:
+            # Try to acquire exclusive lock (non-blocking)
+            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return self
+        except IOError:
+            # Lock is held by another process
+            self.fd.close()
+            self.fd = None
+            raise
+            
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.fd:
+            fcntl.flock(self.fd, fcntl.LOCK_UN)
+            self.fd.close()
+
 def check_debounce():
     """Check if enough time has passed since last invocation"""
     try:
@@ -84,6 +108,41 @@ def check_debounce():
         # On any error, allow the action
         return True
 
+def execute_toggle():
+    """Execute toggle command logic"""
+    try:
+        status = send_cmd("status")
+        if status.get('status') == 'recording':
+            # Stop and transcribe
+            result = send_cmd("stop")
+            if 'error' not in result and 'audio_file' in result:
+                audio_file = result['audio_file']
+                if os.path.exists(audio_file) and os.path.getsize(audio_file) > 0:
+                    # Transcribe
+                    transcriber = get_transcriber()
+                    text = transcriber.transcribe(audio_file)
+                    
+                    if text:
+                        # Type the text
+                        subprocess.run(
+                            ['xdotool', 'type', '--', text],
+                            capture_output=True,
+                            check=False
+                        )
+                
+                # Clean up
+                if os.path.exists(audio_file):
+                    os.unlink(audio_file)
+        else:
+            # Start recording
+            result = send_cmd("start")
+            if 'error' in result:
+                print(f"Error: {result['error']}", file=sys.stderr)
+    except socket.error:
+        print("Error: Cannot connect to voicepipe daemon. Is it running?", file=sys.stderr)
+        print("Start it with: systemctl --user start voicepipe.service", file=sys.stderr)
+        sys.exit(1)
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: voicepipe-fast [start|stop|toggle]")
@@ -91,9 +150,18 @@ def main():
     
     cmd = sys.argv[1]
     
-    # Apply debouncing only to toggle command
-    if cmd == "toggle" and not check_debounce():
-        sys.exit(0)  # Exit silently if debounced
+    # For toggle command, use file locking to prevent concurrent execution
+    if cmd == "toggle":
+        try:
+            with FileLock(LOCK_FILE):
+                # Also check debounce inside the lock to prevent rapid toggles
+                if not check_debounce():
+                    sys.exit(0)  # Exit silently if debounced
+                execute_toggle()
+                return
+        except IOError:
+            # Another instance is running, exit silently
+            sys.exit(0)
     
     try:
         if cmd == "start":
@@ -131,35 +199,6 @@ def main():
                 if os.path.exists(audio_file):
                     os.unlink(audio_file)
             else:
-                if 'error' in result:
-                    print(f"Error: {result['error']}", file=sys.stderr)
-                    
-        elif cmd == "toggle":
-            status = send_cmd("status")
-            if status.get('status') == 'recording':
-                # Stop and transcribe
-                result = send_cmd("stop")
-                if 'error' not in result and 'audio_file' in result:
-                    audio_file = result['audio_file']
-                    if os.path.exists(audio_file) and os.path.getsize(audio_file) > 0:
-                        # Transcribe
-                        transcriber = get_transcriber()
-                        text = transcriber.transcribe(audio_file)
-                        
-                        if text:
-                            # Type the text
-                            subprocess.run(
-                                ['xdotool', 'type', '--', text],
-                                capture_output=True,
-                                check=False
-                            )
-                    
-                    # Clean up
-                    if os.path.exists(audio_file):
-                        os.unlink(audio_file)
-            else:
-                # Start recording
-                result = send_cmd("start")
                 if 'error' in result:
                     print(f"Error: {result['error']}", file=sys.stderr)
                     

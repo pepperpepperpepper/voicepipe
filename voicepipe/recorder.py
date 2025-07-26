@@ -36,6 +36,7 @@ class FastAudioRecorder:
         self.max_duration = max_duration
         self.start_time = None
         self.timeout_timer = None
+        self._timeout_triggered = False
         
         # Pre-open stream for faster start
         if pre_open:
@@ -126,7 +127,12 @@ class FastAudioRecorder:
         """Called when recording timeout is reached."""
         if self.recording:
             print(f"Recording timeout reached ({self.max_duration}s), stopping...", file=sys.stderr)
-            os.kill(os.getpid(), signal.SIGTERM)
+            # Instead of killing the process, gracefully stop recording
+            try:
+                self.stop_recording()
+            except Exception as e:
+                print(f"Error during timeout handling: {e}", file=sys.stderr)
+                self.cleanup()
     
     def stop_recording(self):
         """Stop recording and return the recorded data."""
@@ -254,8 +260,12 @@ class AudioRecorder(FastAudioRecorder):
         """Called when recording timeout is reached."""
         if self.recording:
             print(f"Recording timeout reached ({self.max_duration}s), stopping...", file=sys.stderr)
-            # Signal the main process to stop
-            os.kill(os.getpid(), signal.SIGTERM)
+            # Instead of killing the process, gracefully stop recording
+            try:
+                self.stop_recording()
+            except Exception as e:
+                print(f"Error during timeout handling: {e}", file=sys.stderr)
+                self.cleanup()
     
     def _audio_callback(self, indata, frames, time, status):
         """Callback for audio stream."""
@@ -360,10 +370,9 @@ class RecordingSession:
                     if pid and cls._is_process_running(pid):
                         sessions.append(data)
                     else:
-                        # Clean up stale session
+                        # Clean up stale session file but preserve audio file
                         file.unlink(missing_ok=True)
-                        if 'audio_file' in data:
-                            Path(data['audio_file']).unlink(missing_ok=True)
+                        # Don't delete the audio file - let the user decide
             except Exception:
                 # Invalid or corrupted state file
                 file.unlink(missing_ok=True)
@@ -419,6 +428,5 @@ class RecordingSession:
         state_file = cls.get_state_file(session['pid'])
         state_file.unlink(missing_ok=True)
         
-        # Remove audio file
-        if 'audio_file' in session:
-            Path(session['audio_file']).unlink(missing_ok=True)
+        # Note: We no longer automatically remove the audio file
+        # The caller is responsible for cleanup if needed

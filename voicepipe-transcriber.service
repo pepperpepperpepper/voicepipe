@@ -1,0 +1,27 @@
+[Unit]
+Description=Voicepipe Transcriber Service
+After=network.target
+# Start after the main voicepipe daemon
+After=voicepipe.service
+Requires=voicepipe.service
+
+[Service]
+Type=simple
+ExecStart=/home/pepper/.local/src/voicepipe/transcriber_daemon.py
+Restart=on-failure
+RestartSec=5
+StandardError=journal
+StandardOutput=journal
+
+# Security hardening
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/tmp
+
+# Environment
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=default.target

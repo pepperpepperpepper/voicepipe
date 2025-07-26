@@ -28,6 +28,7 @@ class RecordingDaemon:
         self.running = True
         self.timeout_timer = None
         self.default_device = None
+        self._timeout_triggered = False
         self._initialize_audio()
     
     def _initialize_audio(self):
@@ -179,7 +180,13 @@ class RecordingDaemon:
         """Called when recording timeout is reached."""
         if self.recording:
             print("Recording timeout reached (5 minutes), stopping...", file=sys.stderr)
-            self._stop_recording()
+            self._timeout_triggered = True
+            try:
+                self._stop_recording()
+            except Exception as e:
+                print(f"Error during timeout handling: {e}", file=sys.stderr)
+                # Ensure we clean up gracefully even if stop fails
+                self._cleanup_timeout_state()
             
     def _stop_recording(self):
         """Stop recording and save audio."""
@@ -207,10 +214,18 @@ class RecordingDaemon:
                 'audio_file': self.audio_file
             }
             
+            # Handle file cleanup based on timeout vs normal completion
+            if not self._timeout_triggered:
+                # Normal completion - delete the file
+                if self.audio_file and os.path.exists(self.audio_file):
+                    os.unlink(self.audio_file)
+            # If timeout triggered, preserve the file
+            
             # Reset state
             self.recording = False
             self.recorder = None
             self.audio_file = None
+            self._timeout_triggered = False
             
             return response
             
@@ -233,7 +248,7 @@ class RecordingDaemon:
                 self.recorder.stop_recording()
                 self.recorder.cleanup()
                 
-            # Remove audio file
+            # Always remove audio file on explicit cancel
             if self.audio_file and os.path.exists(self.audio_file):
                 os.unlink(self.audio_file)
                 
@@ -241,6 +256,7 @@ class RecordingDaemon:
             self.recording = False
             self.recorder = None
             self.audio_file = None
+            self._timeout_triggered = False
             
             # Hide systray icon
             get_systray().hide()
@@ -257,6 +273,31 @@ class RecordingDaemon:
             'pid': os.getpid(),
             'audio_file': self.audio_file
         }
+
+    def _cleanup_timeout_state(self):
+        """Clean up state after timeout without deleting files."""
+        try:
+            if self.timeout_timer:
+                self.timeout_timer.cancel()
+                self.timeout_timer = None
+            
+            if self.recorder:
+                try:
+                    self.recorder.stop_recording()
+                    self.recorder.cleanup()
+                except Exception as e:
+                    print(f"Error cleaning up recorder: {e}", file=sys.stderr)
+            
+            # Hide systray icon
+            get_systray().hide()
+            
+            # Reset state but preserve audio file
+            self.recording = False
+            self.recorder = None
+            # Keep audio_file reference so the file isn't deleted
+            
+        except Exception as e:
+            print(f"Error in cleanup_timeout_state: {e}", file=sys.stderr)
 
 
 def main():

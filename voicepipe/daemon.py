@@ -214,12 +214,12 @@ class RecordingDaemon:
                 'audio_file': self.audio_file
             }
             
-            # Handle file cleanup based on timeout vs normal completion
-            if not self._timeout_triggered:
-                # Normal completion - delete the file
+            # Handle file cleanup - only delete on timeout, preserve for transcription
+            if self._timeout_triggered:
+                # Timeout completion - delete the file
                 if self.audio_file and os.path.exists(self.audio_file):
                     os.unlink(self.audio_file)
-            # If timeout triggered, preserve the file
+            # If normal completion, preserve the file for transcription
             
             # Reset state
             self.recording = False

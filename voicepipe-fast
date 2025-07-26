@@ -14,26 +14,7 @@ DEBOUNCE_FILE = '/tmp/voicepipe-fast.time'
 DEBOUNCE_MS = 500  # milliseconds
 LOCK_FILE = '/tmp/voicepipe-fast.lock'
 
-# Global transcriber instance (lazy loaded)
-_transcriber = None
-_openai_client = None
-
-def get_transcriber():
-    """Get or create a cached transcriber instance"""
-    global _transcriber, _openai_client
-    if _transcriber is None:
-        # Import only when needed
-        from voicepipe.transcriber import WhisperTranscriber
-        import openai
-        
-        # Pre-create client to reuse connection pool
-        if _openai_client is None:
-            _openai_client = openai.OpenAI()
-        
-        _transcriber = WhisperTranscriber(model='gpt-4o-transcribe')
-        # Monkey-patch to use our persistent client
-        _transcriber.client = _openai_client
-    return _transcriber
+TRANSCRIBER_SOCKET = Path('/tmp/voicepipe_transcriber.sock')
 
 def send_cmd(cmd):
     """Send command to daemon via Unix socket"""
@@ -60,6 +41,27 @@ def send_cmd(cmd):
                     continue
         
         return json.loads(response_data.decode())
+    finally:
+        client.close()
+
+def send_transcribe_request(audio_file):
+    """Send audio file to transcriber daemon"""
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(5.0)
+    try:
+        client.connect(str(TRANSCRIBER_SOCKET))
+        client.send(json.dumps({"audio_file": audio_file}).encode())
+        response_data = b""
+        while True:
+            part = client.recv(4096)
+            if not part:
+                break
+            response_data += part
+        response = json.loads(response_data.decode())
+        return response.get('text', '')
+    except Exception as e:
+        print(f"[TRANSCRIBE] Error: {e}", file=sys.stderr)
+        return ''
     finally:
         client.close()
 
@@ -97,51 +99,64 @@ def check_debounce():
                 last_time = int(f.read().strip())
                 
             if current_time - last_time < DEBOUNCE_MS:
+                print(f"[DEBOUNCE] Skipping - last: {last_time}, current: {current_time}, diff: {current_time - last_time}ms", file=sys.stderr)
                 return False  # Too soon, ignore
         
         # Write current time
         with open(DEBOUNCE_FILE, 'w') as f:
             f.write(str(current_time))
         
+        print(f"[DEBOUNCE] Allowing - current: {current_time}", file=sys.stderr)
         return True
-    except:
-        # On any error, allow the action
+    except Exception as e:
+        print(f"[DEBOUNCE] Error: {e}, allowing action", file=sys.stderr)
         return True
 
 def execute_toggle():
     """Execute toggle command logic"""
     try:
+        print(f"[TOGGLE] Starting toggle execution", file=sys.stderr)
         status = send_cmd("status")
+        print(f"[TOGGLE] Status: {status}", file=sys.stderr)
+        
         if status.get('status') == 'recording':
+            print("[TOGGLE] Recording active, stopping...", file=sys.stderr)
             # Stop and transcribe
             result = send_cmd("stop")
+            print(f"[TOGGLE] Stop result: {result}", file=sys.stderr)
+            
             if 'error' not in result and 'audio_file' in result:
                 audio_file = result['audio_file']
-                if os.path.exists(audio_file) and os.path.getsize(audio_file) > 0:
-                    # Transcribe
-                    transcriber = get_transcriber()
-                    text = transcriber.transcribe(audio_file)
-                    
-                    if text:
-                        # Type the text
-                        subprocess.run(
-                            ['xdotool', 'type', '--', text],
-                            capture_output=True,
-                            check=False
-                        )
+                print(f"[TOGGLE] Audio file: {audio_file}", file=sys.stderr)
+                
+                text = send_transcribe_request(audio_file)
+                if text:
+                    print(f"[TOGGLE] Transcription: {text}", file=sys.stderr)
+                    subprocess.run(['xdotool', 'type', '--', text], capture_output=True, check=False)
+                else:
+                    print("[TOGGLE] No transcription returned", file=sys.stderr)
                 
                 # Clean up
                 if os.path.exists(audio_file):
                     os.unlink(audio_file)
+                    print(f"[TOGGLE] Cleaned up audio file: {audio_file}", file=sys.stderr)
+            else:
+                print(f"[TOGGLE] Stop error: {result.get('error', 'Unknown error')}", file=sys.stderr)
         else:
+            print("[TOGGLE] Starting recording...", file=sys.stderr)
             # Start recording
             result = send_cmd("start")
+            print(f"[TOGGLE] Start result: {result}", file=sys.stderr)
             if 'error' in result:
-                print(f"Error: {result['error']}", file=sys.stderr)
-    except socket.error:
+                print(f"[TOGGLE] Start error: {result['error']}", file=sys.stderr)
+    except socket.error as e:
+        print(f"[TOGGLE] Socket error: {e}", file=sys.stderr)
         print("Error: Cannot connect to voicepipe daemon. Is it running?", file=sys.stderr)
         print("Start it with: systemctl --user start voicepipe.service", file=sys.stderr)
         sys.exit(1)
+    except Exception as e:
+        print(f"[TOGGLE] Unexpected error: {e}", file=sys.stderr)
+        raise
 
 def main():
     if len(sys.argv) < 2:
@@ -153,13 +168,19 @@ def main():
     # For toggle command, use file locking to prevent concurrent execution
     if cmd == "toggle":
         try:
+            print(f"[MAIN] Toggle command received", file=sys.stderr)
             with FileLock(LOCK_FILE):
+                print(f"[MAIN] Lock acquired", file=sys.stderr)
                 # Also check debounce inside the lock to prevent rapid toggles
                 if not check_debounce():
+                    print("[MAIN] Debounced, exiting", file=sys.stderr)
                     sys.exit(0)  # Exit silently if debounced
+                print("[MAIN] Executing toggle", file=sys.stderr)
                 execute_toggle()
+                print("[MAIN] Toggle completed", file=sys.stderr)
                 return
         except IOError:
+            print("[MAIN] Lock already held, exiting", file=sys.stderr)
             # Another instance is running, exit silently
             sys.exit(0)
     
@@ -183,21 +204,13 @@ def main():
             if 'error' not in result and 'audio_file' in result:
                 audio_file = result['audio_file']
                 if os.path.exists(audio_file) and os.path.getsize(audio_file) > 0:
-                    # Transcribe
-                    start_time = time.time()
-                    transcriber = get_transcriber()
-                    text = transcriber.transcribe(audio_file)
-                    transcribe_time = time.time() - start_time
-                    
+                    text = send_transcribe_request(audio_file)
                     # Output text
-                    print(text)
-                    
-                    # Log performance (optional)
-                    # print(f"[Transcribed in {transcribe_time:.2f}s]", file=sys.stderr)
-                    
-                # Clean up
-                if os.path.exists(audio_file):
-                    os.unlink(audio_file)
+                    if text:
+                        print(text)
+                    # Clean up
+                    if os.path.exists(audio_file):
+                        os.unlink(audio_file)
             else:
                 if 'error' in result:
                     print(f"Error: {result['error']}", file=sys.stderr)

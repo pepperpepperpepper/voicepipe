@@ -84,15 +84,15 @@ if command -v systemctl &> /dev/null; then
     mkdir -p ~/.config/systemd/user/
     
     # Generate service file
-    if [ -f "voicepipe.service.template" ]; then
+    if [ -f "voicepipe-recorder.service.template" ]; then
         sed -e "s|VOICEPIPE_COMMAND|$VOICEPIPE_CMD|g" \
             -e "s|HOME_DIR|$HOME|g" \
-            voicepipe.service.template > ~/.config/systemd/user/voicepipe.service
+            voicepipe-recorder.service.template > ~/.config/systemd/user/voicepipe-recorder.service
     else
         # Create service file directly
-        cat > ~/.config/systemd/user/voicepipe.service << EOF
+        cat > ~/.config/systemd/user/voicepipe-recorder.service << EOF
 [Unit]
-Description=Voicepipe Recording Service
+Description=Voicepipe Recorder Service
 After=graphical-session.target
 
 [Service]
@@ -117,14 +117,26 @@ EOF
     # Reload systemd
     systemctl --user daemon-reload
     
-    echo "✓ Systemd service configured"
+    # Install transcriber service from template
+    if [ -f "voicepipe-transcriber.service.template" ]; then
+        PYTHON_PATH="/home/pepper/.local/share/pipx/venvs/voicepipe/bin/python"
+        SCRIPT_PATH="/home/pepper/.local/src/voicepipe/transcriber_daemon.py"
+        sed -e "s|{{PYTHON_PATH}}|$PYTHON_PATH|g" \
+            -e "s|{{SCRIPT_PATH}}|$SCRIPT_PATH|g" \
+            voicepipe-transcriber.service.template > ~/.config/systemd/user/voicepipe-transcriber.service
+    fi
+    
+    # Reload systemd
+    systemctl --user daemon-reload
+    
+    echo "✓ Systemd services configured"
     echo
-    echo "To enable and start the service:"
-    echo "  systemctl --user enable voicepipe.service"
-    echo "  systemctl --user start voicepipe.service"
+    echo "To enable and start the services:"
+    echo "  systemctl --user enable voicepipe-recorder.service voicepipe-transcriber.service"
+    echo "  systemctl --user start voicepipe-recorder.service voicepipe-transcriber.service"
     echo
     echo "To check service status:"
-    echo "  systemctl --user status voicepipe.service"
+    echo "  systemctl --user status voicepipe-recorder.service voicepipe-transcriber.service"
 fi
 
 echo

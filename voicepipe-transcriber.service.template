@@ -1,0 +1,13 @@
+[Unit]
+Description=Voicepipe Transcriber Service
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={{PYTHON_PATH}} {{SCRIPT_PATH}}
+Restart=always
+RestartSec=1
+PrivateTmp=false
+
+[Install]
+WantedBy=default.target

@@ -14,9 +14,8 @@ PassEnvironment=DISPLAY XAUTHORITY WAYLAND_DISPLAY
 # Fallback if not set
 Environment="DISPLAY=:0"
 
-# Security hardening
-PrivateTmp=no
-ProtectSystem=strict
+    # Security hardening
+    PrivateTmp=falseProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/tmp %t
 NoNewPrivileges=true

@@ -2,12 +2,12 @@
 Description=Voicepipe Transcriber Service
 After=network.target
 # Start after the main voicepipe daemon
-After=voicepipe.service
-Requires=voicepipe.service
+After=voicepipe-recorder.service
+Requires=voicepipe-recorder.service
 
 [Service]
 Type=simple
-ExecStart=/home/pepper/.local/src/voicepipe/transcriber_daemon.py
+ExecStart=%h/.local/share/pipx/venvs/voicepipe/bin/python %h/.local/src/voicepipe/transcriber_daemon.py
 Restart=on-failure
 RestartSec=5
 StandardError=journal
@@ -22,7 +22,6 @@ ReadWritePaths=/tmp
 
 # Environment
 Environment="PYTHONUNBUFFERED=1"
-PassEnvironment=OPENAI_API_KEY
 PassEnvironment=OPENAI_API_KEY
 
 [Install]

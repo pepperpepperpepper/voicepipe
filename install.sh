@@ -17,30 +17,27 @@ if [ ! -f "pyproject.toml" ] || [ ! -d "voicepipe" ]; then
     exit 1
 fi
 
-# Check for pipx
-if ! command -v pipx &> /dev/null; then
-    echo "Error: pipx is required but not installed."
+# Check for poetry
+if ! command -v poetry &> /dev/null; then
+    echo "Error: poetry is required but not installed."
     echo
-    echo "Please install pipx first:"
-    echo "  # On Ubuntu/Debian:"
-    echo "  sudo apt install pipx"
-    echo "  # On Arch Linux:"
-    echo "  sudo pacman -S python-pipx"
-    echo "  # Or with pip:"
-    echo "  pip install --user pipx"
+    echo "Please install poetry first:"
+    echo "  curl -sSL https://install.python-poetry.org | python3 -"
     echo
-    echo "Then ensure pipx is in your PATH:"
-    echo "  pipx ensurepath"
+    echo "Then ensure poetry is in your PATH."
     exit 1
 fi
 
-echo "Installing with pipx..."
+echo "Installing with poetry..."
 
-# Uninstall any existing version
-pipx uninstall voicepipe 2>/dev/null || true
+# Set in-project venv
+export POETRY_VIRTUALENVS_IN_PROJECT=true
 
-# Install with systray support
-pipx install --editable ".[systray]"
+# Remove existing venv if any
+rm -rf .venv
+
+# Install with systray extra
+poetry install --extras systray
 
 echo "✓ Installation complete!"
 
@@ -64,25 +61,19 @@ echo "✓ Installation complete!"
     fi
 echo
 
-# Find voicepipe command location
-VOICEPIPE_CMD=$(which voicepipe 2>/dev/null || echo "")
-if [ -z "$VOICEPIPE_CMD" ]; then
-    # Try common locations
-    for path in "$HOME/.local/bin/voicepipe" "$HOME/.local/pipx/venvs/voicepipe/bin/voicepipe"; do
-        if [ -f "$path" ]; then
-            VOICEPIPE_CMD="$path"
-            break
-        fi
-    done
+# Get venv path from poetry
+VENV_PATH=$(poetry env info --path)
+if [ -z "$VENV_PATH" ]; then
+    echo "Error: Could not find poetry virtual environment"
+    exit 1
 fi
+VOICEPIPE_CMD="$VENV_PATH/bin/voicepipe"
 
-if [ -z "$VOICEPIPE_CMD" ]; then
-    echo "Warning: Could not find voicepipe command after installation"
-    echo "You may need to add ~/.local/bin to your PATH"
-    VOICEPIPE_CMD="voicepipe"
-else
-    echo "Found voicepipe at: $VOICEPIPE_CMD"
-fi
+# Symlink to global bin
+mkdir -p "$HOME/.local/bin"
+ln -sf "$VOICEPIPE_CMD" "$HOME/.local/bin/voicepipe"
+echo "✓ voicepipe command symlinked to ~/.local/bin/voicepipe"
+echo "Found voicepipe at: $VOICEPIPE_CMD"
 
 # Setup systemd service
 if command -v systemctl &> /dev/null; then
@@ -127,8 +118,8 @@ EOF
     
     # Install transcriber service from template
     if [ -f "voicepipe-transcriber.service.template" ]; then
-        PYTHON_PATH="/home/pepper/.local/share/pipx/venvs/voicepipe/bin/python"
-        SCRIPT_PATH="/home/pepper/.local/src/voicepipe/transcriber_daemon.py"
+        PYTHON_PATH="$VENV_PATH/bin/python"
+        SCRIPT_PATH="$(pwd)/transcriber_daemon.py"
         sed -e "s|{{PYTHON_PATH}}|$PYTHON_PATH|g" \
             -e "s|{{SCRIPT_PATH}}|$SCRIPT_PATH|g" \
             voicepipe-transcriber.service.template > ~/.config/systemd/user/voicepipe-transcriber.service

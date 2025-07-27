@@ -1,4 +1,4 @@
-#!/home/pepper/.cache/pypoetry/virtualenvs/voicepipe-NMGtLmJm-py3.13/bin/python
+#!/usr/bin/env python3
 """Fast voicepipe control with optimal transcription handling"""
 import sys
 import socket

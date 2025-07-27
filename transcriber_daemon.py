@@ -9,6 +9,38 @@ import time
 import tempfile
 from pathlib import Path
 
+# Load user environment variables before initializing transcriber
+import subprocess
+import os
+
+# Try to source user environment from common locations
+env_files = [
+    os.path.expanduser('~/.api-keys'),
+    os.path.expanduser('~/.bashrc'),
+    os.path.expanduser('~/.bash_profile'),
+    os.path.expanduser('~/.profile')
+]
+
+for env_file in env_files:
+    if os.path.exists(env_file):
+        try:
+            # Source the environment file and get the updated environment
+            result = subprocess.run(
+                ['bash', '-c', f'source {env_file} && env'], 
+                capture_output=True, 
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                for line in result.stdout.split('\n'):
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        if key == 'OPENAI_API_KEY':
+                            os.environ[key] = value
+                            break
+        except:
+            pass
+
 # Pre-initialize the transcriber
 print("Initializing transcriber...", file=sys.stderr)
 from voicepipe.transcriber import WhisperTranscriber

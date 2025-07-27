@@ -125,6 +125,8 @@ EOF
             voicepipe-transcriber.service.template > ~/.config/systemd/user/voicepipe-transcriber.service
     fi
     
+    
+    
     # Reload systemd
     systemctl --user daemon-reload
     
@@ -159,9 +161,9 @@ echo "• Fast recording startup (daemon mode)"
 echo "• Systray icon during recording"
 echo "• Automatic transcription with OpenAI"
 echo
-echo "Remember to set your OpenAI API key:"
-echo "  export OPENAI_API_KEY='your-api-key-here'"
-echo "  # or create a .env file with OPENAI_API_KEY=your-api-key-here"
+echo "Remember to set your OpenAI API key in your shell configuration:"
+echo "  Add 'export OPENAI_API_KEY=your-api-key-here' to ~/.bashrc or ~/.api-keys"
+echo "  Then restart the voicepipe service: systemctl --user restart voicepipe-transcriber.service"
 echo
 echo "Hotkey Setup:"
 echo "============="

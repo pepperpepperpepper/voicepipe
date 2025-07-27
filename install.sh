@@ -45,15 +45,23 @@ pipx install --editable ".[systray]"
 echo "✓ Installation complete!"
 
 # Install voicepipe-fast script
-echo "Installing voicepipe-fast control script..."
-if [ -f "voicepipe-fast" ]; then
-    cp voicepipe-fast "$HOME/.local/bin/voicepipe-fast"
-    chmod +x "$HOME/.local/bin/voicepipe-fast"
-    echo "✓ voicepipe-fast installed to ~/.local/bin/"
-else
-    echo "Warning: voicepipe-fast script not found in current directory"
-fi
-
+    echo "Installing voicepipe-fast control script..."
+    if [ -f "voicepipe-fast" ]; then
+        cp voicepipe-fast "$HOME/.local/bin/voicepipe-fast"
+        chmod +x "$HOME/.local/bin/voicepipe-fast"
+        echo "✓ voicepipe-fast installed to ~/.local/bin/"
+    else
+        echo "Warning: voicepipe-fast script not found in current directory"
+    fi
+    
+    echo "Installing voicepipe-transcribe-file script for file transcription..."
+    if [ -f "voicepipe-transcribe-file" ]; then
+        cp voicepipe-transcribe-file "$HOME/.local/bin/voicepipe-transcribe-file"
+        chmod +x "$HOME/.local/bin/voicepipe-transcribe-file"
+        echo "✓ voicepipe-transcribe-file installed to ~/.local/bin/"
+    else
+        echo "Warning: voicepipe-transcribe-file script not found in current directory"
+    fi
 echo
 
 # Find voicepipe command location
@@ -145,12 +153,15 @@ echo "===================="
 echo "• Voicepipe CLI tool installed with systray support"
 echo "• Systemd user service configured (if available)"
 echo "• Command: $VOICEPIPE_CMD"
+echo "• voicepipe-fast installed to ~/.local/bin/"
+echo "• voicepipe-transcribe-file installed to ~/.local/bin/"
 echo
 echo "Usage:"
 echo "  $VOICEPIPE_CMD --help          # Show help"
 echo "  $VOICEPIPE_CMD start           # Start recording"
 echo "  $VOICEPIPE_CMD stop            # Stop and transcribe"
 echo "  $VOICEPIPE_CMD status          # Check status"
+echo "  ~/.local/bin/voicepipe-transcribe-file <audio-file>  # Transcribe audio file"
 echo
 echo "The service provides:"
 echo "• Fast recording startup (daemon mode)"

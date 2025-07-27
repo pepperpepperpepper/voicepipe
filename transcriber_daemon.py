@@ -6,6 +6,7 @@ import socket
 import json
 import signal
 import time
+import tempfile
 from pathlib import Path
 
 # Pre-initialize the transcriber
@@ -41,27 +42,84 @@ print(f"Transcriber daemon listening on {SOCKET_PATH}", file=sys.stderr)
 while running:
     try:
         conn, _ = server.accept()
-        data = conn.recv(4096).decode()
+        conn.settimeout(300)  # 5 minutes for large file processing
+        buffer = ''
+        data = ''
+        while True:
+            try:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                buffer += chunk.decode('utf-8')
+                if '\n' in buffer:
+                    data, buffer = buffer.split('\n', 1)
+                    break
+            except socket.timeout:
+                continue
         if not data:
             conn.close()
             continue
             
-        request = json.loads(data)
-        audio_file = request.get('audio_file')
+        try:
+            request = json.loads(data)
+        except json.JSONDecodeError as e:
+            print(f"JSON error: {e}", file=sys.stderr)
+            conn.send((json.dumps({'type': 'error', 'message': 'Invalid JSON'}) + '\n').encode())
+            conn.close()
+            continue
         
-        if audio_file and os.path.exists(audio_file):
+        # Handle both file path and hex audio data formats
+        audio_file = request.get('audio_file')
+        audio_hex = request.get('audio')
+        
+        if audio_hex:
+            # Handle hex audio data from client
+            audio_data = bytes.fromhex(audio_hex)
+            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as tmp_file:
+                tmp_file.write(audio_data)
+                tmp_path = tmp_file.name
+            
+            try:
+                start_time = time.time()
+                text = transcriber.transcribe(tmp_path)
+                transcribe_time = time.time() - start_time
+                
+                response = {
+                    'type': 'transcription',
+                    'text': text,
+                    'time': transcribe_time
+                }
+            finally:
+                os.unlink(tmp_path)
+                
+        elif audio_file and os.path.exists(audio_file):
             start_time = time.time()
             text = transcriber.transcribe(audio_file)
             transcribe_time = time.time() - start_time
             
             response = {
+                'type': 'transcription',
                 'text': text,
                 'time': transcribe_time
             }
         else:
-            response = {'error': 'Audio file not found'}
+            response = {'type': 'error', 'message': 'Audio file not found'}
             
-        conn.send(json.dumps(response).encode())
+        # Send streaming response format expected by client
+        if response.get('type') == 'transcription':
+            # Send transcription line by line for streaming
+            text = response['text']
+            lines = text.split('\n')
+            for line in lines:
+                if line.strip():
+                    chunk_response = {'type': 'transcription', 'text': line + '\n'}
+                    conn.send((json.dumps(chunk_response) + '\n').encode())
+            
+            # Send completion signal
+            conn.send((json.dumps({'type': 'complete'}) + '\n').encode())
+        else:
+            conn.send((json.dumps(response) + '\n').encode())
+        
         conn.close()
         
     except socket.timeout:

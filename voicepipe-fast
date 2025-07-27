@@ -45,20 +45,42 @@ def send_cmd(cmd):
         client.close()
 
 def send_transcribe_request(audio_file):
-    """Send audio file to transcriber daemon"""
+    """Send audio file to transcriber daemon and stream results."""
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    client.settimeout(5.0)
+    client.settimeout(60.0)  # Increased timeout
     try:
         client.connect(str(TRANSCRIBER_SOCKET))
-        client.send(json.dumps({"audio_file": audio_file}).encode())
-        response_data = b""
+        client.send((json.dumps({"audio_file": audio_file}) + '\n').encode())
+        
+        buffer = ""
+        full_text = ""
         while True:
-            part = client.recv(4096)
-            if not part:
-                break
-            response_data += part
-        response = json.loads(response_data.decode())
-        return response.get('text', '')
+            try:
+                chunk = client.recv(4096).decode()
+                if not chunk:
+                    break
+            except socket.timeout:
+                print("[TRANSCRIBE] Warning: Read timeout, continuing...", file=sys.stderr)
+                continue
+            
+            buffer += chunk
+            while '\n' in buffer:
+                line, buffer = buffer.split('\n', 1)
+                if line.strip():
+                    try:
+                        response = json.loads(line)
+                        if response.get('type') == 'transcription':
+                            text = response.get('text', '')
+                            if text:
+                                full_text += text
+                        elif response.get('type') == 'complete':
+                            return full_text
+                        elif response.get('type') == 'error':
+                            print(f"[TRANSCRIBE] Error: {response.get('message')}", file=sys.stderr)
+                            return ''
+                    except json.JSONDecodeError:
+                        continue
+        return full_text
     except Exception as e:
         print(f"[TRANSCRIBE] Error: {e}", file=sys.stderr)
         return ''
@@ -131,8 +153,9 @@ def execute_toggle():
                 
                 text = send_transcribe_request(audio_file)
                 if text:
-                    print(f"[TOGGLE] Transcription: {text}", file=sys.stderr)
-                    subprocess.run(['xdotool', 'type', '--', text], capture_output=True, check=False)
+                    cleaned_text = text.rstrip()  # Remove any final trailing whitespace/newlines
+                    print(f"[TOGGLE] Transcription: {cleaned_text}", file=sys.stderr)
+                    subprocess.run(['xdotool', 'type', '--', cleaned_text], capture_output=True, check=False)
                 else:
                     print("[TOGGLE] No transcription returned", file=sys.stderr)
                 

@@ -22,18 +22,11 @@ async def transcribe_file(audio_path: str):
     
     audio_path = Path(audio_path).resolve()
     
-    # Read audio file
-    try:
-        with open(audio_path, 'rb') as f:
-            audio_data = f.read()
-    except Exception as e:
-        print(f"Error reading file: {e}", file=sys.stderr)
-        sys.exit(1)
-    
     # Connect to daemon
     sock_path = '/tmp/voicepipe_transcriber.sock'
     try:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(300)  # 5 minutes timeout for large files
         sock.connect(sock_path)
     except Exception as e:
         print(f"Error connecting to transcriber daemon: {e}", file=sys.stderr)
@@ -43,7 +36,7 @@ async def transcribe_file(audio_path: str):
     # Send request
     request = {
         'type': 'transcribe',
-        'audio': audio_data.hex(),
+        'audio_file': str(audio_path),
         'format': 'mp3'  # Daemon will handle format detection
     }
     
@@ -52,10 +45,15 @@ async def transcribe_file(audio_path: str):
         
         # Stream response
         buffer = ""
+        sock.settimeout(60)  # 1 minute timeout for individual reads
         while True:
-            chunk = sock.recv(4096).decode()
-            if not chunk:
-                break
+            try:
+                chunk = sock.recv(4096).decode()
+                if not chunk:
+                    break
+            except socket.timeout:
+                print("\nWarning: Read timeout, continuing...", file=sys.stderr)
+                continue
             
             buffer += chunk
             while '\n' in buffer:
@@ -78,7 +76,13 @@ async def transcribe_file(audio_path: str):
                     except json.JSONDecodeError:
                         continue
     
+    except socket.timeout:
+        print()  # Ensure newline on stdout
+        print(f"Error: Connection timed out while processing large file", file=sys.stderr)
+        print("The file may be too large. Try splitting it into smaller chunks.", file=sys.stderr)
+        sys.exit(1)
     except Exception as e:
+        print()  # Ensure newline on stdout
         print(f"Error communicating with daemon: {e}", file=sys.stderr)
         sys.exit(1)
     finally:

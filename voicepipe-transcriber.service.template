@@ -8,6 +8,8 @@ ExecStart={{PYTHON_PATH}} {{SCRIPT_PATH}}
 Restart=always
 RestartSec=1
 PrivateTmp=false
+Environment="PYTHONUNBUFFERED=1"
+PassEnvironment=OPENAI_API_KEY
 
 [Install]
 WantedBy=default.target

@@ -1,4 +1,4 @@
-#!/home/pepper/.local/share/pipx/venvs/voicepipe/bin/python
+#!/usr/bin/env python3
 """Persistent transcriber daemon with pre-initialized OpenAI client"""
 import os
 import sys

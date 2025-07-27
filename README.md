@@ -24,24 +24,25 @@ pip install voicepipe
 pipx install voicepipe
 ```
 
-### From source with systemd service (recommended for performance)
+### From source with systemd services (recommended for performance)
 ```bash
 git clone https://github.com/yourusername/voicepipe.git
 cd voicepipe
 ./install.sh
 
-# Enable and start the service
-systemctl --user enable voicepipe.service
-systemctl --user start voicepipe.service
+# Enable and start both services
+systemctl --user enable voicepipe-recorder.service voicepipe-transcriber.service
+systemctl --user start voicepipe-recorder.service voicepipe-transcriber.service
 ```
 
-The systemd user service provides:
+The systemd user services provide:
 - Better performance (no startup delay)
 - Automatic start on login
 - Proper process management
 - Lower resource usage
+- Separate recorder and transcriber processes for better reliability
 
-The CLI automatically detects and uses the service if running, or falls back to subprocess mode.
+The CLI automatically detects and uses the services if running, or falls back to subprocess mode.
 
 ## Dependencies
 

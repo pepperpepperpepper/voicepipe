@@ -132,12 +132,19 @@ EOF
     
     echo "✓ Systemd services configured"
     echo
-    echo "To enable and start the services:"
+    echo "Services installed:"
+    echo "  • voicepipe-recorder.service - Fast recording daemon"
+    echo "  • voicepipe-transcriber.service - Persistent transcription daemon"
+    echo
+    echo "To enable and start both services:"
     echo "  systemctl --user enable voicepipe-recorder.service voicepipe-transcriber.service"
     echo "  systemctl --user start voicepipe-recorder.service voicepipe-transcriber.service"
     echo
     echo "To check service status:"
     echo "  systemctl --user status voicepipe-recorder.service voicepipe-transcriber.service"
+    echo
+    echo "To restart services after API key changes:"
+    echo "  systemctl --user restart voicepipe-transcriber.service"
 fi
 
 echo

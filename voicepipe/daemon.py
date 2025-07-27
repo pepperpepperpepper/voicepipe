@@ -133,7 +133,7 @@ class RecordingDaemon:
             
         try:
             # Create temp file
-            fd, self.audio_file = tempfile.mkstemp(suffix='.mp3', prefix='voicepipe_')
+            fd, self.audio_file = tempfile.mkstemp(suffix='.mp3', prefix='voicepipe_', dir='/tmp/voicepipe')
             os.close(fd)
             
             # Use pre-initialized recorder if device matches, otherwise create new one

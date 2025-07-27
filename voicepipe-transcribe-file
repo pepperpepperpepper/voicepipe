@@ -23,7 +23,7 @@ async def transcribe_file(audio_path: str):
     audio_path = Path(audio_path).resolve()
     
     # Connect to daemon
-    sock_path = '/tmp/voicepipe_transcriber.sock'
+    sock_path = '/tmp/voicepipe/voicepipe_transcriber.sock'
     try:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(300)  # 5 minutes timeout for large files

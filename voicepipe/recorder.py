@@ -347,7 +347,7 @@ class AudioRecorder(FastAudioRecorder):
 class RecordingSession:
     """Manages recording sessions with PID tracking."""
     
-    STATE_DIR = Path("/tmp")
+    STATE_DIR = Path("/tmp/voicepipe")
     STATE_PREFIX = "voicepipe-"
     
     @classmethod
@@ -396,7 +396,7 @@ class RecordingSession:
             raise RuntimeError(f"Recording already in progress (PID: {active[0]['pid']})")
         
         # Create temporary audio file
-        fd, audio_file = tempfile.mkstemp(suffix='.mp3', prefix='voicepipe_')
+        fd, audio_file = tempfile.mkstemp(suffix='.mp3', prefix='voicepipe_', dir='/tmp/voicepipe')
         os.close(fd)  # We'll write to it later
         
         # Create session data

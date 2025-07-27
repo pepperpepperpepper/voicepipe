@@ -10,11 +10,11 @@ import fcntl
 from pathlib import Path
 
 SOCKET_PATH = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp')) / 'voicepipe.sock'
-DEBOUNCE_FILE = '/tmp/voicepipe-fast.time'
+DEBOUNCE_FILE = '/tmp/voicepipe/voicepipe-fast.time'
 DEBOUNCE_MS = 500  # milliseconds
-LOCK_FILE = '/tmp/voicepipe-fast.lock'
+LOCK_FILE = '/tmp/voicepipe/voicepipe-fast.lock'
 
-TRANSCRIBER_SOCKET = Path('/tmp/voicepipe_transcriber.sock')
+TRANSCRIBER_SOCKET = Path('/tmp/voicepipe/voicepipe_transcriber.sock')
 
 def send_cmd(cmd):
     """Send command to daemon via Unix socket"""
@@ -175,7 +175,7 @@ def execute_toggle():
     except socket.error as e:
         print(f"[TOGGLE] Socket error: {e}", file=sys.stderr)
         print("Error: Cannot connect to voicepipe daemon. Is it running?", file=sys.stderr)
-        print("Start it with: systemctl --user start voicepipe.service", file=sys.stderr)
+        print("Start it with: systemctl --user start voicepipe-recorder.service", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
         print(f"[TOGGLE] Unexpected error: {e}", file=sys.stderr)
@@ -240,7 +240,7 @@ def main():
                     
     except socket.error:
         print("Error: Cannot connect to voicepipe daemon. Is it running?", file=sys.stderr)
-        print("Start it with: systemctl --user start voicepipe.service", file=sys.stderr)
+        print("Start it with: systemctl --user start voicepipe-recorder.service", file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
         # Handle Ctrl+C gracefully

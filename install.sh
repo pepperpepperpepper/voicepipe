@@ -177,8 +177,27 @@ echo "============="
 echo "voicepipe-fast provides minimal-latency recording control."
 echo "Add to your window manager config:"
 echo
-echo "For Fluxbox (~/.fluxbox/keys):"
-echo "  Mod1 F5 :Exec $HOME/.local/bin/voicepipe-fast toggle"
+echo "Wayland:"
+echo "  Sway: Add to ~/.config/sway/config:"
+echo "    bindsym $mod+F5 exec $HOME/.local/bin/voicepipe-fast toggle"
 echo
-echo "For other window managers, bind '$HOME/.local/bin/voicepipe-fast toggle'"
-echo "to your preferred hotkey (e.g., Alt+F5, Super+V, etc.)"
+echo "  Hyprland: Add to ~/.config/hypr/hyprland.conf:"
+echo "    bind = $mainMod, F5, exec, $HOME/.local/bin/voicepipe-fast toggle"
+echo
+echo "  KDE Plasma Wayland: System Settings > Shortcuts > Custom Shortcuts"
+echo "    Command: $HOME/.local/bin/voicepipe-fast toggle"
+echo
+echo "  GNOME Wayland: Settings > Keyboard > Custom Shortcuts"
+echo "    Command: $HOME/.local/bin/voicepipe-fast toggle"
+echo
+echo "X11:"
+echo "  Fluxbox (~/.fluxbox/keys):"
+echo "    Mod1 F5 :Exec $HOME/.local/bin/voicepipe-fast toggle"
+echo
+echo "  xbindkeys (~/.xbindkeysrc):"
+echo "    'voicepipe-fast toggle'"
+echo "      Mod1+F5"
+echo
+echo "  sxhkd (~/.config/sxhkd/sxhkdrc):"
+echo "    super + F5"
+echo "      voicepipe-fast toggle"

@@ -50,16 +50,23 @@ The CLI automatically detects and uses the services if running, or falls back to
 - PyAudio (for recording)
 - OpenAI Python SDK
 - Click (for CLI)
-- xdotool (optional, for --type functionality)
+- xdotool (optional, for --type functionality on X11)
+- wtype (optional, for --type functionality on Wayland)
 
 On Arch Linux:
 ```bash
-sudo pacman -S python-pyaudio xdotool
+sudo pacman -S python-pyaudio
+# For typing support:
+sudo pacman -S xdotool  # X11
+sudo pacman -S wtype    # Wayland
 ```
 
 On Ubuntu/Debian:
 ```bash
-sudo apt-get install python3-pyaudio xdotool
+sudo apt-get install python3-pyaudio
+# For typing support:
+sudo apt-get install xdotool  # X11
+sudo apt-get install wtype    # Wayland (if available)
 ```
 
 ## Configuration

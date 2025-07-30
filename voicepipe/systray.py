@@ -28,10 +28,13 @@ class SystrayManager:
             self.available = False
             return
         
-        # Check for display on Linux
+        # Check for display on Linux (support both X11 and Wayland)
         if sys.platform.startswith('linux'):
-            if not os.environ.get('DISPLAY'):
-                logger.debug("Systray not available (no DISPLAY)")
+            has_display = os.environ.get('DISPLAY')  # X11
+            has_wayland = os.environ.get('WAYLAND_DISPLAY')  # Wayland
+            
+            if not (has_display or has_wayland):
+                logger.debug("Systray not available (no DISPLAY or WAYLAND_DISPLAY)")
                 self.available = False
                 return
     

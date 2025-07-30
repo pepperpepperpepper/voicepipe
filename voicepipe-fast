@@ -155,7 +155,13 @@ def execute_toggle():
                 if text:
                     cleaned_text = text.rstrip()  # Remove any final trailing whitespace/newlines
                     print(f"[TOGGLE] Transcription: {cleaned_text}", file=sys.stderr)
-                    subprocess.run(['xdotool', 'type', '--', cleaned_text], capture_output=True, check=False)
+                    # Auto-detect display server for typing
+                    if os.environ.get('WAYLAND_DISPLAY'):
+                        subprocess.run(['wtype', cleaned_text], capture_output=True, check=False)
+                    elif os.environ.get('DISPLAY'):
+                        subprocess.run(['xdotool', 'type', '--', cleaned_text], capture_output=True, check=False)
+                    else:
+                        print("[TOGGLE] No display server detected, cannot type text", file=sys.stderr)
                 else:
                     print("[TOGGLE] No transcription returned", file=sys.stderr)
                 

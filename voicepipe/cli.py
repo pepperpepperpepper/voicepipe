@@ -15,6 +15,32 @@ from .transcriber import WhisperTranscriber
 from .daemon import RecordingDaemon
 
 
+def _detect_display_server():
+    """Detect the current display server (X11 or Wayland)."""
+    if os.environ.get('WAYLAND_DISPLAY'):
+        return "wayland"
+    elif os.environ.get('DISPLAY'):
+        return "x11"
+    else:
+        return "unknown"
+
+def _type_with_display_server(text):
+    """Type text using the appropriate method for the display server."""
+    display_server = _detect_display_server()
+    
+    try:
+        if display_server == "wayland":
+            subprocess.run(['wtype', text], capture_output=True, text=True, check=True)
+        elif display_server == "x11":
+            subprocess.run(['xdotool', 'type', '--', text], capture_output=True, text=True, check=True)
+        else:
+            raise RuntimeError("Unsupported display server")
+    except FileNotFoundError:
+        if display_server == "wayland":
+            raise RuntimeError("wtype not found. Install with: sudo pacman -S wtype")
+        else:
+            raise RuntimeError("xdotool not found. Install with: sudo pacman -S xdotool")
+
 def daemon_request(command, **kwargs):
     """Send a request to the daemon service."""
     socket_path = RecordingDaemon.SOCKET_PATH
@@ -189,35 +215,25 @@ def stop(type, language, prompt, model, temperature):
             # Type if requested
             if type:
                 try:
-                    # Use xdotool to type the text
-                    result = subprocess.run(
-                        ['xdotool', 'type', '--', text],
-                        capture_output=True,
-                        text=True,
-                        check=True
-                    )
-                except subprocess.CalledProcessError as e:
-                    error_msg = f"Error typing text: {e}"
+                    _type_with_display_server(text)
+                except RuntimeError as e:
+                    error_msg = str(e)
                     print(error_msg, file=sys.stderr)
-                    # Try to type the error message
-                    subprocess.run(
-                        ['xdotool', 'type', '--', error_msg],
-                        capture_output=True
-                    )
-                except FileNotFoundError:
-                    error_msg = "Error: xdotool not found. Install with: sudo pacman -S xdotool"
+                except FileNotFoundError as e:
+                    # Provide appropriate installation instructions
+                    display_server = _detect_display_server()
+                    if display_server == "wayland":
+                        error_msg = "Error: wtype not found. Install with: sudo pacman -S wtype"
+                    else:
+                        error_msg = "Error: xdotool not found. Install with: sudo pacman -S xdotool"
                     print(error_msg, file=sys.stderr)
                     
         except Exception as e:
             error_msg = str(e)
             print(f"Error: {error_msg}", file=sys.stderr)
             if type:
-                # Try to type the error
                 try:
-                    subprocess.run(
-                        ['xdotool', 'type', '--', f"Error: {error_msg}"],
-                        capture_output=True
-                    )
+                    _type_with_display_server(f"Error: {error_msg}")
                 except:
                     pass
             sys.exit(1)
@@ -235,6 +251,27 @@ def stop(type, language, prompt, model, temperature):
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+
+    def _detect_display_server(self):
+        """Detect the current display server (X11 or Wayland)."""
+        if os.environ.get('WAYLAND_DISPLAY'):
+            return "wayland"
+        elif os.environ.get('DISPLAY'):
+            return "x11"
+        else:
+            return "unknown"
+
+    def _type_fallback(self, text):
+        """Fallback typing method when primary method fails."""
+        try:
+            display_server = self._detect_display_server()
+            
+            if display_server == "wayland":
+                subprocess.run(['wtype', text], capture_output=True)
+            else:
+                subprocess.run(['xdotool', 'type', '--', text], capture_output=True)
+        except:
+            pass
 
 
 @main.command()

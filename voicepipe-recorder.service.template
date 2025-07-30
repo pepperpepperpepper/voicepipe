@@ -9,10 +9,9 @@ ExecStart=VOICEPIPE_COMMAND daemon
 Restart=on-failure
 RestartSec=5
 Environment="PATH=/usr/local/bin:/usr/bin:/bin:HOME_DIR/.local/bin"
-# Import display environment dynamically
+# Import display environment dynamically (supports both X11 and Wayland)
 PassEnvironment=DISPLAY XAUTHORITY WAYLAND_DISPLAY
-# Fallback if not set
-Environment="DISPLAY=:0"
+# No hardcoded DISPLAY fallback - allows Wayland-only systems
 
 # Security hardening
 PrivateTmp=false

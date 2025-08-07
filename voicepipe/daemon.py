@@ -31,13 +31,64 @@ class RecordingDaemon:
         self._timeout_triggered = False
         self._initialize_audio()
     
+    def _find_working_audio_device(self):
+        """Test available audio devices and return the index of the first working one."""
+        import numpy as np
+        import time
+        
+        print("Scanning for working audio devices...", file=sys.stderr)
+        
+        for device_index, device in enumerate(sd.query_devices()):
+            if device['max_input_channels'] == 0:
+                continue  # Skip output-only devices
+                
+            try:
+                print(f"Testing device {device_index}: {device['name']}", file=sys.stderr)
+                
+                # Try to open a brief recording to test the device
+                audio_data = []
+                with sd.InputStream(
+                    device=device_index, 
+                    channels=1, 
+                    samplerate=16000, 
+                    dtype=np.int16,
+                    blocksize=1024
+                ) as stream:
+                    # Record for 0.5 seconds to test
+                    start_time = time.time()
+                    while time.time() - start_time < 0.5:
+                        data, overflowed = stream.read(1024)
+                        audio_data.append(data)
+                
+                # Analyze the recorded audio
+                if audio_data:
+                    audio_data = np.concatenate(audio_data)
+                    max_amplitude = np.max(np.abs(audio_data))
+                    
+                    # Check if we got any meaningful audio (above noise floor)
+                    if max_amplitude > 50:  # Above typical noise floor
+                        print(f"✓ Device {device_index} works (max amplitude: {max_amplitude})", file=sys.stderr)
+                        return device_index
+                    else:
+                        print(f"✗ Device {device_index} produces silent audio (max amplitude: {max_amplitude})", file=sys.stderr)
+                else:
+                    print(f"✗ Device {device_index} produced no audio data", file=sys.stderr)
+                    
+            except Exception as e:
+                print(f"✗ Device {device_index} failed: {e}", file=sys.stderr)
+                continue
+        
+        # If no working device found, fall back to device 0
+        print("No working device found, falling back to device 0", file=sys.stderr)
+        return 0
+
     def _initialize_audio(self):
         """Pre-initialize audio and recorder to reduce startup delay."""
         try:
-            # Get default device index
-            self.default_device = sd.default.device[0]  # Input device
+            # Find a working audio device automatically
+            self.default_device = self._find_working_audio_device()
             device_info = sd.query_devices(self.default_device, 'input')
-            print(f"Audio initialized. Default device: {device_info['name']}", file=sys.stderr)
+            print(f"Audio initialized. Selected device {self.default_device}: {device_info['name']}", file=sys.stderr)
             
             # Pre-create recorder instance to avoid initialization delay
             self.recorder = FastAudioRecorder(device_index=self.default_device)

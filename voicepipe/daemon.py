@@ -22,6 +22,9 @@ class RecordingDaemon:
     SOCKET_PATH = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp')) / 'voicepipe.sock'
     
     def __init__(self):
+        # Ensure runtime directory for temporary files exists so mkstemp doesn't fail
+        Path('/tmp/voicepipe').mkdir(parents=True, exist_ok=True)
+
         self.recorder = None
         self.recording = False
         self.audio_file = None
@@ -29,6 +32,8 @@ class RecordingDaemon:
         self.timeout_timer = None
         self.default_device = None
         self._timeout_triggered = False
+        # Placeholder for pyaudio compatibility; avoids attribute errors in signal handler
+        self.pyaudio = None
         self._initialize_audio()
     
     def _find_working_audio_device(self):

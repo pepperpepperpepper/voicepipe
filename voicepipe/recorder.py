@@ -360,6 +360,9 @@ class RecordingSession:
     @classmethod
     def find_active_sessions(cls):
         """Find all active recording sessions."""
+        # Ensure state directory exists; missing dir would break session tracking
+        cls.STATE_DIR.mkdir(parents=True, exist_ok=True)
+
         sessions = []
         for file in cls.STATE_DIR.glob(f"{cls.STATE_PREFIX}*.json"):
             try:
@@ -395,6 +398,8 @@ class RecordingSession:
         if active:
             raise RuntimeError(f"Recording already in progress (PID: {active[0]['pid']})")
         
+        cls.STATE_DIR.mkdir(parents=True, exist_ok=True)
+
         # Create temporary audio file
         fd, audio_file = tempfile.mkstemp(suffix='.mp3', prefix='voicepipe_', dir='/tmp/voicepipe')
         os.close(fd)  # We'll write to it later

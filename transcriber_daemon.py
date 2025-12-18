@@ -47,7 +47,9 @@ from voicepipe.transcriber import WhisperTranscriber
 transcriber = WhisperTranscriber(model='gpt-4o-transcribe')
 print("Transcriber ready", file=sys.stderr)
 
-SOCKET_PATH = Path('/tmp/voicepipe/voicepipe_transcriber.sock')
+TMP_DIR = Path('/tmp/voicepipe')
+TMP_DIR.mkdir(parents=True, exist_ok=True)
+SOCKET_PATH = TMP_DIR / 'voicepipe_transcriber.sock'
 running = True
 
 def signal_handler(signum, frame):
@@ -107,7 +109,7 @@ while running:
         if audio_hex:
             # Handle hex audio data from client
             audio_data = bytes.fromhex(audio_hex)
-            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False, dir='/tmp/voicepipe') as tmp_file:
+            with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False, dir=str(TMP_DIR)) as tmp_file:
                 tmp_file.write(audio_data)
                 tmp_path = tmp_file.name
             

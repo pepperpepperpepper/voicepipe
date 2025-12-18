@@ -6,20 +6,35 @@ import json
 import os
 import subprocess
 import time
+import shutil
 import fcntl
 from pathlib import Path
 
-SOCKET_PATH = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp')) / 'voicepipe.sock'
-DEBOUNCE_FILE = '/tmp/voicepipe/voicepipe-fast.time'
-DEBOUNCE_MS = 500  # milliseconds
-LOCK_FILE = '/tmp/voicepipe/voicepipe-fast.lock'
+def runtime_dir() -> Path:
+    xdg_runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg_runtime_dir:
+        return Path(xdg_runtime_dir)
+    run_user_dir = Path("/run/user") / str(os.getuid())
+    if run_user_dir.exists():
+        return run_user_dir
+    return Path("/tmp")
 
-TRANSCRIBER_SOCKET = Path('/tmp/voicepipe/voicepipe_transcriber.sock')
+SOCKET_PATH = runtime_dir() / "voicepipe.sock"
+
+TMP_DIR = Path('/tmp/voicepipe')
+TMP_DIR.mkdir(parents=True, exist_ok=True)
+DEBOUNCE_FILE = str(TMP_DIR / 'voicepipe-fast.time')
+DEBOUNCE_MS = 500  # milliseconds
+LOCK_FILE = str(TMP_DIR / 'voicepipe-fast.lock')
+
+TRANSCRIBER_SOCKET = TMP_DIR / 'voicepipe_transcriber.sock'
 
 def send_cmd(cmd):
     """Send command to daemon via Unix socket"""
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    client.settimeout(0.5)  # Fast timeout
+    # Keep this low-ish for hotkey responsiveness, but high enough to avoid
+    # spurious timeouts under load.
+    client.settimeout(2.0)
     
     try:
         client.connect(str(SOCKET_PATH))
@@ -46,6 +61,41 @@ def send_cmd(cmd):
 
 def send_transcribe_request(audio_file):
     """Send audio file to transcriber daemon and stream results."""
+    def fallback_transcribe():
+        voicepipe_cmd = shutil.which("voicepipe")
+        if not voicepipe_cmd:
+            print("[TRANSCRIBE] voicepipe CLI not found for fallback transcription", file=sys.stderr)
+            return ""
+        try:
+            result = subprocess.run(
+                [voicepipe_cmd, "transcribe-file", audio_file],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            if result.returncode != 0:
+                err = (result.stderr or "").strip()
+                if err:
+                    print(f"[TRANSCRIBE] Fallback failed: {err}", file=sys.stderr)
+                else:
+                    print("[TRANSCRIBE] Fallback failed with unknown error", file=sys.stderr)
+                return ""
+            return (result.stdout or "").strip()
+        except Exception as e:
+            print(f"[TRANSCRIBE] Fallback error: {e}", file=sys.stderr)
+            return ""
+
+    if not TRANSCRIBER_SOCKET.exists():
+        print(
+            f"[TRANSCRIBE] Transcriber socket not found: {TRANSCRIBER_SOCKET}",
+            file=sys.stderr,
+        )
+        print(
+            "[TRANSCRIBE] Start it with: systemctl --user start voicepipe-transcriber.service",
+            file=sys.stderr,
+        )
+        return fallback_transcribe()
+
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     client.settimeout(60.0)  # Increased timeout
     try:
@@ -82,8 +132,11 @@ def send_transcribe_request(audio_file):
                         continue
         return full_text
     except Exception as e:
-        print(f"[TRANSCRIBE] Error: {e}", file=sys.stderr)
-        return ''
+        print(
+            f"[TRANSCRIBE] Error connecting to {TRANSCRIBER_SOCKET}: {e}",
+            file=sys.stderr,
+        )
+        return fallback_transcribe()
     finally:
         client.close()
 
@@ -156,13 +209,18 @@ def execute_toggle():
                     cleaned_text = text.rstrip()  # Remove any final trailing whitespace/newlines
                     print(f"[TOGGLE] Transcription: {cleaned_text}", file=sys.stderr)
                     subprocess.run(['xdotool', 'type', '--', cleaned_text], capture_output=True, check=False)
+                    transcription_ok = True
                 else:
                     print("[TOGGLE] No transcription returned", file=sys.stderr)
+                    transcription_ok = False
                 
                 # Clean up
-                if os.path.exists(audio_file):
-                    os.unlink(audio_file)
-                    print(f"[TOGGLE] Cleaned up audio file: {audio_file}", file=sys.stderr)
+                if transcription_ok:
+                    if os.path.exists(audio_file):
+                        os.unlink(audio_file)
+                        print(f"[TOGGLE] Cleaned up audio file: {audio_file}", file=sys.stderr)
+                else:
+                    print(f"[TOGGLE] Preserving audio file for debugging: {audio_file}", file=sys.stderr)
             else:
                 print(f"[TOGGLE] Stop error: {result.get('error', 'Unknown error')}", file=sys.stderr)
         else:
@@ -232,8 +290,13 @@ def main():
                     if text:
                         print(text)
                     # Clean up
-                    if os.path.exists(audio_file):
+                    if text and os.path.exists(audio_file):
                         os.unlink(audio_file)
+                    elif not text:
+                        print(
+                            f"[STOP] Preserving audio file for debugging: {audio_file}",
+                            file=sys.stderr,
+                        )
             else:
                 if 'error' in result:
                     print(f"Error: {result['error']}", file=sys.stderr)

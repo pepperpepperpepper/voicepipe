@@ -394,7 +394,10 @@ class RecordingSession:
         active = cls.find_active_sessions()
         if active:
             raise RuntimeError(f"Recording already in progress (PID: {active[0]['pid']})")
-        
+
+        # Ensure state directory exists
+        cls.STATE_DIR.mkdir(parents=True, exist_ok=True)
+
         # Create temporary audio file
         fd, audio_file = tempfile.mkstemp(suffix='.mp3', prefix='voicepipe_', dir='/tmp/voicepipe')
         os.close(fd)  # We'll write to it later

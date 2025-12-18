@@ -6,6 +6,8 @@ import signal
 import socket
 import json
 import subprocess
+import time
+import shutil
 from pathlib import Path
 
 import click
@@ -24,25 +26,45 @@ def daemon_request(command, **kwargs):
         # Try the subprocess method as fallback
         return None
         
+    client = None
     try:
-        # Connect to daemon with timeout
+        # Connect to daemon with short connect timeout
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.settimeout(0.1)  # 100ms timeout for fast failure
+        client.settimeout(0.5)
         client.connect(str(socket_path))
         
         # Send request
         request = {'command': command, **kwargs}
         client.send(json.dumps(request).encode())
         
-        # Get response
-        response = client.recv(4096).decode()
-        client.close()
-        
-        return json.loads(response)
+        # Allow longer response time for start/stop operations
+        read_timeout = 0.5 if command == 'status' else 5.0
+        client.settimeout(read_timeout)
+
+        # Get response (handle partial reads)
+        response_data = b""
+        while True:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            response_data += chunk
+            try:
+                return json.loads(response_data.decode())
+            except json.JSONDecodeError:
+                continue
+
+        if response_data:
+            return json.loads(response_data.decode())
+        return None
         
     except Exception as e:
         print(f"Warning: Could not connect to daemon: {e}", file=sys.stderr)
         return None
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
 
 
 def run_recording_subprocess():
@@ -260,11 +282,173 @@ def status():
             session = RecordingSession.get_current_session()
             print(f"Status: recording (PID: {session['pid']})")
         except RuntimeError:
-            print("Status: not recording")
+            print("Status: idle")
             
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+@main.command("transcribe-file")
+@click.argument("audio_file", type=click.Path(exists=True, dir_okay=False, readable=True))
+@click.option("--type", is_flag=True, help="Type the transcribed text using xdotool")
+@click.option("--language", help="Language code for transcription (e.g., en, es, fr)")
+@click.option(
+    "--prompt",
+    help=(
+        "Context prompt to guide transcription style. For dictation with quotes, "
+        'say "open quote" and "close quote"'
+    ),
+)
+@click.option(
+    "--model",
+    default="gpt-4o-transcribe",
+    help=(
+        "Transcription model to use (default: gpt-4o-transcribe, options: "
+        "gpt-4o-transcribe, gpt-4o-mini-transcribe, whisper-1)"
+    ),
+)
+@click.option(
+    "--temperature",
+    default=0.0,
+    type=float,
+    help="Temperature for transcription (0.0 for deterministic, default: 0.0)",
+)
+def transcribe_file(type, audio_file, language, prompt, model, temperature):
+    """Transcribe an audio file (no recording session required)."""
+    try:
+        transcriber = WhisperTranscriber(model=model)
+        text = transcriber.transcribe(
+            audio_file, language=language, prompt=prompt, temperature=temperature
+        )
+        print(text)
+
+        if type:
+            subprocess.run(["xdotool", "type", "--", text], check=False)
+
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+@main.command()
+@click.option("--audio-test", is_flag=True, help="Record 0.5s and report levels")
+@click.option("--record-test", is_flag=True, help="Start/stop a 1s daemon recording and report file size")
+@click.option("--transcribe-test", is_flag=True, help="Transcribe the record-test audio file")
+@click.option(
+    "--record-seconds",
+    default=1.0,
+    type=float,
+    show_default=True,
+    help="Seconds to record for --record-test",
+)
+@click.option(
+    "--play",
+    is_flag=True,
+    help="Play the record-test file via ffplay (if available)",
+)
+def doctor(audio_test, record_test, transcribe_test, record_seconds, play):
+    """Print diagnostics for common Voicepipe issues."""
+    socket_path = RecordingDaemon.SOCKET_PATH
+
+    print(f"python: {sys.executable}")
+    print(f"cwd: {os.getcwd()}")
+    print(f"XDG_RUNTIME_DIR: {os.environ.get('XDG_RUNTIME_DIR', '')}")
+    print(f"DISPLAY: {os.environ.get('DISPLAY', '')}")
+    print(f"WAYLAND_DISPLAY: {os.environ.get('WAYLAND_DISPLAY', '')}")
+
+    tmp_dir = Path("/tmp/voicepipe")
+    print(f"/tmp/voicepipe exists: {tmp_dir.exists()}")
+    print(f"daemon socket exists: {socket_path} {socket_path.exists()}")
+
+    # API key presence (never print the key)
+    key_env = os.environ.get("OPENAI_API_KEY")
+    key_file = Path.home() / ".config" / "voicepipe" / "api_key"
+    key_alt = Path.home() / ".voicepipe_api_key"
+    print(f"OPENAI_API_KEY env set: {bool(key_env)}")
+    print(f"~/.config/voicepipe/api_key exists: {key_file.exists()}")
+    print(f"~/.voicepipe_api_key exists: {key_alt.exists()}")
+
+    ffmpeg_path = shutil.which("ffmpeg")
+    xdotool_path = shutil.which("xdotool")
+    print(f"ffmpeg found: {bool(ffmpeg_path)}")
+    print(f"xdotool found: {bool(xdotool_path)}")
+
+    # Daemon ping (avoid falling back to subprocess mode)
+    if socket_path.exists():
+        t0 = time.time()
+        resp = daemon_request("status")
+        dt_ms = int((time.time() - t0) * 1000)
+        print(f"daemon status ms: {dt_ms}")
+        print(f"daemon status resp: {resp}")
+
+    recorded_file = None
+    if record_test:
+        if not socket_path.exists():
+            print("record-test: skipped (daemon socket missing)", file=sys.stderr)
+        else:
+            try:
+                status = daemon_request("status") or {}
+                if status.get("status") == "recording":
+                    print("record-test: skipped (daemon already recording)", file=sys.stderr)
+                else:
+                    print(f"record-test: recording for {record_seconds:.1f}s... speak now", file=sys.stderr)
+                    start_resp = daemon_request("start") or {}
+                    if start_resp.get("error"):
+                        print(f"record-test start error: {start_resp.get('error')}", file=sys.stderr)
+                    else:
+                        time.sleep(max(0.1, record_seconds))
+                        stop_resp = daemon_request("stop") or {}
+                        recorded_file = stop_resp.get("audio_file")
+                        if stop_resp.get("error"):
+                            print(f"record-test stop error: {stop_resp.get('error')}", file=sys.stderr)
+                        elif recorded_file and Path(recorded_file).exists():
+                            size = Path(recorded_file).stat().st_size
+                            print(f"record-test file: {recorded_file}")
+                            print(f"record-test bytes: {size}")
+                        else:
+                            print("record-test: no audio file produced", file=sys.stderr)
+            except Exception as e:
+                print(f"record-test error: {e}", file=sys.stderr)
+
+    if play and recorded_file and Path(recorded_file).exists():
+        ffplay_path = shutil.which("ffplay")
+        if not ffplay_path:
+            print("play: skipped (ffplay not found)", file=sys.stderr)
+        else:
+            try:
+                subprocess.run(
+                    [ffplay_path, "-autoexit", "-nodisp", "-loglevel", "error", recorded_file],
+                    check=False,
+                )
+            except Exception as e:
+                print(f"play error: {e}", file=sys.stderr)
+
+    if transcribe_test:
+        if not recorded_file:
+            print("transcribe-test: skipped (no record-test file)", file=sys.stderr)
+        else:
+            try:
+                transcriber = WhisperTranscriber(model="whisper-1")
+                text = transcriber.transcribe(recorded_file)
+                print("transcribe-test text:")
+                print(text)
+            except Exception as e:
+                print(f"transcribe-test error: {e}", file=sys.stderr)
+
+    if audio_test:
+        try:
+            import numpy as np
+            import sounddevice as sd
+
+            fs = 16000
+            frames = int(0.5 * fs)
+            data = sd.rec(frames, samplerate=fs, channels=1, dtype="int16")
+            sd.wait()
+            max_amp = int(np.max(np.abs(data))) if data.size else 0
+            print(f"audio-test max_amp: {max_amp}")
+        except Exception as e:
+            print(f"audio-test error: {e}", file=sys.stderr)
 
 
 @main.command()

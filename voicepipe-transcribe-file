@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Wrapper around the voicepipe CLI for transcribing an existing audio file.
+exec voicepipe transcribe-file "$@"

@@ -16,10 +16,20 @@ from .recorder import FastAudioRecorder
 from .systray import get_systray
 
 
+def _runtime_dir() -> Path:
+    xdg_runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg_runtime_dir:
+        return Path(xdg_runtime_dir)
+    run_user_dir = Path("/run/user") / str(os.getuid())
+    if run_user_dir.exists():
+        return run_user_dir
+    return Path("/tmp")
+
+
 class RecordingDaemon:
     """Background daemon that handles recording requests."""
     
-    SOCKET_PATH = Path(os.environ.get('XDG_RUNTIME_DIR', '/tmp')) / 'voicepipe.sock'
+    SOCKET_PATH = _runtime_dir() / "voicepipe.sock"
     
     def __init__(self):
         self.recorder = None
@@ -32,54 +42,78 @@ class RecordingDaemon:
         self._initialize_audio()
     
     def _find_working_audio_device(self):
-        """Test available audio devices and return the index of the first working one."""
-        import numpy as np
-        import time
-        
-        print("Scanning for working audio devices...", file=sys.stderr)
-        
-        for device_index, device in enumerate(sd.query_devices()):
-            if device['max_input_channels'] == 0:
-                continue  # Skip output-only devices
-                
+        """Find an input device that can open at 16kHz.
+
+        Prefer the system's default input (and common virtual devices like
+        PipeWire/Pulse) before trying everything else.
+        """
+        print("Selecting audio input device...", file=sys.stderr)
+
+        candidates = []
+
+        # Prefer explicit VOICEPIPE_DEVICE if set (works for systemd too).
+        env_device = os.environ.get("VOICEPIPE_DEVICE")
+        if env_device and env_device.isdigit():
+            candidates.append(int(env_device))
+
+        # Prefer sounddevice's default input.
+        try:
+            default_in = sd.default.device[0]
+            if default_in is not None and int(default_in) >= 0:
+                candidates.append(int(default_in))
+        except Exception:
+            pass
+
+        devices = sd.query_devices()
+        preferred_tokens = (" default", "pulse", "pipewire")
+
+        # Then prefer names like "default", "pulse", "pipewire".
+        for device_index, device in enumerate(devices):
+            if device.get("max_input_channels", 0) <= 0:
+                continue
+            name = str(device.get("name", "")).lower()
+            if any(tok.strip() in name for tok in preferred_tokens):
+                candidates.append(device_index)
+
+        # Finally, try everything else with input channels.
+        for device_index, device in enumerate(devices):
+            if device.get("max_input_channels", 0) <= 0:
+                continue
+            candidates.append(device_index)
+
+        # Deduplicate while preserving order.
+        seen = set()
+        ordered = []
+        for idx in candidates:
+            if idx in seen:
+                continue
+            seen.add(idx)
+            ordered.append(idx)
+
+        for device_index in ordered:
             try:
-                print(f"Testing device {device_index}: {device['name']}", file=sys.stderr)
-                
-                # Try to open a brief recording to test the device
-                audio_data = []
+                name = sd.query_devices(device_index, "input")["name"]
+            except Exception:
+                name = str(device_index)
+
+            try:
+                print(f"Testing device {device_index}: {name}", file=sys.stderr)
                 with sd.InputStream(
-                    device=device_index, 
-                    channels=1, 
-                    samplerate=16000, 
-                    dtype=np.int16,
-                    blocksize=1024
+                    device=device_index,
+                    channels=1,
+                    samplerate=16000,
+                    dtype="int16",
+                    blocksize=1024,
                 ) as stream:
-                    # Record for 0.5 seconds to test
-                    start_time = time.time()
-                    while time.time() - start_time < 0.5:
-                        data, overflowed = stream.read(1024)
-                        audio_data.append(data)
-                
-                # Analyze the recorded audio
-                if audio_data:
-                    audio_data = np.concatenate(audio_data)
-                    max_amplitude = np.max(np.abs(audio_data))
-                    
-                    # Check if we got any meaningful audio (above noise floor)
-                    if max_amplitude > 50:  # Above typical noise floor
-                        print(f"✓ Device {device_index} works (max amplitude: {max_amplitude})", file=sys.stderr)
-                        return device_index
-                    else:
-                        print(f"✗ Device {device_index} produces silent audio (max amplitude: {max_amplitude})", file=sys.stderr)
-                else:
-                    print(f"✗ Device {device_index} produced no audio data", file=sys.stderr)
-                    
+                    stream.read(1024)
+
+                print(f"✓ Using device {device_index}: {name}", file=sys.stderr)
+                return device_index
             except Exception as e:
                 print(f"✗ Device {device_index} failed: {e}", file=sys.stderr)
                 continue
-        
-        # If no working device found, fall back to device 0
-        print("No working device found, falling back to device 0", file=sys.stderr)
+
+        print("No working input device found, falling back to device 0", file=sys.stderr)
         return 0
 
     def _initialize_audio(self):
@@ -138,8 +172,6 @@ class RecordingDaemon:
         # Clean up recorder
         if self.recorder:
             self.recorder.cleanup()
-        if self.pyaudio:
-            self.pyaudio.terminate()
         if self.socket:
             self.socket.close()
         if self.SOCKET_PATH.exists():
@@ -169,11 +201,17 @@ class RecordingDaemon:
             else:
                 response = {'error': f'Unknown command: {command}'}
                 
-            conn.send(json.dumps(response).encode())
+            try:
+                conn.send(json.dumps(response).encode())
+            except (BrokenPipeError, ConnectionResetError):
+                pass
             
         except Exception as e:
             response = {'error': str(e)}
-            conn.send(json.dumps(response).encode())
+            try:
+                conn.send(json.dumps(response).encode())
+            except (BrokenPipeError, ConnectionResetError):
+                pass
         finally:
             conn.close()
             
@@ -183,6 +221,9 @@ class RecordingDaemon:
             return {'error': 'Recording already in progress'}
             
         try:
+            # Ensure temp directory exists
+            Path('/tmp/voicepipe').mkdir(parents=True, exist_ok=True)
+
             # Create temp file
             fd, self.audio_file = tempfile.mkstemp(suffix='.mp3', prefix='voicepipe_', dir='/tmp/voicepipe')
             os.close(fd)

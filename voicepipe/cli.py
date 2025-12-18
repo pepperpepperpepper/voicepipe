@@ -212,8 +212,8 @@ def stop(type, language, prompt, model, temperature):
             if type:
                 try:
                     # Use xdotool to type the text
-                    result = subprocess.run(
-                        ['xdotool', 'type', '--', text],
+                    subprocess.run(
+                        ['xdotool', 'type', '--clearmodifiers', '--', text],
                         capture_output=True,
                         text=True,
                         check=True
@@ -223,7 +223,7 @@ def stop(type, language, prompt, model, temperature):
                     print(error_msg, file=sys.stderr)
                     # Try to type the error message
                     subprocess.run(
-                        ['xdotool', 'type', '--', error_msg],
+                        ['xdotool', 'type', '--clearmodifiers', '--', error_msg],
                         capture_output=True
                     )
                 except FileNotFoundError:
@@ -237,7 +237,7 @@ def stop(type, language, prompt, model, temperature):
                 # Try to type the error
                 try:
                     subprocess.run(
-                        ['xdotool', 'type', '--', f"Error: {error_msg}"],
+                        ['xdotool', 'type', '--clearmodifiers', '--', f"Error: {error_msg}"],
                         capture_output=True
                     )
                 except:
@@ -417,10 +417,50 @@ def doctor(audio_test, record_test, transcribe_test, record_seconds, play):
             print("play: skipped (ffplay not found)", file=sys.stderr)
         else:
             try:
-                subprocess.run(
-                    [ffplay_path, "-autoexit", "-nodisp", "-loglevel", "error", recorded_file],
-                    check=False,
+                play_timeout = max(5.0, float(record_seconds) + 5.0)
+                print(
+                    f"play: starting ffplay (timeout {play_timeout:.1f}s)...",
+                    file=sys.stderr,
                 )
+                proc = subprocess.Popen(
+                    [ffplay_path, "-autoexit", "-nodisp", "-loglevel", "error", recorded_file],
+                    start_new_session=True,
+                )
+                try:
+                    proc.wait(timeout=play_timeout)
+                except subprocess.TimeoutExpired:
+                    print("play: ffplay timed out, terminating...", file=sys.stderr)
+                    try:
+                        os.killpg(proc.pid, signal.SIGTERM)
+                    except Exception:
+                        try:
+                            proc.terminate()
+                        except Exception:
+                            pass
+                    try:
+                        proc.wait(timeout=1.0)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            os.killpg(proc.pid, signal.SIGKILL)
+                        except Exception:
+                            try:
+                                proc.kill()
+                            except Exception:
+                                pass
+                        try:
+                            proc.wait(timeout=1.0)
+                        except subprocess.TimeoutExpired:
+                            pass
+                except KeyboardInterrupt:
+                    print("play: interrupted, terminating ffplay...", file=sys.stderr)
+                    try:
+                        os.killpg(proc.pid, signal.SIGTERM)
+                    except Exception:
+                        try:
+                            proc.terminate()
+                        except Exception:
+                            pass
+                    raise
             except Exception as e:
                 print(f"play error: {e}", file=sys.stderr)
 

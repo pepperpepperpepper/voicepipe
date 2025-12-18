@@ -23,11 +23,98 @@ SOCKET_PATH = runtime_dir() / "voicepipe.sock"
 
 TMP_DIR = Path('/tmp/voicepipe')
 TMP_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE = TMP_DIR / "voicepipe-fast.log"
+
+# When invoked from a hotkey (no tty), stderr is usually discarded. Mirror it to
+# a log file so failures (e.g. xdotool) are visible.
+def _parent_is_fluxbox():
+    try:
+        ppid = os.getppid()
+        comm_path = Path("/proc") / str(ppid) / "comm"
+        if not comm_path.exists():
+            return False
+        return comm_path.read_text(encoding="utf-8").strip() == "fluxbox"
+    except Exception:
+        return False
+
+_LOG_ENABLED = (
+    (not sys.stderr.isatty())
+    or os.environ.get("VOICEPIPE_FAST_LOG") == "1"
+    or _parent_is_fluxbox()
+)
+if _LOG_ENABLED:
+    try:
+        _log_fh = open(LOG_FILE, "a", buffering=1)
+        os.dup2(_log_fh.fileno(), sys.stderr.fileno())
+    except Exception:
+        pass
+
 DEBOUNCE_FILE = str(TMP_DIR / 'voicepipe-fast.time')
 DEBOUNCE_MS = 500  # milliseconds
 LOCK_FILE = str(TMP_DIR / 'voicepipe-fast.lock')
 
 TRANSCRIBER_SOCKET = TMP_DIR / 'voicepipe_transcriber.sock'
+
+def get_active_window_id():
+    """Best-effort capture of the active window for later typing."""
+    xdotool_path = shutil.which("xdotool")
+    if not xdotool_path:
+        return None
+    try:
+        result = subprocess.run(
+            [xdotool_path, "getactivewindow"],
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+            check=False,
+        )
+        if result.returncode != 0:
+            err = (result.stderr or "").strip()
+            if err:
+                print(f"[XDO] getactivewindow failed: {err}", file=sys.stderr)
+            return None
+        win = (result.stdout or "").strip()
+        return win or None
+    except Exception as e:
+        print(f"[XDO] getactivewindow error: {e}", file=sys.stderr)
+        return None
+
+def type_with_xdotool(text, window_id=None):
+    """Type text via xdotool; return True on success."""
+    xdotool_path = shutil.which("xdotool")
+    if not xdotool_path:
+        print("[XDO] xdotool not found in PATH", file=sys.stderr)
+        return False
+
+    cmd = [xdotool_path, "type", "--clearmodifiers"]
+    if window_id:
+        cmd += ["--window", str(window_id)]
+    cmd += ["--", text]
+
+    try:
+        # Keep this bounded so hotkey invocations can never wedge.
+        timeout_s = max(2.0, min(30.0, len(text) / 20.0))
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+        )
+        if result.returncode != 0:
+            err = (result.stderr or "").strip()
+            if err:
+                print(f"[XDO] type failed (rc={result.returncode}): {err}", file=sys.stderr)
+            else:
+                print(f"[XDO] type failed (rc={result.returncode})", file=sys.stderr)
+            return False
+        return True
+    except subprocess.TimeoutExpired:
+        print("[XDO] type timed out", file=sys.stderr)
+        return False
+    except Exception as e:
+        print(f"[XDO] type error: {e}", file=sys.stderr)
+        return False
 
 def send_cmd(cmd):
     """Send command to daemon via Unix socket"""
@@ -62,7 +149,24 @@ def send_cmd(cmd):
 def send_transcribe_request(audio_file):
     """Send audio file to transcriber daemon and stream results."""
     def fallback_transcribe():
-        voicepipe_cmd = shutil.which("voicepipe")
+        voicepipe_cmd = os.environ.get("VOICEPIPE_CMD") or shutil.which("voicepipe")
+        if not voicepipe_cmd:
+            # Fluxbox and other WMs often run keybind commands with a minimal PATH
+            # that omits ~/.local/bin. Prefer a sibling `voicepipe` next to this
+            # script, then fall back to ~/.local/bin explicitly.
+            try:
+                sibling = Path(__file__).resolve().parent / "voicepipe"
+                if sibling.exists() and os.access(sibling, os.X_OK):
+                    voicepipe_cmd = str(sibling)
+            except Exception:
+                pass
+        if not voicepipe_cmd:
+            try:
+                local_bin = Path.home() / ".local" / "bin" / "voicepipe"
+                if local_bin.exists() and os.access(local_bin, os.X_OK):
+                    voicepipe_cmd = str(local_bin)
+            except Exception:
+                pass
         if not voicepipe_cmd:
             print("[TRANSCRIBE] voicepipe CLI not found for fallback transcription", file=sys.stderr)
             return ""
@@ -195,6 +299,14 @@ def execute_toggle():
         print(f"[TOGGLE] Status: {status}", file=sys.stderr)
         
         if status.get('status') == 'recording':
+            # Capture the current active window early so we can type back into it
+            # after transcription (hotkey invocations sometimes lose focus).
+            target_window = get_active_window_id()
+            if target_window:
+                print(f"[TOGGLE] Target window: {target_window}", file=sys.stderr)
+            else:
+                print("[TOGGLE] Target window: (unknown)", file=sys.stderr)
+
             print("[TOGGLE] Recording active, stopping...", file=sys.stderr)
             # Stop and transcribe
             result = send_cmd("stop")
@@ -208,7 +320,16 @@ def execute_toggle():
                 if text:
                     cleaned_text = text.rstrip()  # Remove any final trailing whitespace/newlines
                     print(f"[TOGGLE] Transcription: {cleaned_text}", file=sys.stderr)
-                    subprocess.run(['xdotool', 'type', '--', cleaned_text], capture_output=True, check=False)
+                    # Always persist the last transcript for debugging/recovery.
+                    try:
+                        (TMP_DIR / "voicepipe-last.txt").write_text(
+                            cleaned_text + "\n", encoding="utf-8"
+                        )
+                    except Exception:
+                        pass
+                    typed_ok = type_with_xdotool(cleaned_text, window_id=target_window)
+                    if not typed_ok:
+                        print("[TOGGLE] Warning: xdotool typing failed", file=sys.stderr)
                     transcription_ok = True
                 else:
                     print("[TOGGLE] No transcription returned", file=sys.stderr)

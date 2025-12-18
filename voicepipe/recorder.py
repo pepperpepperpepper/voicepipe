@@ -151,8 +151,31 @@ class FastAudioRecorder:
             self.stream = None
             
         if self.ffmpeg_process:
-            self.ffmpeg_process.stdin.close()
-            self.ffmpeg_process.wait()
+            try:
+                if self.ffmpeg_process.stdin:
+                    self.ffmpeg_process.stdin.close()
+            except Exception:
+                pass
+
+            # Give ffmpeg a moment to flush/finalize the output, but never hang.
+            try:
+                self.ffmpeg_process.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                try:
+                    self.ffmpeg_process.terminate()
+                except Exception:
+                    pass
+                try:
+                    self.ffmpeg_process.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    try:
+                        self.ffmpeg_process.kill()
+                    except Exception:
+                        pass
+                    try:
+                        self.ffmpeg_process.wait(timeout=1.0)
+                    except subprocess.TimeoutExpired:
+                        pass
             return None
         else:
             # Collect all audio data from queue
@@ -185,7 +208,10 @@ class FastAudioRecorder:
             except subprocess.TimeoutExpired:
                 # Force kill if it doesn't terminate gracefully
                 self.ffmpeg_process.kill()
-                self.ffmpeg_process.wait()
+                try:
+                    self.ffmpeg_process.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    pass
             except:
                 pass
 
@@ -301,9 +327,34 @@ class AudioRecorder(FastAudioRecorder):
             
         if self.ffmpeg_process:
             # Close ffmpeg stdin and wait for it to finish
-            self.ffmpeg_process.stdin.close()
-            self.ffmpeg_process.wait()
-            self.ffmpeg_process = None
+            try:
+                if self.ffmpeg_process.stdin:
+                    self.ffmpeg_process.stdin.close()
+            except Exception:
+                pass
+
+            # Give ffmpeg time to flush/finalize the MP3, but never hang forever.
+            try:
+                self.ffmpeg_process.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                try:
+                    self.ffmpeg_process.terminate()
+                except Exception:
+                    pass
+                try:
+                    self.ffmpeg_process.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    try:
+                        self.ffmpeg_process.kill()
+                    except Exception:
+                        pass
+                    try:
+                        self.ffmpeg_process.wait(timeout=1.0)
+                    except subprocess.TimeoutExpired:
+                        pass
+
+            if self.ffmpeg_process.poll() is not None:
+                self.ffmpeg_process = None
             return None  # MP3 already written to file
             
         # Collect all audio data from queue
@@ -339,7 +390,10 @@ class AudioRecorder(FastAudioRecorder):
             except subprocess.TimeoutExpired:
                 # Force kill if it doesn't terminate gracefully
                 self.ffmpeg_process.kill()
-                self.ffmpeg_process.wait()
+                try:
+                    self.ffmpeg_process.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    pass
             except:
                 pass
 

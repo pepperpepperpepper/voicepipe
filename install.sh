@@ -155,6 +155,9 @@ EOF
     echo "To enable and start both services:"
     echo "  systemctl --user enable voicepipe-recorder.service voicepipe-transcriber.service"
     echo "  systemctl --user start voicepipe-recorder.service voicepipe-transcriber.service"
+    echo "Or:"
+    echo "  $HOME/.local/bin/voicepipe service enable"
+    echo "  $HOME/.local/bin/voicepipe service start"
     echo
     echo "To check service status:"
     echo "  systemctl --user status voicepipe-recorder.service voicepipe-transcriber.service"
@@ -188,6 +191,8 @@ echo "Set your OpenAI API key here (works for systemd services and CLI):"
 echo "  $VOICEPIPE_ENV_FILE"
 echo "Example:"
 echo "  echo 'OPENAI_API_KEY=sk-...' >> $VOICEPIPE_ENV_FILE"
+echo "Or (recommended, avoids shell history):"
+echo "  echo 'sk-...' | $HOME/.local/bin/voicepipe config set-openai-key --from-stdin"
 echo
 echo "Then restart the transcriber service:"
 echo "  systemctl --user restart voicepipe-transcriber.service"

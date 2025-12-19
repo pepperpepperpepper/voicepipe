@@ -12,11 +12,31 @@ from pathlib import Path
 
 import click
 
-from .config import detect_openai_api_key, env_file_path, legacy_api_key_paths, load_environment
+from .config import (
+    detect_openai_api_key,
+    env_file_path,
+    env_file_permissions_ok,
+    get_transcribe_model,
+    legacy_api_key_paths,
+    load_environment,
+    read_env_file,
+    upsert_env_var,
+)
 from .ipc import daemon_socket_path, send_request, try_send_request, IpcError
 from .logging_utils import configure_logging
 from .paths import doctor_artifacts_dir, preserved_audio_dir, runtime_app_dir
 from .recorder import AudioRecorder, RecordingSession
+from .systemd import (
+    RECORDER_UNIT,
+    TRANSCRIBER_UNIT,
+    install_user_units,
+    journalctl_path,
+    run_systemctl,
+    selected_units,
+    systemctl_cat,
+    systemctl_path,
+    systemctl_show_properties,
+)
 from .transcriber import WhisperTranscriber
 
 logger = logging.getLogger(__name__)
@@ -125,6 +145,227 @@ def main(ctx, debug):
     ctx.obj["debug"] = bool(debug)
     load_environment()
     configure_logging(debug=bool(debug), default_level=logging.WARNING)
+
+
+@main.group()
+def config():
+    """Manage Voicepipe configuration."""
+
+
+@config.command("set-openai-key")
+@click.argument("api_key", required=False)
+@click.option(
+    "--from-stdin",
+    is_flag=True,
+    help="Read the API key from stdin (avoids shell history).",
+)
+def config_set_openai_key(api_key, from_stdin):
+    """Store the OpenAI API key in ~/.config/voicepipe/voicepipe.env."""
+    if from_stdin:
+        if sys.stdin.isatty():
+            raise click.UsageError("--from-stdin requires piped stdin")
+        api_key = (sys.stdin.read() or "").strip()
+
+    if not api_key:
+        api_key = click.prompt(
+            "OpenAI API key",
+            hide_input=True,
+            confirmation_prompt=True,
+        ).strip()
+
+    if not api_key:
+        raise click.ClickException("API key is empty")
+
+    env_path = upsert_env_var("OPENAI_API_KEY", api_key)
+    ok = env_file_permissions_ok(env_path)
+    click.echo(f"Wrote OPENAI_API_KEY to: {env_path}")
+    if ok is False:
+        click.echo(
+            f"Warning: expected permissions 0600 but got different mode on: {env_path}",
+            err=True,
+        )
+    click.echo(
+        f"Restart the transcriber service to pick up changes:\n"
+        f"  systemctl --user restart {TRANSCRIBER_UNIT}"
+    )
+
+
+@config.command("show")
+def config_show():
+    """Show which config sources are present (never prints secrets)."""
+    env_path = env_file_path()
+    env_values = read_env_file(env_path)
+
+    key_env = bool((os.environ.get("OPENAI_API_KEY") or "").strip())
+    key_env_file = bool((env_values.get("OPENAI_API_KEY") or "").strip())
+    creds_dir = bool((os.environ.get("CREDENTIALS_DIRECTORY") or "").strip())
+
+    click.echo(f"env var OPENAI_API_KEY set: {key_env}")
+    click.echo(f"env file exists: {env_path} {env_path.exists()}")
+    click.echo(f"env file perms 0600: {env_file_permissions_ok(env_path)}")
+    click.echo(f"env file has OPENAI_API_KEY: {key_env_file}")
+    click.echo(f"systemd credentials available: {creds_dir}")
+
+    for path in legacy_api_key_paths():
+        click.echo(f"legacy key file exists: {path} {path.exists()}")
+
+    click.echo(f"api key resolvable: {detect_openai_api_key()}")
+    click.echo(f"transcribe model resolved: {get_transcribe_model()}")
+    click.echo(f"device env set (VOICEPIPE_DEVICE): {bool(os.environ.get('VOICEPIPE_DEVICE'))}")
+
+
+@config.command("migrate")
+@click.option(
+    "--delete-legacy",
+    is_flag=True,
+    help="Delete legacy key files after migrating (dangerous).",
+)
+def config_migrate(delete_legacy):
+    """Migrate legacy key locations into ~/.config/voicepipe/voicepipe.env."""
+    env_path = env_file_path()
+    env_values = read_env_file(env_path)
+    if (env_values.get("OPENAI_API_KEY") or "").strip():
+        click.echo(f"env file already contains OPENAI_API_KEY: {env_path}")
+        return
+
+    key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+    source = "OPENAI_API_KEY env var"
+
+    if not key:
+        for legacy in legacy_api_key_paths():
+            try:
+                if legacy.exists():
+                    key = legacy.read_text(encoding="utf-8").strip()
+                    if key:
+                        source = f"legacy file: {legacy}"
+                        if delete_legacy:
+                            try:
+                                legacy.unlink()
+                            except Exception as e:
+                                click.echo(f"Warning: failed to delete {legacy}: {e}", err=True)
+                        break
+            except Exception:
+                continue
+
+    if not key:
+        raise click.ClickException("No legacy key found to migrate")
+
+    upsert_env_var("OPENAI_API_KEY", key)
+    click.echo(f"Migrated OPENAI_API_KEY from {source} to: {env_path}")
+    click.echo(
+        f"Restart the transcriber service to pick up changes:\n"
+        f"  systemctl --user restart {TRANSCRIBER_UNIT}"
+    )
+
+
+@main.group()
+def service():
+    """Manage Voicepipe systemd user services."""
+
+
+def _service_units(recorder: bool, transcriber: bool) -> list[str]:
+    units = selected_units(recorder=bool(recorder), transcriber=bool(transcriber))
+    if not units:
+        raise click.ClickException("No units selected")
+    return units
+
+
+@service.command("install")
+def service_install():
+    """Install systemd user units into ~/.config/systemd/user/."""
+    if not systemctl_path():
+        raise click.ClickException("systemctl not found (is systemd installed?)")
+
+    result = install_user_units()
+    run_systemctl(["daemon-reload"], check=False)
+    click.echo("Installed systemd user units:")
+    click.echo(f"  {result.recorder_path}")
+    click.echo(f"  {result.transcriber_path}")
+    click.echo("Next:")
+    click.echo("  voicepipe service enable")
+    click.echo("  voicepipe service start")
+
+
+@service.command("enable")
+@click.option("--recorder", is_flag=True, help="Only manage the recorder unit")
+@click.option("--transcriber", is_flag=True, help="Only manage the transcriber unit")
+def service_enable(recorder, transcriber):
+    """Enable Voicepipe services to start on login."""
+    units = _service_units(recorder, transcriber)
+    raise SystemExit(run_systemctl(["enable", *units], check=False).returncode)
+
+
+@service.command("disable")
+@click.option("--recorder", is_flag=True, help="Only manage the recorder unit")
+@click.option("--transcriber", is_flag=True, help="Only manage the transcriber unit")
+def service_disable(recorder, transcriber):
+    """Disable Voicepipe services."""
+    units = _service_units(recorder, transcriber)
+    raise SystemExit(run_systemctl(["disable", *units], check=False).returncode)
+
+
+@service.command("start")
+@click.option("--recorder", is_flag=True, help="Only manage the recorder unit")
+@click.option("--transcriber", is_flag=True, help="Only manage the transcriber unit")
+def service_start(recorder, transcriber):
+    """Start Voicepipe services."""
+    units = _service_units(recorder, transcriber)
+    raise SystemExit(run_systemctl(["start", *units], check=False).returncode)
+
+
+@service.command("stop")
+@click.option("--recorder", is_flag=True, help="Only manage the recorder unit")
+@click.option("--transcriber", is_flag=True, help="Only manage the transcriber unit")
+def service_stop(recorder, transcriber):
+    """Stop Voicepipe services."""
+    units = _service_units(recorder, transcriber)
+    raise SystemExit(run_systemctl(["stop", *units], check=False).returncode)
+
+
+@service.command("restart")
+@click.option("--recorder", is_flag=True, help="Only manage the recorder unit")
+@click.option("--transcriber", is_flag=True, help="Only manage the transcriber unit")
+def service_restart(recorder, transcriber):
+    """Restart Voicepipe services."""
+    units = _service_units(recorder, transcriber)
+    raise SystemExit(run_systemctl(["restart", *units], check=False).returncode)
+
+
+@service.command("status")
+@click.option("--recorder", is_flag=True, help="Only manage the recorder unit")
+@click.option("--transcriber", is_flag=True, help="Only manage the transcriber unit")
+def service_status(recorder, transcriber):
+    """Show systemd status for Voicepipe services."""
+    if not systemctl_path():
+        raise click.ClickException("systemctl not found (is systemd installed?)")
+    units = _service_units(recorder, transcriber)
+    rc = 0
+    for unit in units:
+        proc = subprocess.run(
+            ["systemctl", "--user", "--no-pager", "--full", "status", unit],
+            check=False,
+        )
+        rc = max(rc, proc.returncode)
+    raise SystemExit(rc)
+
+
+@service.command("logs")
+@click.option("-n", "--lines", default=200, show_default=True, help="Number of log lines")
+@click.option("--follow/--no-follow", default=True, show_default=True)
+@click.option("--recorder", is_flag=True, help="Only manage the recorder unit")
+@click.option("--transcriber", is_flag=True, help="Only manage the transcriber unit")
+def service_logs(lines, follow, recorder, transcriber):
+    """Tail logs for Voicepipe services."""
+    if not journalctl_path():
+        raise click.ClickException("journalctl not found")
+    units = _service_units(recorder, transcriber)
+    cmd = ["journalctl", "--user"]
+    for unit in units:
+        cmd.extend(["-u", unit])
+    cmd.extend(["-n", str(int(lines))])
+    if follow:
+        cmd.append("-f")
+    raise SystemExit(subprocess.run(cmd, check=False).returncode)
 
 
 @main.command()
@@ -452,6 +693,62 @@ def doctor_env():
     xdotool_path = shutil.which("xdotool")
     print(f"ffmpeg found: {bool(ffmpeg_path)}")
     print(f"xdotool found: {bool(xdotool_path)}")
+
+
+@doctor.command("systemd")
+def doctor_systemd():
+    """Check systemd user services and config propagation."""
+    if not systemctl_path():
+        print("systemctl not found (is systemd installed?)", file=sys.stderr)
+        return
+
+    env_path = env_file_path()
+    env_values = read_env_file(env_path)
+
+    print(f"env file: {env_path} exists: {env_path.exists()}")
+    print(f"env file perms 0600: {env_file_permissions_ok(env_path)}")
+    print(f"env file has OPENAI_API_KEY: {bool((env_values.get('OPENAI_API_KEY') or '').strip())}")
+    print(f"OPENAI_API_KEY env set (this process): {bool(os.environ.get('OPENAI_API_KEY'))}")
+
+    # Basic unit status
+    units = [RECORDER_UNIT, TRANSCRIBER_UNIT]
+    props_wanted = ["LoadState", "ActiveState", "SubState", "UnitFileState", "FragmentPath"]
+    for unit in units:
+        props = systemctl_show_properties(unit, props_wanted)
+        load_state = props.get("LoadState", "")
+        active_state = props.get("ActiveState", "")
+        sub_state = props.get("SubState", "")
+        unit_file_state = props.get("UnitFileState", "")
+        fragment = props.get("FragmentPath", "")
+        err = props.get("error", "")
+
+        print(f"unit: {unit}")
+        if err and not load_state:
+            print(f"  error: {err}")
+            continue
+        print(f"  LoadState: {load_state}")
+        print(f"  UnitFileState: {unit_file_state}")
+        print(f"  ActiveState: {active_state} ({sub_state})")
+        if fragment:
+            print(f"  FragmentPath: {fragment}")
+
+        cat = systemctl_cat(unit)
+        if cat.returncode == 0:
+            has_env_file = "/.config/voicepipe/voicepipe.env" in (cat.stdout or "")
+            print(f"  unit references voicepipe.env: {has_env_file}")
+        else:
+            print(f"  systemctl cat failed: {(cat.stderr or '').strip()}")
+
+    # Suggested fixes
+    if not (env_values.get("OPENAI_API_KEY") or "").strip() and not (os.environ.get("OPENAI_API_KEY") or "").strip():
+        print("missing api key: set it with:", file=sys.stderr)
+        print("  voicepipe config set-openai-key --from-stdin", file=sys.stderr)
+
+    print("common fixes:", file=sys.stderr)
+    print("  voicepipe service install", file=sys.stderr)
+    print("  voicepipe service enable", file=sys.stderr)
+    print("  voicepipe service start", file=sys.stderr)
+    print(f"  systemctl --user restart {TRANSCRIBER_UNIT}", file=sys.stderr)
 
 
 @doctor.command("daemon")

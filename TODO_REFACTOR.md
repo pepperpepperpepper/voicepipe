@@ -13,7 +13,7 @@ Conventions:
 
 ## P0 — One Source Of Truth For API Key + Config
 
-- [ ] **Create a shared config module and use it everywhere**
+- [x] **Create a shared config module and use it everywhere**
   - Problem: config is currently loaded in different places differently (CLI loads `.env`, transcriber daemon relies on process env), so behavior changes depending on how you launched Voicepipe.
   - Tasks:
     - Add `voicepipe/config.py` (or `voicepipe/settings.py`) with helpers like:
@@ -28,7 +28,7 @@ Conventions:
     - `voicepipe` and `voicepipe-transcriber-daemon` resolve the API key/config the same way.
     - Errors clearly say where Voicepipe looked for config (without leaking secrets).
 
-- [ ] **Standardize on a systemd-friendly env file**
+- [x] **Standardize on a systemd-friendly env file**
   - Problem: systemd user services don’t inherit shell init env vars, so `export OPENAI_API_KEY=...` in `.bashrc` won’t exist inside `voicepipe-transcriber.service`.
   - Tasks:
     - Choose a canonical env file path (recommended):
@@ -45,7 +45,7 @@ Conventions:
 
 ## P1 — Make Start/Stop + Key Setup One-Command Simple
 
-- [ ] **Add a first-class command to configure the OpenAI API key**
+- [x] **Add a first-class command to configure the OpenAI API key**
   - Goal: users should never need to edit service files or guess between `.bashrc` vs config files.
   - Tasks:
     - Add `voicepipe config set-openai-key`:
@@ -57,7 +57,7 @@ Conventions:
   - Acceptance:
     - `voicepipe config set-openai-key --from-stdin` is sufficient for a fresh install.
 
-- [ ] **Add “service management” subcommands**
+- [x] **Add “service management” subcommands**
   - Goal: hide systemd complexity behind one CLI.
   - Tasks:
     - Add `voicepipe service` subcommands:
@@ -73,7 +73,7 @@ Conventions:
     - A user can run: `voicepipe service install && voicepipe service enable && voicepipe service start`.
     - Stop/start doesn’t require remembering two unit names.
 
-- [ ] **Refactor installer + docs to match the new config path**
+- [x] **Refactor installer + docs to match the new config path**
   - Problem: the current flow encourages `.bashrc` exports, which systemd can’t see.
   - Tasks:
     - Update `install.sh` to:
@@ -86,7 +86,7 @@ Conventions:
   - Acceptance:
     - Fresh user path: install → set key once → start services works without extra Linux/systemd knowledge.
 
-- [ ] **Add targeted diagnostics for systemd + key propagation**
+- [x] **Add targeted diagnostics for systemd + key propagation**
   - Tasks:
     - Add `voicepipe doctor systemd`:
       - Checks unit presence, enabled state, running state
@@ -102,10 +102,10 @@ Conventions:
 
 ## P2 — Security / Polish / Future-Proofing
 
-- [ ] **Support systemd credentials for secrets (optional)**
+- [x] **Support systemd credentials for secrets (optional)**
   - Idea: allow `LoadCredential=` / `SetCredential=` so secrets don’t live in env vars.
   - Acceptance: users who want “best practice” can opt in without breaking the simple env-file flow.
 
-- [ ] **Deprecate old key locations (optional, with migration helper)**
+- [x] **Deprecate old key locations (optional, with migration helper)**
   - Current supported key locations include `~/.config/voicepipe/api_key` and `~/.voicepipe_api_key`.
   - Task: add a `voicepipe config migrate` to populate `voicepipe.env` and warn about legacy locations.

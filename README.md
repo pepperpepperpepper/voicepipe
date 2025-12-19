@@ -30,9 +30,12 @@ git clone https://github.com/yourusername/voicepipe.git
 cd voicepipe
 ./install.sh
 
+# Set API key (recommended; safe for systemd)
+echo 'sk-...' | voicepipe config set-openai-key --from-stdin
+
 # Enable and start both services
-systemctl --user enable voicepipe-recorder.service voicepipe-transcriber.service
-systemctl --user start voicepipe-recorder.service voicepipe-transcriber.service
+voicepipe service enable
+voicepipe service start
 ```
 
 The systemd user services provide:
@@ -75,6 +78,10 @@ Voicepipe requires an OpenAI API key. Set it up using one of these methods:
    echo 'OPENAI_API_KEY=your-api-key-here' >> ~/.config/voicepipe/voicepipe.env
    chmod 600 ~/.config/voicepipe/voicepipe.env
    ```
+   Or use the CLI (avoids shell history):
+   ```bash
+   echo 'your-api-key-here' | voicepipe config set-openai-key --from-stdin
+   ```
    If you use the systemd services, restart the transcriber after changes:
    ```bash
    systemctl --user restart voicepipe-transcriber.service
@@ -96,6 +103,10 @@ Voicepipe requires an OpenAI API key. Set it up using one of these methods:
    ```bash
    echo "your-api-key-here" > ~/.voicepipe_api_key
    ```
+
+### Advanced: systemd credentials (optional)
+
+Voicepipe can also read the key from systemd credentials (via `$CREDENTIALS_DIRECTORY`) if you configure `LoadCredential=` for the transcriber service.
 
 ### Audio Device Configuration
 

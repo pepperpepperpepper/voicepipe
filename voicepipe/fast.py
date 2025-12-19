@@ -7,11 +7,8 @@ stderr visibility matter.
 from __future__ import annotations
 
 import fcntl
-import json
 import os
 import shutil
-import socket
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -19,6 +16,8 @@ from typing import Optional
 
 from voicepipe.ipc import IpcError, IpcUnavailable, daemon_socket_path, send_request
 from voicepipe.paths import preserved_audio_dir, runtime_app_dir, transcriber_socket_path
+from voicepipe.transcription import transcribe_audio_file
+from voicepipe.typing import get_active_window_id, type_text
 
 
 SOCKET_PATH = daemon_socket_path()
@@ -58,72 +57,6 @@ LOCK_FILE = str(TMP_DIR / "voicepipe-fast.lock")
 TRANSCRIBER_SOCKET = transcriber_socket_path()
 
 
-def get_active_window_id() -> Optional[str]:
-    """Best-effort capture of the active window for later typing."""
-    xdotool_path = shutil.which("xdotool")
-    if not xdotool_path:
-        return None
-    try:
-        result = subprocess.run(
-            [xdotool_path, "getactivewindow"],
-            capture_output=True,
-            text=True,
-            timeout=1.0,
-            check=False,
-        )
-        if result.returncode != 0:
-            err = (result.stderr or "").strip()
-            if err:
-                print(f"[XDO] getactivewindow failed: {err}", file=sys.stderr)
-            return None
-        win = (result.stdout or "").strip()
-        return win or None
-    except Exception as e:
-        print(f"[XDO] getactivewindow error: {e}", file=sys.stderr)
-        return None
-
-
-def type_with_xdotool(text: str, window_id: Optional[str] = None) -> bool:
-    """Type text via xdotool; return True on success."""
-    xdotool_path = shutil.which("xdotool")
-    if not xdotool_path:
-        print("[XDO] xdotool not found in PATH", file=sys.stderr)
-        return False
-
-    cmd = [xdotool_path, "type", "--clearmodifiers"]
-    if window_id:
-        cmd += ["--window", str(window_id)]
-    cmd += ["--", text]
-
-    try:
-        # Keep this bounded so hotkey invocations can never wedge.
-        timeout_s = max(2.0, min(30.0, len(text) / 20.0))
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout_s,
-            check=False,
-        )
-        if result.returncode != 0:
-            err = (result.stderr or "").strip()
-            if err:
-                print(
-                    f"[XDO] type failed (rc={result.returncode}): {err}",
-                    file=sys.stderr,
-                )
-            else:
-                print(f"[XDO] type failed (rc={result.returncode})", file=sys.stderr)
-            return False
-        return True
-    except subprocess.TimeoutExpired:
-        print("[XDO] type timed out", file=sys.stderr)
-        return False
-    except Exception as e:
-        print(f"[XDO] type error: {e}", file=sys.stderr)
-        return False
-
-
 def send_cmd(cmd: str) -> dict:
     """Send command to daemon via Unix socket."""
     read_timeout = 2.0 if cmd == "status" else 5.0
@@ -136,18 +69,7 @@ def send_cmd(cmd: str) -> dict:
 
 
 def send_transcribe_request(audio_file: str) -> str:
-    """Send audio file to transcriber daemon and stream results."""
-
-    def fallback_transcribe() -> str:
-        try:
-            from voicepipe.transcriber import WhisperTranscriber
-
-            transcriber = WhisperTranscriber(model="gpt-4o-transcribe")
-            return transcriber.transcribe(audio_file)
-        except Exception as e:
-            print(f"[TRANSCRIBE] Fallback error: {e}", file=sys.stderr)
-            return ""
-
+    """Transcribe audio using daemon when available."""
     if not TRANSCRIBER_SOCKET.exists():
         print(
             f"[TRANSCRIBE] Transcriber socket not found: {TRANSCRIBER_SOCKET}",
@@ -157,54 +79,15 @@ def send_transcribe_request(audio_file: str) -> str:
             "[TRANSCRIBE] Start it with: systemctl --user start voicepipe-transcriber.service",
             file=sys.stderr,
         )
-        return fallback_transcribe()
-
-    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    client.settimeout(60.0)
     try:
-        client.connect(str(TRANSCRIBER_SOCKET))
-        client.send((json.dumps({"audio_file": audio_file}) + "\n").encode())
-
-        buffer = ""
-        full_text = ""
-        while True:
-            try:
-                chunk = client.recv(4096).decode()
-                if not chunk:
-                    break
-            except socket.timeout:
-                print("[TRANSCRIBE] Warning: Read timeout, continuing...", file=sys.stderr)
-                continue
-
-            buffer += chunk
-            while "\n" in buffer:
-                line, buffer = buffer.split("\n", 1)
-                if line.strip():
-                    try:
-                        response = json.loads(line)
-                        if response.get("type") == "transcription":
-                            text = response.get("text", "")
-                            if text:
-                                full_text += text
-                        elif response.get("type") == "complete":
-                            return full_text
-                        elif response.get("type") == "error":
-                            print(
-                                f"[TRANSCRIBE] Error: {response.get('message')}",
-                                file=sys.stderr,
-                            )
-                            return ""
-                    except json.JSONDecodeError:
-                        continue
-        return full_text
-    except Exception as e:
-        print(
-            f"[TRANSCRIBE] Error connecting to {TRANSCRIBER_SOCKET}: {e}",
-            file=sys.stderr,
+        return transcribe_audio_file(
+            audio_file,
+            model="gpt-4o-transcribe",
+            prefer_daemon=True,
         )
-        return fallback_transcribe()
-    finally:
-        client.close()
+    except Exception as e:
+        print(f"[TRANSCRIBE] Error: {e}", file=sys.stderr)
+        return ""
 
 
 class FileLock:
@@ -297,9 +180,14 @@ def execute_toggle() -> None:
                         )
                     except Exception:
                         pass
-                    typed_ok = type_with_xdotool(cleaned_text, window_id=target_window)
+                    typed_ok, type_err = type_text(
+                        cleaned_text, window_id=target_window
+                    )
                     if not typed_ok:
-                        print("[TOGGLE] Warning: xdotool typing failed", file=sys.stderr)
+                        print(
+                            f"[TOGGLE] Warning: typing failed: {type_err}",
+                            file=sys.stderr,
+                        )
                     transcription_ok = True
                 else:
                     print("[TOGGLE] No transcription returned", file=sys.stderr)
@@ -439,4 +327,3 @@ def main(argv: Optional[list[str]] = None) -> None:
 
 if __name__ == "__main__":
     main()
-

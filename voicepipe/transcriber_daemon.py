@@ -88,6 +88,10 @@ def serve(
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         server.bind(str(socket_file))
+        try:
+            os.chmod(socket_file, 0o600)
+        except Exception:
+            pass
         server.listen(1)
         server.settimeout(0.5)
         logger.info("Transcriber daemon listening on %s", socket_file)
@@ -108,6 +112,27 @@ def serve(
                 audio_file = request.get("audio_file")
                 audio_hex = request.get("audio")
                 suffix = request.get("suffix") or request.get("format") or ".wav"
+                request_model = request.get("model")
+                request_language = request.get("language")
+                request_prompt = request.get("prompt")
+                request_temperature = request.get("temperature")
+
+                language = (
+                    str(request_language)
+                    if isinstance(request_language, str) and request_language.strip()
+                    else None
+                )
+                prompt = (
+                    str(request_prompt)
+                    if isinstance(request_prompt, str) and request_prompt.strip()
+                    else None
+                )
+                temp = float(request_temperature) if request_temperature is not None else 0.0
+                req_model = (
+                    str(request_model)
+                    if isinstance(request_model, str) and request_model.strip()
+                    else None
+                )
                 if isinstance(suffix, str) and suffix and not suffix.startswith("."):
                     suffix = "." + suffix
 
@@ -122,7 +147,13 @@ def serve(
                         tmp_path = tmp_file.name
                     try:
                         start_time = time.time()
-                        text = transcriber.transcribe(tmp_path)
+                        text = transcriber.transcribe(
+                            tmp_path,
+                            language=language,
+                            prompt=prompt,
+                            temperature=temp,
+                            model=req_model,
+                        )
                         logger.info(
                             "Transcribed hex audio in %.2fs (%s)",
                             time.time() - start_time,
@@ -136,7 +167,13 @@ def serve(
                             pass
                 elif isinstance(audio_file, str) and os.path.exists(audio_file):
                     start_time = time.time()
-                    text = transcriber.transcribe(audio_file)
+                    text = transcriber.transcribe(
+                        audio_file,
+                        language=language,
+                        prompt=prompt,
+                        temperature=temp,
+                        model=req_model,
+                    )
                     logger.info(
                         "Transcribed file in %.2fs (%s)",
                         time.time() - start_time,

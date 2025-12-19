@@ -1,15 +1,18 @@
 """OpenAI Whisper API integration for transcription."""
 
-import sys
+from __future__ import annotations
+
 from typing import Optional
 
-from .config import get_openai_api_key
+from voicepipe.config import get_openai_api_key
 
 try:
     from openai import OpenAI
-except ImportError:
-    print("Error: openai package not installed. Install with: pip install openai", file=sys.stderr)
-    sys.exit(1)
+except ImportError as e:  # pragma: no cover
+    OpenAI = None  # type: ignore[assignment]
+    _OPENAI_IMPORT_ERROR = e
+else:
+    _OPENAI_IMPORT_ERROR = None
 
 
 class WhisperTranscriber:
@@ -30,17 +33,29 @@ Example: If speaker says "open quote hello close quote", transcribe as: "hello" 
     
     def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o-transcribe"):
         """Initialize the transcriber with API key and model."""
+        if OpenAI is None:
+            raise RuntimeError(
+                "openai is not installed; install it to use transcription "
+                "(e.g. `pip install openai`)"
+            ) from _OPENAI_IMPORT_ERROR
         self.api_key = api_key or get_openai_api_key()
         
         self.client = OpenAI(api_key=self.api_key)
         self.model = model
     
-    def transcribe(self, audio_file: str, language: Optional[str] = None, prompt: Optional[str] = None, temperature: float = 0.0) -> str:
+    def transcribe(
+        self,
+        audio_file: str,
+        language: Optional[str] = None,
+        prompt: Optional[str] = None,
+        temperature: float = 0.0,
+        model: Optional[str] = None,
+    ) -> str:
         """Transcribe an audio file using Whisper API."""
         try:
             with open(audio_file, 'rb') as f:
                 params = {
-                    "model": self.model,
+                    "model": model or self.model,
                     "file": f,
                     "response_format": "text",
                     "temperature": temperature,

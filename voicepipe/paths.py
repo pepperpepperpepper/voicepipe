@@ -18,6 +18,16 @@ from pathlib import Path
 
 APP_NAME = "voicepipe"
 
+_PRIVATE_DIR_MODE = 0o700
+
+
+def _ensure_private_dir(path: Path) -> None:
+    """Best-effort ensure a directory is user-private (0700)."""
+    try:
+        os.chmod(path, _PRIVATE_DIR_MODE)
+    except Exception:
+        pass
+
 
 def runtime_dir() -> Path:
     """Return the best-available per-user runtime base directory."""
@@ -54,11 +64,13 @@ def runtime_app_dir(*, create: bool = False) -> Path:
 
     if create:
         try:
-            path.mkdir(parents=True, exist_ok=True)
+            path.mkdir(parents=True, exist_ok=True, mode=_PRIVATE_DIR_MODE)
+            _ensure_private_dir(path)
         except Exception:
             # If XDG_RUNTIME_DIR is misconfigured/unwritable, fall back to /tmp.
             fallback = tmp_dir / f"{APP_NAME}-{os.getuid()}"
-            fallback.mkdir(parents=True, exist_ok=True)
+            fallback.mkdir(parents=True, exist_ok=True, mode=_PRIVATE_DIR_MODE)
+            _ensure_private_dir(fallback)
             path = fallback
 
     return path
@@ -86,7 +98,8 @@ def state_dir(*, create: bool = False) -> Path:
     base = Path(xdg_state_home) if xdg_state_home else (Path.home() / ".local" / "state")
     path = base / APP_NAME
     if create:
-        path.mkdir(parents=True, exist_ok=True)
+        path.mkdir(parents=True, exist_ok=True, mode=_PRIVATE_DIR_MODE)
+        _ensure_private_dir(path)
     return path
 
 
@@ -94,7 +107,8 @@ def preserved_audio_dir(*, create: bool = False) -> Path:
     """Where to keep audio files when transcription fails."""
     path = state_dir(create=create) / "audio"
     if create:
-        path.mkdir(parents=True, exist_ok=True)
+        path.mkdir(parents=True, exist_ok=True, mode=_PRIVATE_DIR_MODE)
+        _ensure_private_dir(path)
     return path
 
 
@@ -102,5 +116,6 @@ def doctor_artifacts_dir(*, create: bool = False) -> Path:
     """Where to keep artifacts produced by `voicepipe doctor`."""
     path = state_dir(create=create) / "doctor"
     if create:
-        path.mkdir(parents=True, exist_ok=True)
+        path.mkdir(parents=True, exist_ok=True, mode=_PRIVATE_DIR_MODE)
+        _ensure_private_dir(path)
     return path

@@ -11,7 +11,10 @@ import tempfile
 import time
 from pathlib import Path
 
-import sounddevice as sd
+try:
+    import sounddevice as sd
+except ImportError:  # pragma: no cover
+    sd = None
 
 from .device import parse_device_index
 from .logging_utils import configure_logging
@@ -44,6 +47,10 @@ class RecordingDaemon:
         Prefer the system's default input (and common virtual devices like
         PipeWire/Pulse) before trying everything else.
         """
+        if sd is None:
+            raise RuntimeError(
+                "sounddevice is not installed; install it to use the recording daemon"
+            )
         logger.info("Selecting audio input device...")
 
         candidates = []
@@ -116,6 +123,10 @@ class RecordingDaemon:
     def _initialize_audio(self):
         """Pre-initialize audio and recorder to reduce startup delay."""
         try:
+            if sd is None:
+                raise RuntimeError(
+                    "sounddevice is not installed; install it to use the recording daemon"
+                )
             # Find a working audio device automatically
             self.default_device = self._find_working_audio_device()
             device_info = sd.query_devices(self.default_device, 'input')
@@ -150,6 +161,10 @@ class RecordingDaemon:
         # Create Unix domain socket
         self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.socket.bind(str(self.SOCKET_PATH))
+        try:
+            os.chmod(self.SOCKET_PATH, 0o600)
+        except Exception:
+            pass
         self.socket.listen(1)
         
         # Set up signal handlers
@@ -249,6 +264,13 @@ class RecordingDaemon:
             return {'error': 'Recording already in progress'}
 
         try:
+            if sd is None:
+                return {
+                    "error": (
+                        "sounddevice is not installed; install it to record audio "
+                        "(e.g. `pip install sounddevice`)"
+                    )
+                }
             device_index, device_error = parse_device_index(device_index)
             if device_error:
                 return {"error": device_error}

@@ -13,13 +13,22 @@ from datetime import datetime
 from pathlib import Path
 import queue
 
-import sounddevice as sd
+try:
+    import sounddevice as sd
+except ImportError:  # pragma: no cover
+    sd = None
 import numpy as np
 
 from .paths import audio_tmp_dir, session_state_dir
 from .systray import get_systray
 
 logger = logging.getLogger(__name__)
+
+def _require_sounddevice() -> None:
+    if sd is None:
+        raise RuntimeError(
+            "sounddevice is not installed; install it to record audio (e.g. `pip install sounddevice`)"
+        )
 
 class FastAudioRecorder:
     """Optimized audio recorder using sounddevice."""
@@ -46,6 +55,7 @@ class FastAudioRecorder:
     
     def _pre_open_stream(self):
         """Pre-open the audio stream but don't start recording yet."""
+        _require_sounddevice()
         try:
             self.stream = sd.InputStream(
                 device=self.device_index,
@@ -62,6 +72,7 @@ class FastAudioRecorder:
         
     def start_recording(self, output_file=None):
         """Start recording with minimal delay."""
+        _require_sounddevice()
         try:
             # Start ffmpeg in parallel if needed
             if self.use_mp3 and output_file:
@@ -239,6 +250,7 @@ class AudioRecorder(FastAudioRecorder):
         
     def get_default_device(self):
         """Get the default input device index."""
+        _require_sounddevice()
         try:
             return sd.default.device[0]  # Input device
         except Exception:
@@ -246,6 +258,7 @@ class AudioRecorder(FastAudioRecorder):
             
     def start_recording(self, output_file=None):
         """Start recording audio."""
+        _require_sounddevice()
         device = self.device_index if self.device_index is not None else self.get_default_device()
         
         try:
@@ -400,98 +413,3 @@ class AudioRecorder(FastAudioRecorder):
             except:
                 pass
 
-
-class RecordingSession:
-    """Manages recording sessions with PID tracking."""
-    
-    STATE_DIR = session_state_dir()
-    STATE_PREFIX = "voicepipe-"
-    
-    @classmethod
-    def get_state_file(cls, pid=None):
-        """Get the state file path for a given PID."""
-        if pid is None:
-            pid = os.getpid()
-        return cls.STATE_DIR / f"{cls.STATE_PREFIX}{pid}.json"
-    
-    @classmethod
-    def find_active_sessions(cls):
-        """Find all active recording sessions."""
-        sessions = []
-        for file in cls.STATE_DIR.glob(f"{cls.STATE_PREFIX}*.json"):
-            try:
-                with open(file, 'r') as f:
-                    data = json.load(f)
-                    pid = data.get('pid')
-                    # Check if process is still running
-                    if pid and cls._is_process_running(pid):
-                        sessions.append(data)
-                    else:
-                        # Clean up stale session file but preserve audio file
-                        file.unlink(missing_ok=True)
-                        # Don't delete the audio file - let the user decide
-            except Exception:
-                # Invalid or corrupted state file
-                file.unlink(missing_ok=True)
-        return sessions
-    
-    @classmethod
-    def _is_process_running(cls, pid):
-        """Check if a process with given PID is running."""
-        try:
-            os.kill(pid, 0)
-            return True
-        except ProcessLookupError:
-            return False
-    
-    @classmethod
-    def create_session(cls):
-        """Create a new recording session."""
-        # Check for existing sessions
-        active = cls.find_active_sessions()
-        if active:
-            raise RuntimeError(f"Recording already in progress (PID: {active[0]['pid']})")
-
-        # Ensure state directory exists
-        cls.STATE_DIR.mkdir(parents=True, exist_ok=True)
-
-        # Create temporary audio file
-        tmp_dir = audio_tmp_dir(create=True)
-        fd, audio_file = tempfile.mkstemp(
-            suffix=".wav",
-            prefix="voicepipe_",
-            dir=str(tmp_dir),
-        )
-        os.close(fd)  # We'll write to it later
-        
-        # Create session data
-        session = {
-            'pid': os.getpid(),
-            'audio_file': audio_file,
-            'started_at': datetime.now().isoformat(),
-        }
-        
-        # Save state file
-        state_file = cls.get_state_file()
-        with open(state_file, 'w') as f:
-            json.dump(session, f)
-        
-        return session
-    
-    @classmethod
-    def get_current_session(cls):
-        """Get the current active session."""
-        sessions = cls.find_active_sessions()
-        if not sessions:
-            raise RuntimeError("No active recording session found")
-        return sessions[0]
-    
-    @classmethod
-    def cleanup_session(cls, session):
-        """Clean up a recording session."""
-        # Remove state file
-        state_file = cls.get_state_file(session['pid'])
-        state_file.unlink(missing_ok=True)
-        
-        # Note: We no longer automatically remove the audio file
-        # The caller is responsible for cleanup if needed

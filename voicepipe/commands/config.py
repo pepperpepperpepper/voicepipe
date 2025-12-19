@@ -16,7 +16,7 @@ from voicepipe.config import (
     read_env_file,
     upsert_env_var,
 )
-from voicepipe.systemd import TRANSCRIBER_UNIT
+from voicepipe.systemd import TARGET_UNIT
 
 
 @click.group(name="config")
@@ -57,8 +57,9 @@ def config_set_openai_key(api_key: str | None, from_stdin: bool) -> None:
             err=True,
         )
     click.echo(
-        "Restart the transcriber service to pick up changes:\n"
-        f"  systemctl --user restart {TRANSCRIBER_UNIT}"
+        "If you're using the systemd services, restart Voicepipe to pick up changes:\n"
+        "  voicepipe service restart\n"
+        f"  # or: systemctl --user restart {TARGET_UNIT}"
     )
 
 
@@ -129,7 +130,7 @@ def config_migrate(delete_legacy: bool) -> None:
     upsert_env_var("OPENAI_API_KEY", key)
     click.echo(f"Migrated OPENAI_API_KEY from {source} to: {env_path}")
     click.echo(
-        "Restart the transcriber service to pick up changes:\n"
-        f"  systemctl --user restart {TRANSCRIBER_UNIT}"
+        "If you're using the systemd services, restart Voicepipe to pick up changes:\n"
+        "  voicepipe service restart\n"
+        f"  # or: systemctl --user restart {TARGET_UNIT}"
     )
-

@@ -12,16 +12,17 @@ def _reload_config():
     return importlib.reload(config)
 
 
-def test_config_home_prefers_xdg_config_home(tmp_path: Path, monkeypatch) -> None:
+def test_config_home_ignores_xdg_config_home(tmp_path: Path, monkeypatch) -> None:
     config = _reload_config()
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    assert config.config_home() == tmp_path
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+    assert config.config_home() == tmp_path / ".config"
 
 
-def test_env_file_path_uses_xdg_config_home(tmp_path: Path, monkeypatch) -> None:
+def test_env_file_path_uses_dot_config_home(tmp_path: Path, monkeypatch) -> None:
     config = _reload_config()
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    assert config.env_file_path() == tmp_path / "voicepipe" / "voicepipe.env"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert config.env_file_path() == tmp_path / ".config" / "voicepipe" / "voicepipe.env"
 
 
 def test_get_openai_api_key_prefers_env_var(monkeypatch) -> None:
@@ -33,8 +34,8 @@ def test_get_openai_api_key_prefers_env_var(monkeypatch) -> None:
 def test_get_openai_api_key_reads_legacy_file(tmp_path: Path, monkeypatch) -> None:
     config = _reload_config()
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    legacy_path = tmp_path / "voicepipe" / "api_key"
+    monkeypatch.setenv("HOME", str(tmp_path))
+    legacy_path = tmp_path / ".config" / "voicepipe" / "api_key"
     legacy_path.parent.mkdir(parents=True, exist_ok=True)
     legacy_path.write_text("from-legacy\n", encoding="utf-8")
     assert config.get_openai_api_key() == "from-legacy"
@@ -50,16 +51,16 @@ def test_get_openai_api_key_raises_helpful_error(monkeypatch) -> None:
 
 def test_upsert_env_var_writes_env_file(tmp_path: Path, monkeypatch) -> None:
     config = _reload_config()
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
     out_path = config.upsert_env_var("OPENAI_API_KEY", "sk-test")
-    assert out_path == tmp_path / "voicepipe" / "voicepipe.env"
+    assert out_path == tmp_path / ".config" / "voicepipe" / "voicepipe.env"
     text = out_path.read_text(encoding="utf-8")
     assert "OPENAI_API_KEY=sk-test" in text
 
 
 def test_read_env_file_parses_basic_dotenv(tmp_path: Path, monkeypatch) -> None:
     config = _reload_config()
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("HOME", str(tmp_path))
     env_path = config.env_file_path()
     env_path.parent.mkdir(parents=True, exist_ok=True)
     env_path.write_text(

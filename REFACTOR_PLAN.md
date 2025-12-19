@@ -86,6 +86,15 @@ This plan targets maintainability and reducing operational complexity beyond the
      - recorder/transcriber include `EnvironmentFile=-%h/.config/voicepipe/voicepipe.env`
      - target includes `Wants=voicepipe-recorder.service voicepipe-transcriber.service`
 
+4) [x] **CLI: update config commands to restart `voicepipe.target`**
+   - Ensure `voicepipe config set-openai-key` and `voicepipe config migrate` suggest:
+     - `voicepipe service restart`
+     - `systemctl --user restart voicepipe.target`
+
+5) [x] **Config path: avoid `XDG_CONFIG_HOME` mismatch with systemd**
+   - systemd user services typically won't inherit `XDG_CONFIG_HOME`, so treat
+     `~/.config/voicepipe/voicepipe.env` as the stable canonical location.
+
 ## Suggested sequencing / checkpoints
 
 - Phase 1: CLI split + shared helpers (low risk, big readability win)

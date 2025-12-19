@@ -32,9 +32,9 @@ class VoicepipeConfigError(RuntimeError):
 
 
 def config_home() -> Path:
-    xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
-    if xdg_config_home:
-        return Path(xdg_config_home)
+    # Prefer a stable, systemd-friendly location that does not depend on
+    # shell-initialized environment variables (systemd user services do not
+    # load `.bashrc`/`.zshrc`).
     return Path.home() / ".config"
 
 

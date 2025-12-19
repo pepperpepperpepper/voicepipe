@@ -1,12 +1,12 @@
 """Core recording functionality for voicepipe."""
 
 import os
-import sys
 import json
 import signal
 import tempfile
 import wave
 import subprocess
+import logging
 import threading
 import time
 from datetime import datetime
@@ -16,13 +16,15 @@ import queue
 import sounddevice as sd
 import numpy as np
 
+from .paths import audio_tmp_dir, session_state_dir
 from .systray import get_systray
 
+logger = logging.getLogger(__name__)
 
 class FastAudioRecorder:
     """Optimized audio recorder using sounddevice."""
     
-    def __init__(self, device_index=None, use_mp3=True, max_duration=300, pre_open=True):
+    def __init__(self, device_index=None, use_mp3=False, max_duration=300, pre_open=True):
         self.device_index = device_index
         self.stream = None
         self.audio_queue = queue.Queue()
@@ -55,7 +57,7 @@ class FastAudioRecorder:
             )
             # Don't start it yet, just have it ready
         except Exception as e:
-            print(f"Warning: Could not pre-open stream: {e}", file=sys.stderr)
+            logger.warning("Could not pre-open stream: %s", e)
             self.stream = None
         
     def start_recording(self, output_file=None):
@@ -111,7 +113,7 @@ class FastAudioRecorder:
     def _audio_callback(self, indata, frames, time, status):
         """Callback for audio stream."""
         if status:
-            print(f"Audio callback status: {status}", file=sys.stderr)
+            logger.debug("Audio callback status: %s", status)
         
         if self.recording:
             audio_data = indata.copy()
@@ -126,12 +128,12 @@ class FastAudioRecorder:
     def _timeout_callback(self):
         """Called when recording timeout is reached."""
         if self.recording:
-            print(f"Recording timeout reached ({self.max_duration}s), stopping...", file=sys.stderr)
+            logger.info("Recording timeout reached (%ss), stopping...", self.max_duration)
             # Instead of killing the process, gracefully stop recording
             try:
                 self.stop_recording()
             except Exception as e:
-                print(f"Error during timeout handling: {e}", file=sys.stderr)
+                logger.exception("Error during timeout handling: %s", e)
                 self.cleanup()
     
     def stop_recording(self):
@@ -182,16 +184,17 @@ class FastAudioRecorder:
             frames = []
             while not self.audio_queue.empty():
                 frames.append(self.audio_queue.get())
+            if not frames:
+                raise RuntimeError("No audio data recorded")
             return b''.join(frames)
     
     def save_to_file(self, audio_data, filename):
-        """Save audio data to WAV file."""
-        wf = wave.open(filename.replace('.mp3', '.wav'), 'wb')
-        wf.setnchannels(self.channels)
-        wf.setsampwidth(2)  # 2 bytes for int16
-        wf.setframerate(self.rate)
-        wf.writeframes(audio_data)
-        wf.close()
+        """Save audio data to a WAV file."""
+        with wave.open(filename, 'wb') as wf:
+            wf.setnchannels(self.channels)
+            wf.setsampwidth(2)  # 2 bytes for int16
+            wf.setframerate(self.rate)
+            wf.writeframes(audio_data)
     
     def cleanup(self):
         """Clean up resources."""
@@ -217,9 +220,9 @@ class FastAudioRecorder:
 
 
 class AudioRecorder(FastAudioRecorder):
-    """Handles audio recording to temporary MP3 files."""
+    """Audio recorder (WAV by default)."""
     
-    def __init__(self, device_index=None, use_mp3=True, max_duration=300):
+    def __init__(self, device_index=None, use_mp3=False, max_duration=300):
         self.device_index = device_index
         self.stream = None
         self.audio_queue = queue.Queue()
@@ -285,18 +288,18 @@ class AudioRecorder(FastAudioRecorder):
     def _timeout_callback(self):
         """Called when recording timeout is reached."""
         if self.recording:
-            print(f"Recording timeout reached ({self.max_duration}s), stopping...", file=sys.stderr)
+            logger.info("Recording timeout reached (%ss), stopping...", self.max_duration)
             # Instead of killing the process, gracefully stop recording
             try:
                 self.stop_recording()
             except Exception as e:
-                print(f"Error during timeout handling: {e}", file=sys.stderr)
+                logger.exception("Error during timeout handling: %s", e)
                 self.cleanup()
     
     def _audio_callback(self, indata, frames, time, status):
         """Callback for audio stream."""
         if status:
-            print(f"Audio callback status: {status}", file=sys.stderr)
+            logger.debug("Audio callback status: %s", status)
             
         if self.recording:
             audio_data = indata.copy()
@@ -401,7 +404,7 @@ class AudioRecorder(FastAudioRecorder):
 class RecordingSession:
     """Manages recording sessions with PID tracking."""
     
-    STATE_DIR = Path("/tmp/voicepipe")
+    STATE_DIR = session_state_dir()
     STATE_PREFIX = "voicepipe-"
     
     @classmethod
@@ -453,7 +456,12 @@ class RecordingSession:
         cls.STATE_DIR.mkdir(parents=True, exist_ok=True)
 
         # Create temporary audio file
-        fd, audio_file = tempfile.mkstemp(suffix='.mp3', prefix='voicepipe_', dir='/tmp/voicepipe')
+        tmp_dir = audio_tmp_dir(create=True)
+        fd, audio_file = tempfile.mkstemp(
+            suffix=".wav",
+            prefix="voicepipe_",
+            dir=str(tmp_dir),
+        )
         os.close(fd)  # We'll write to it later
         
         # Create session data

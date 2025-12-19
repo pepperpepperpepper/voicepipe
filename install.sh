@@ -40,25 +40,6 @@ rm -rf .venv
 poetry install --extras systray
 
 echo "✓ Installation complete!"
-
-# Install voicepipe-fast script
-    echo "Installing voicepipe-fast control script..."
-    if [ -f "voicepipe-fast" ]; then
-        cp voicepipe-fast "$HOME/.local/bin/voicepipe-fast"
-        chmod +x "$HOME/.local/bin/voicepipe-fast"
-        echo "✓ voicepipe-fast installed to ~/.local/bin/"
-    else
-        echo "Warning: voicepipe-fast script not found in current directory"
-    fi
-    
-    echo "Installing voicepipe-transcribe-file script for file transcription..."
-    if [ -f "voicepipe-transcribe-file" ]; then
-        cp voicepipe-transcribe-file "$HOME/.local/bin/voicepipe-transcribe-file"
-        chmod +x "$HOME/.local/bin/voicepipe-transcribe-file"
-        echo "✓ voicepipe-transcribe-file installed to ~/.local/bin/"
-    else
-        echo "Warning: voicepipe-transcribe-file script not found in current directory"
-    fi
 echo
 
 # Get venv path from poetry
@@ -74,6 +55,24 @@ mkdir -p "$HOME/.local/bin"
 ln -sf "$VOICEPIPE_CMD" "$HOME/.local/bin/voicepipe"
 echo "✓ voicepipe command symlinked to ~/.local/bin/voicepipe"
 echo "Found voicepipe at: $VOICEPIPE_CMD"
+
+VOICEPIPE_FAST_CMD="$VENV_PATH/bin/voicepipe-fast"
+if [ -x "$VOICEPIPE_FAST_CMD" ]; then
+    ln -sf "$VOICEPIPE_FAST_CMD" "$HOME/.local/bin/voicepipe-fast"
+    echo "✓ voicepipe-fast symlinked to ~/.local/bin/voicepipe-fast"
+fi
+
+VOICEPIPE_TRANSCRIBE_FILE_CMD="$VENV_PATH/bin/voicepipe-transcribe-file"
+if [ -x "$VOICEPIPE_TRANSCRIBE_FILE_CMD" ]; then
+    ln -sf "$VOICEPIPE_TRANSCRIBE_FILE_CMD" "$HOME/.local/bin/voicepipe-transcribe-file"
+    echo "✓ voicepipe-transcribe-file symlinked to ~/.local/bin/voicepipe-transcribe-file"
+fi
+
+VOICEPIPE_TRANSCRIBER_DAEMON_CMD="$VENV_PATH/bin/voicepipe-transcriber-daemon"
+if [ -x "$VOICEPIPE_TRANSCRIBER_DAEMON_CMD" ]; then
+    ln -sf "$VOICEPIPE_TRANSCRIBER_DAEMON_CMD" "$HOME/.local/bin/voicepipe-transcriber-daemon"
+    echo "✓ voicepipe-transcriber-daemon symlinked to ~/.local/bin/voicepipe-transcriber-daemon"
+fi
 
 # Setup systemd service
 if command -v systemctl &> /dev/null; then
@@ -118,10 +117,8 @@ EOF
     
     # Install transcriber service from template
     if [ -f "voicepipe-transcriber.service.template" ]; then
-        PYTHON_PATH="$VENV_PATH/bin/python"
-        SCRIPT_PATH="$(pwd)/transcriber_daemon.py"
-        sed -e "s|{{PYTHON_PATH}}|$PYTHON_PATH|g" \
-            -e "s|{{SCRIPT_PATH}}|$SCRIPT_PATH|g" \
+        TRANSCRIBER_COMMAND="$VENV_PATH/bin/voicepipe-transcriber-daemon"
+        sed -e "s|{{TRANSCRIBER_COMMAND}}|$TRANSCRIBER_COMMAND|g" \
             voicepipe-transcriber.service.template > ~/.config/systemd/user/voicepipe-transcriber.service
     fi
     

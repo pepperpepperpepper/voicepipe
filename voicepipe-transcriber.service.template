@@ -4,8 +4,8 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStartPre=mkdir -p /tmp/voicepipe
-ExecStart={{PYTHON_PATH}} {{SCRIPT_PATH}}
+ExecStartPre=mkdir -p %t/voicepipe
+ExecStart={{TRANSCRIBER_COMMAND}}
 Restart=always
 RestartSec=1
 PrivateTmp=false

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""
-Systray icon toggle script - shows/hides an icon in the system tray
-Usage: python3 systray_toggle.py [--hide]
+"""Example systray toggle script (experimental).
+
+Usage: `python3 examples/systray_toggle.py [--hide]`
 """
 
 import sys

@@ -46,20 +46,20 @@ The CLI automatically detects and uses the services if running, or falls back to
 
 ## Dependencies
 
-- Python 3.8+
-- PyAudio (for recording)
+- Python 3.9+
+- sounddevice (for recording; requires PortAudio)
 - OpenAI Python SDK
 - Click (for CLI)
 - xdotool (optional, for --type functionality)
 
 On Arch Linux:
 ```bash
-sudo pacman -S python-pyaudio xdotool
+sudo pacman -S portaudio xdotool
 ```
 
 On Ubuntu/Debian:
 ```bash
-sudo apt-get install python3-pyaudio xdotool
+sudo apt-get install portaudio19-dev xdotool
 ```
 
 ## Configuration
@@ -72,6 +72,7 @@ Voicepipe requires an OpenAI API key. Set it up using one of these methods:
    ```bash
    export OPENAI_API_KEY="your-api-key-here"
    ```
+   Voicepipe also loads a `.env` file (if present) on startup.
 
 2. **Config file**:
    ```bash
@@ -90,7 +91,7 @@ By default, voicepipe uses the system's default audio input device. To use a spe
 
 ```bash
 # List available devices
-python -c "import pyaudio; p=pyaudio.PyAudio(); print('\n'.join([f'{i}: {p.get_device_info_by_index(i)[\"name\"]}' for i in range(p.get_device_count()) if p.get_device_info_by_index(i)[\"maxInputChannels\"] > 0]))"
+python -c "import sounddevice as sd; print('\\n'.join([f\"{i}: {d['name']}\" for i, d in enumerate(sd.query_devices()) if d.get('max_input_channels', 0) > 0]))"
 
 # Set device by index
 export VOICEPIPE_DEVICE=2
@@ -155,6 +156,19 @@ voicepipe stop --language fr  # French
 voicepipe stop --language de  # German
 ```
 
+#### Model Selection
+Voicepipe supports multiple transcription models:
+- `gpt-4o-transcribe`: best quality (typically higher cost)
+- `gpt-4o-mini-transcribe`: faster/cheaper (typically lower quality)
+- `whisper-1`: legacy Whisper model
+
+```bash
+voicepipe start
+voicepipe stop --model gpt-4o-transcribe
+voicepipe stop --model gpt-4o-mini-transcribe
+voicepipe stop --model whisper-1
+```
+
 #### Shell Scripting
 ```bash
 # Save to file
@@ -208,7 +222,7 @@ awful.key({ modkey, "Shift" }, "r", function() awful.spawn("voicepipe stop --typ
 
 ## Error Handling
 
-All errors are printed to stderr. When using `--type`, errors are also typed into the active window (useful for debugging in full-screen applications).
+All errors are printed to stderr.
 
 Common issues:
 - **"No active recording session found"**: No recording is in progress
@@ -216,11 +230,20 @@ Common issues:
 - **"OpenAI API key not found"**: Set up your API key as described above
 - **"xdotool not found"**: Install xdotool for --type functionality
 
+Diagnostics:
+- `voicepipe doctor env`
+- `voicepipe doctor daemon --record-test --record-seconds 2 --play`
+- `voicepipe doctor audio`
+
 ## Technical Details
 
 - Audio format: 16kHz, 16-bit, mono WAV (optimal for speech recognition)
-- Temporary files: Stored in `/tmp/voicepipe-*.wav`
-- State tracking: JSON files in `/tmp/voicepipe-{PID}.json`
+- Runtime files (sockets, temp audio, session JSON): stored in `$XDG_RUNTIME_DIR/voicepipe` (or `/tmp/voicepipe-$UID` fallback)
+- Recorder daemon socket: `.../voicepipe.sock`
+- Transcriber daemon socket: `.../voicepipe_transcriber.sock`
+- Temporary audio files: `voicepipe_*.wav` in the runtime dir
+- State tracking (subprocess mode): `voicepipe-{PID}.json` in the runtime dir
+- Preserved audio on transcription failure: `~/.local/state/voicepipe/audio` (or `$XDG_STATE_HOME/voicepipe/audio`)
 - Automatic cleanup on process termination
 - PID-based session management prevents conflicts
 
@@ -234,8 +257,9 @@ Contributions welcome! Please submit issues and pull requests on GitHub.
 
 ## Troubleshooting
 
-### PyAudio Installation Issues
-If you encounter issues installing PyAudio:
+### sounddevice / PortAudio Issues
+If you encounter issues with audio recording, ensure PortAudio is installed and that your user can access the microphone.
+
 ```bash
 # Ubuntu/Debian
 sudo apt-get install portaudio19-dev python3-dev
@@ -243,8 +267,8 @@ sudo apt-get install portaudio19-dev python3-dev
 # macOS
 brew install portaudio
 
-# Then install PyAudio
-pip install pyaudio
+# Then install Python deps
+pip install sounddevice
 ```
 
 ### Permission Denied on /tmp
@@ -256,6 +280,5 @@ ls -ld /tmp  # Should show: drwxrwxrwt
 ### Audio Device Not Found
 List available devices and ensure your microphone is connected:
 ```bash
-python -m pyaudio
+python -c "import sounddevice as sd; print(sd.query_devices())"
 ```
-# voicepipe

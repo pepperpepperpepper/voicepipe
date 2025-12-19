@@ -3,79 +3,50 @@
 import os
 import sys
 import signal
-import socket
-import json
+import logging
 import subprocess
 import time
 import shutil
+import threading
 from pathlib import Path
 
 import click
 
+try:
+    from dotenv import load_dotenv
+except Exception:
+    load_dotenv = None
+
+from .ipc import daemon_socket_path, send_request, try_send_request, IpcError
+from .logging_utils import configure_logging
+from .paths import doctor_artifacts_dir, preserved_audio_dir, runtime_app_dir
 from .recorder import AudioRecorder, RecordingSession
 from .transcriber import WhisperTranscriber
-from .daemon import RecordingDaemon
 
-
-def daemon_request(command, **kwargs):
-    """Send a request to the daemon service."""
-    socket_path = RecordingDaemon.SOCKET_PATH
-    
-    # Check if daemon is running
-    if not socket_path.exists():
-        # Try the subprocess method as fallback
-        return None
-        
-    client = None
-    try:
-        # Connect to daemon with short connect timeout
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.settimeout(0.5)
-        client.connect(str(socket_path))
-        
-        # Send request
-        request = {'command': command, **kwargs}
-        client.send(json.dumps(request).encode())
-        
-        # Allow longer response time for start/stop operations
-        read_timeout = 0.5 if command == 'status' else 5.0
-        client.settimeout(read_timeout)
-
-        # Get response (handle partial reads)
-        response_data = b""
-        while True:
-            chunk = client.recv(4096)
-            if not chunk:
-                break
-            response_data += chunk
-            try:
-                return json.loads(response_data.decode())
-            except json.JSONDecodeError:
-                continue
-
-        if response_data:
-            return json.loads(response_data.decode())
-        return None
-        
-    except Exception as e:
-        print(f"Warning: Could not connect to daemon: {e}", file=sys.stderr)
-        return None
-    finally:
-        try:
-            client.close()
-        except Exception:
-            pass
-
+logger = logging.getLogger(__name__)
 
 def run_recording_subprocess():
     """Run the actual recording in a subprocess (fallback when no daemon)."""
     recorder = None
     session = None
+    timeout_timer = None
     try:
         session = RecordingSession.create_session()
         
+        def _cleanup_session():
+            try:
+                RecordingSession.cleanup_session(session)
+            except Exception:
+                pass
+
         # Set up signal handlers
-        def signal_handler(signum, frame):
+        def stop_handler(signum, frame):
+            """Stop recording and save audio."""
+            if timeout_timer:
+                try:
+                    timeout_timer.cancel()
+                except Exception:
+                    pass
             if recorder and recorder.recording:
                 try:
                     audio_data = recorder.stop_recording()
@@ -85,19 +56,59 @@ def run_recording_subprocess():
                     print(f"Error saving audio: {e}", file=sys.stderr)
             if recorder:
                 recorder.cleanup()
+            _cleanup_session()
             sys.exit(0)
-        
-        signal.signal(signal.SIGTERM, signal_handler)
-        signal.signal(signal.SIGINT, signal_handler)
+
+        def cancel_handler(signum, frame):
+            """Cancel recording without saving audio."""
+            if timeout_timer:
+                try:
+                    timeout_timer.cancel()
+                except Exception:
+                    pass
+            if recorder and recorder.recording:
+                try:
+                    recorder.stop_recording()
+                except Exception:
+                    pass
+            if recorder:
+                recorder.cleanup()
+            try:
+                audio_file = session.get("audio_file") if session else None
+                if audio_file and os.path.exists(audio_file):
+                    os.unlink(audio_file)
+            except Exception:
+                pass
+            _cleanup_session()
+            sys.exit(0)
+
+        signal.signal(signal.SIGTERM, stop_handler)
+        signal.signal(signal.SIGINT, cancel_handler)
+        try:
+            signal.signal(signal.SIGUSR1, cancel_handler)
+        except Exception:
+            pass
         
         # Get device from environment or use default
         device = os.environ.get('VOICEPIPE_DEVICE')
         device_index = int(device) if device and device.isdigit() else None
         
-        recorder = AudioRecorder(device_index=device_index)
+        recorder = AudioRecorder(device_index=device_index, max_duration=None)
         
         print(f"Recording started (PID: {os.getpid()})...", file=sys.stderr)
         recorder.start_recording(output_file=session['audio_file'])
+
+        # Enforce a maximum duration at the subprocess level so we can
+        # gracefully stop + save, instead of the recorder timing out silently.
+        def _timeout_kill():
+            try:
+                os.kill(os.getpid(), signal.SIGTERM)
+            except Exception:
+                pass
+
+        timeout_timer = threading.Timer(300, _timeout_kill)
+        timeout_timer.daemon = True
+        timeout_timer.start()
         
         # Block until terminated
         signal.pause()
@@ -110,18 +121,29 @@ def run_recording_subprocess():
 
 
 @click.group()
-def main():
+@click.option("--debug", is_flag=True, help="Enable debug logging")
+@click.pass_context
+def main(ctx, debug):
     """Voicepipe - Voice recording and transcription CLI tool."""
-    pass
+    ctx.ensure_object(dict)
+    ctx.obj["debug"] = bool(debug)
+    if load_dotenv is not None:
+        load_dotenv()
+    configure_logging(debug=bool(debug), default_level=logging.WARNING)
 
 
 @main.command()
-@click.option('--device', envvar='VOICEPIPE_DEVICE', help='Audio device index to use')
+@click.option(
+    "--device",
+    envvar="VOICEPIPE_DEVICE",
+    type=int,
+    help="Audio device index to use",
+)
 def start(device):
     """Start recording audio from microphone."""
     try:
         # Try daemon first
-        response = daemon_request('start', device=device)
+        response = try_send_request("start", device=device)
         if response:
             if 'error' in response:
                 print(f"Error: {response['error']}", file=sys.stderr)
@@ -177,8 +199,13 @@ def start(device):
 def stop(type, language, prompt, model, temperature):
     """Stop recording and transcribe the audio."""
     try:
+        response = None
+        session = None
+        audio_file = None
+        transcription_ok = False
+
         # Try daemon first
-        response = daemon_request('stop')
+        response = try_send_request("stop")
         if response:
             if 'error' in response:
                 print(f"Error: {response['error']}", file=sys.stderr)
@@ -204,6 +231,7 @@ def stop(type, language, prompt, model, temperature):
         try:
             transcriber = WhisperTranscriber(model=model)
             text = transcriber.transcribe(audio_file, language=language, prompt=prompt, temperature=temperature)
+            transcription_ok = True
             
             # Output to stdout
             print(text)
@@ -247,9 +275,19 @@ def stop(type, language, prompt, model, temperature):
             # Clean up session (only for subprocess method)
             if not response:
                 RecordingSession.cleanup_session(session)
-            # Clean up audio file
+            # Clean up audio file only on successful transcription; otherwise preserve it.
             if audio_file and os.path.exists(audio_file):
-                os.unlink(audio_file)
+                if transcription_ok:
+                    os.unlink(audio_file)
+                else:
+                    try:
+                        dst_dir = preserved_audio_dir(create=True)
+                        dst = dst_dir / Path(audio_file).name
+                        shutil.move(audio_file, dst)
+                        audio_file = str(dst)
+                    except Exception:
+                        pass
+                    print(f"Preserved audio file: {audio_file}", file=sys.stderr)
             
     except RuntimeError as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -264,7 +302,7 @@ def status():
     """Check recording status."""
     try:
         # Try daemon first
-        response = daemon_request('status')
+        response = try_send_request("status")
         if response:
             if 'error' in response:
                 print(f"Error: {response['error']}", file=sys.stderr)
@@ -331,7 +369,7 @@ def transcribe_file(type, audio_file, language, prompt, model, temperature):
         sys.exit(1)
 
 
-@main.command()
+@main.command("doctor-legacy", hidden=True)
 @click.option("--audio-test", is_flag=True, help="Record 0.5s and report levels")
 @click.option("--record-test", is_flag=True, help="Start/stop a 1s daemon recording and report file size")
 @click.option("--transcribe-test", is_flag=True, help="Transcribe the record-test audio file")
@@ -347,9 +385,52 @@ def transcribe_file(type, audio_file, language, prompt, model, temperature):
     is_flag=True,
     help="Play the record-test file via ffplay (if available)",
 )
-def doctor(audio_test, record_test, transcribe_test, record_seconds, play):
-    """Print diagnostics for common Voicepipe issues."""
-    socket_path = RecordingDaemon.SOCKET_PATH
+def doctor_legacy(audio_test, record_test, transcribe_test, record_seconds, play):
+    """DEPRECATED: use `voicepipe doctor env|daemon|audio`."""
+    print("doctor: deprecated; use `voicepipe doctor env|daemon|audio`", file=sys.stderr)
+    if audio_test:
+        doctor_audio()
+    if record_test or transcribe_test or play:
+        doctor_daemon(
+            record_test=bool(record_test),
+            transcribe_test=bool(transcribe_test),
+            record_seconds=float(record_seconds),
+            play=bool(play),
+            cleanup=False,
+        )
+
+
+@main.group(invoke_without_command=True)
+@click.pass_context
+def doctor(ctx):
+    """Diagnostics for common Voicepipe issues."""
+    if ctx.invoked_subcommand is None:
+        print(ctx.get_help())
+
+
+def _preserve_doctor_audio_file(path: Path) -> Path:
+    dest_dir = doctor_artifacts_dir(create=True)
+    dest = dest_dir / path.name
+    if dest.exists():
+        stem = path.stem
+        suffix = path.suffix
+        for i in range(1, 1000):
+            candidate = dest_dir / f"{stem}-{i}{suffix}"
+            if not candidate.exists():
+                dest = candidate
+                break
+    try:
+        moved = shutil.move(str(path), str(dest))
+        return Path(moved)
+    except Exception:
+        return path
+
+
+@doctor.command("env")
+def doctor_env():
+    """Check environment, paths, and basic dependencies."""
+    socket_path = daemon_socket_path()
+    runtime_path = runtime_app_dir()
 
     print(f"python: {sys.executable}")
     print(f"cwd: {os.getcwd()}")
@@ -357,9 +438,11 @@ def doctor(audio_test, record_test, transcribe_test, record_seconds, play):
     print(f"DISPLAY: {os.environ.get('DISPLAY', '')}")
     print(f"WAYLAND_DISPLAY: {os.environ.get('WAYLAND_DISPLAY', '')}")
 
-    tmp_dir = Path("/tmp/voicepipe")
-    print(f"/tmp/voicepipe exists: {tmp_dir.exists()}")
+    print(f"runtime dir: {runtime_path} exists: {runtime_path.exists()}")
     print(f"daemon socket exists: {socket_path} {socket_path.exists()}")
+
+    print(f"doctor artifacts dir: {doctor_artifacts_dir()} exists: {doctor_artifacts_dir().exists()}")
+    print(f"preserved audio dir: {preserved_audio_dir()} exists: {preserved_audio_dir().exists()}")
 
     # API key presence (never print the key)
     key_env = os.environ.get("OPENAI_API_KEY")
@@ -374,13 +457,54 @@ def doctor(audio_test, record_test, transcribe_test, record_seconds, play):
     print(f"ffmpeg found: {bool(ffmpeg_path)}")
     print(f"xdotool found: {bool(xdotool_path)}")
 
+
+@doctor.command("daemon")
+@click.option(
+    "--record-test",
+    is_flag=True,
+    help="Start/stop a daemon recording and report file size",
+)
+@click.option(
+    "--transcribe-test",
+    is_flag=True,
+    help="Transcribe the record-test audio file",
+)
+@click.option(
+    "--record-seconds",
+    default=1.0,
+    type=float,
+    show_default=True,
+    help="Seconds to record for --record-test",
+)
+@click.option(
+    "--play",
+    is_flag=True,
+    help="Play the record-test file via ffplay (if available)",
+)
+@click.option(
+    "--cleanup",
+    is_flag=True,
+    help="Delete record-test output after running (default: preserve)",
+)
+def doctor_daemon(record_test, transcribe_test, record_seconds, play, cleanup):
+    """Check daemon socket/health and (optionally) perform record/transcribe tests."""
+    socket_path = daemon_socket_path()
+    runtime_path = runtime_app_dir()
+    print(f"runtime dir: {runtime_path} exists: {runtime_path.exists()}")
+    print(f"daemon socket exists: {socket_path} {socket_path.exists()}")
+
     # Daemon ping (avoid falling back to subprocess mode)
     if socket_path.exists():
         t0 = time.time()
-        resp = daemon_request("status")
+        try:
+            resp = send_request("status", socket_path=socket_path)
+        except IpcError as e:
+            resp = {"error": str(e)}
         dt_ms = int((time.time() - t0) * 1000)
         print(f"daemon status ms: {dt_ms}")
         print(f"daemon status resp: {resp}")
+    else:
+        print("daemon status: skipped (daemon socket missing)", file=sys.stderr)
 
     recorded_file = None
     if record_test:
@@ -388,17 +512,20 @@ def doctor(audio_test, record_test, transcribe_test, record_seconds, play):
             print("record-test: skipped (daemon socket missing)", file=sys.stderr)
         else:
             try:
-                status = daemon_request("status") or {}
+                status = try_send_request("status", socket_path=socket_path) or {}
                 if status.get("status") == "recording":
                     print("record-test: skipped (daemon already recording)", file=sys.stderr)
                 else:
-                    print(f"record-test: recording for {record_seconds:.1f}s... speak now", file=sys.stderr)
-                    start_resp = daemon_request("start") or {}
+                    print(
+                        f"record-test: recording for {record_seconds:.1f}s... speak now",
+                        file=sys.stderr,
+                    )
+                    start_resp = try_send_request("start", socket_path=socket_path) or {}
                     if start_resp.get("error"):
                         print(f"record-test start error: {start_resp.get('error')}", file=sys.stderr)
                     else:
-                        time.sleep(max(0.1, record_seconds))
-                        stop_resp = daemon_request("stop") or {}
+                        time.sleep(max(0.1, float(record_seconds)))
+                        stop_resp = try_send_request("stop", socket_path=socket_path) or {}
                         recorded_file = stop_resp.get("audio_file")
                         if stop_resp.get("error"):
                             print(f"record-test stop error: {stop_resp.get('error')}", file=sys.stderr)
@@ -406,6 +533,13 @@ def doctor(audio_test, record_test, transcribe_test, record_seconds, play):
                             size = Path(recorded_file).stat().st_size
                             print(f"record-test file: {recorded_file}")
                             print(f"record-test bytes: {size}")
+                            if cleanup:
+                                print("record-test output: will delete (--cleanup)", file=sys.stderr)
+                            else:
+                                preserved = _preserve_doctor_audio_file(Path(recorded_file))
+                                if str(preserved) != str(recorded_file):
+                                    print(f"record-test preserved: {preserved}")
+                                recorded_file = str(preserved)
                         else:
                             print("record-test: no audio file produced", file=sys.stderr)
             except Exception as e:
@@ -476,19 +610,39 @@ def doctor(audio_test, record_test, transcribe_test, record_seconds, play):
             except Exception as e:
                 print(f"transcribe-test error: {e}", file=sys.stderr)
 
-    if audio_test:
+    if cleanup and recorded_file and Path(recorded_file).exists():
         try:
-            import numpy as np
-            import sounddevice as sd
-
-            fs = 16000
-            frames = int(0.5 * fs)
-            data = sd.rec(frames, samplerate=fs, channels=1, dtype="int16")
-            sd.wait()
-            max_amp = int(np.max(np.abs(data))) if data.size else 0
-            print(f"audio-test max_amp: {max_amp}")
+            Path(recorded_file).unlink()
         except Exception as e:
-            print(f"audio-test error: {e}", file=sys.stderr)
+            print(f"cleanup error: {e}", file=sys.stderr)
+
+
+@doctor.command("audio")
+@click.option(
+    "--seconds",
+    default=0.5,
+    type=float,
+    show_default=True,
+    help="Seconds to record for microphone level test",
+)
+def doctor_audio(seconds: float = 0.5):
+    """Record briefly and report microphone levels."""
+    try:
+        import numpy as np
+        import sounddevice as sd
+    except Exception as e:
+        print(f"audio-test error: {e}", file=sys.stderr)
+        return
+
+    try:
+        fs = 16000
+        frames = int(max(0.01, float(seconds)) * fs)
+        data = sd.rec(frames, samplerate=fs, channels=1, dtype="int16")
+        sd.wait()
+        max_amp = int(np.max(np.abs(data))) if data.size else 0
+        print(f"audio-test max_amp: {max_amp}")
+    except Exception as e:
+        print(f"audio-test error: {e}", file=sys.stderr)
 
 
 @main.command()
@@ -496,7 +650,7 @@ def cancel():
     """Cancel active recording without transcribing."""
     try:
         # Try daemon first
-        response = daemon_request('cancel')
+        response = try_send_request("cancel")
         if response:
             if 'error' in response:
                 print(f"Error: {response['error']}", file=sys.stderr)
@@ -509,15 +663,23 @@ def cancel():
         # Get active session
         session = RecordingSession.get_current_session()
         pid = session['pid']
+        audio_file = session.get("audio_file")
         
         # Send SIGTERM to recording process
         try:
-            os.kill(pid, signal.SIGTERM)
+            os.kill(pid, signal.SIGINT)
         except ProcessLookupError:
             pass  # Process already gone
         
         # Clean up session
         RecordingSession.cleanup_session(session)
+
+        # Best-effort cleanup if the subprocess already saved something.
+        if audio_file and os.path.exists(audio_file):
+            try:
+                os.unlink(audio_file)
+            except Exception:
+                pass
         
         print("Recording cancelled")
         
@@ -530,15 +692,21 @@ def cancel():
 
 
 @main.command()
-def daemon():
+@click.pass_context
+def daemon(ctx):
     """Run the voicepipe daemon service."""
     try:
+        debug = bool((ctx.obj or {}).get("debug"))
+        configure_logging(debug=debug, default_level=logging.INFO)
+
+        from .daemon import RecordingDaemon
+
         daemon = RecordingDaemon()
         daemon.start()
     except KeyboardInterrupt:
-        print("\nDaemon stopped by user")
+        logger.info("Daemon stopped by user")
     except Exception as e:
-        print(f"Daemon error: {e}", file=sys.stderr)
+        logger.exception("Daemon error: %s", e)
         sys.exit(1)
 
 

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""
-Systray icon script - shows the feh marked icon in system tray
+"""Example systray icon script (experimental).
+
+This is not part of the supported Voicepipe CLI surface; it exists as a
+reference for pystray usage.
 """
 
 import sys

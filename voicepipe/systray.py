@@ -94,8 +94,23 @@ class SystrayManager:
     
     def _on_cancel(self, icon, item):
         """Handle cancel from systray."""
-        # This would need to be connected to the daemon
-        logger.info("Cancel requested from systray")
+        # Avoid blocking the UI thread.
+        def _send_cancel():
+            try:
+                from .ipc import try_send_request
+
+                resp = try_send_request("cancel")
+                if not resp:
+                    logger.warning("Systray cancel failed: daemon unavailable")
+                    return
+                if resp.get("error"):
+                    logger.warning("Systray cancel failed: %s", resp.get("error"))
+                    return
+                logger.info("Systray cancel requested")
+            except Exception as e:
+                logger.exception("Systray cancel error: %s", e)
+
+        threading.Thread(target=_send_cancel, daemon=True).start()
 
 # Global instance
 _systray = None

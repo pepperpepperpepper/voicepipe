@@ -5,6 +5,7 @@ import sys
 import signal
 import socket
 import json
+import logging
 import threading
 import tempfile
 import time
@@ -12,26 +13,22 @@ from pathlib import Path
 
 import sounddevice as sd
 
+from .device import parse_device_index
+from .logging_utils import configure_logging
+from .paths import audio_tmp_dir, daemon_socket_path
 from .recorder import FastAudioRecorder
 from .systray import get_systray
 
-
-def _runtime_dir() -> Path:
-    xdg_runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
-    if xdg_runtime_dir:
-        return Path(xdg_runtime_dir)
-    run_user_dir = Path("/run/user") / str(os.getuid())
-    if run_user_dir.exists():
-        return run_user_dir
-    return Path("/tmp")
-
+logger = logging.getLogger(__name__)
 
 class RecordingDaemon:
     """Background daemon that handles recording requests."""
     
-    SOCKET_PATH = _runtime_dir() / "voicepipe.sock"
+    SOCKET_PATH = daemon_socket_path()
     
     def __init__(self):
+        self._state_lock = threading.Lock()
+        self.socket = None
         self.recorder = None
         self.recording = False
         self.audio_file = None
@@ -47,7 +44,7 @@ class RecordingDaemon:
         Prefer the system's default input (and common virtual devices like
         PipeWire/Pulse) before trying everything else.
         """
-        print("Selecting audio input device...", file=sys.stderr)
+        logger.info("Selecting audio input device...")
 
         candidates = []
 
@@ -97,7 +94,7 @@ class RecordingDaemon:
                 name = str(device_index)
 
             try:
-                print(f"Testing device {device_index}: {name}", file=sys.stderr)
+                logger.debug("Testing device %s: %s", device_index, name)
                 with sd.InputStream(
                     device=device_index,
                     channels=1,
@@ -107,13 +104,13 @@ class RecordingDaemon:
                 ) as stream:
                     stream.read(1024)
 
-                print(f"✓ Using device {device_index}: {name}", file=sys.stderr)
+                logger.info("Using device %s: %s", device_index, name)
                 return device_index
             except Exception as e:
-                print(f"✗ Device {device_index} failed: {e}", file=sys.stderr)
+                logger.debug("Device %s failed: %s", device_index, e)
                 continue
 
-        print("No working input device found, falling back to device 0", file=sys.stderr)
+        logger.warning("No working input device found; falling back to device 0")
         return 0
 
     def _initialize_audio(self):
@@ -122,16 +119,30 @@ class RecordingDaemon:
             # Find a working audio device automatically
             self.default_device = self._find_working_audio_device()
             device_info = sd.query_devices(self.default_device, 'input')
-            print(f"Audio initialized. Selected device {self.default_device}: {device_info['name']}", file=sys.stderr)
+            logger.info(
+                "Audio initialized. Selected device %s: %s",
+                self.default_device,
+                device_info.get("name", ""),
+            )
             
             # Pre-create recorder instance to avoid initialization delay
-            self.recorder = FastAudioRecorder(device_index=self.default_device)
-            print("Recorder pre-initialized for fast startup", file=sys.stderr)
+            self.recorder = FastAudioRecorder(
+                device_index=self.default_device,
+                use_mp3=False,
+                max_duration=None,
+            )
+            logger.info("Recorder pre-initialized for fast startup")
         except Exception as e:
-            print(f"Warning: Could not pre-initialize audio: {e}", file=sys.stderr)
+            logger.warning("Could not pre-initialize audio: %s", e)
         
     def start(self):
         """Start the daemon service."""
+        # Ensure parent dir exists for the socket path.
+        try:
+            self.SOCKET_PATH.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+
         # Clean up any existing socket
         if self.SOCKET_PATH.exists():
             self.SOCKET_PATH.unlink()
@@ -145,7 +156,7 @@ class RecordingDaemon:
         signal.signal(signal.SIGTERM, self._signal_handler)
         signal.signal(signal.SIGINT, self._signal_handler)
         
-        print(f"Voicepipe daemon started. Socket: {self.SOCKET_PATH}", file=sys.stderr)
+        logger.info("Voicepipe daemon started. Socket: %s", self.SOCKET_PATH)
         
         # Main loop
         while self.running:
@@ -154,62 +165,79 @@ class RecordingDaemon:
                 threading.Thread(target=self._handle_client, args=(conn,)).start()
             except Exception as e:
                 if self.running:
-                    print(f"Error accepting connection: {e}", file=sys.stderr)
+                    logger.exception("Error accepting connection: %s", e)
                     
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals."""
-        print(f"Received signal {signum}, shutting down gracefully...", file=sys.stderr)
-        self.running = False
-        
-        # Stop any active recording first
-        if self.recording:
-            print("Stopping active recording...", file=sys.stderr)
-            try:
-                self._stop_recording()
-            except Exception as e:
-                print(f"Error stopping recording: {e}", file=sys.stderr)
-        
-        # Clean up recorder
-        if self.recorder:
-            self.recorder.cleanup()
+        logger.info("Received signal %s, shutting down gracefully...", signum)
+        with self._state_lock:
+            self.running = False
+
+            # Stop any active recording first
+            if self.recording:
+                logger.info("Stopping active recording...")
+                try:
+                    self._stop_recording()
+                except Exception as e:
+                    logger.exception("Error stopping recording: %s", e)
+
+            # Clean up recorder
+            if self.recorder:
+                self.recorder.cleanup()
+                self.recorder = None
         if self.socket:
             self.socket.close()
         if self.SOCKET_PATH.exists():
             self.SOCKET_PATH.unlink()
         
-        print("Daemon shutdown complete.", file=sys.stderr)
+        logger.info("Daemon shutdown complete.")
         sys.exit(0)
         
     def _handle_client(self, conn):
         """Handle client requests."""
         try:
-            data = conn.recv(1024).decode()
-            if not data:
+            conn.settimeout(2.0)
+            data = b""
+            request = None
+            while True:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+                if len(data) > 65536:
+                    raise ValueError("Request too large")
+                try:
+                    request = json.loads(data.decode())
+                    break
+                except json.JSONDecodeError:
+                    continue
+
+            if not request:
                 return
-                
-            request = json.loads(data)
+
             command = request.get('command')
             
-            if command == 'start':
-                response = self._start_recording(request.get('device'))
-            elif command == 'stop':
-                response = self._stop_recording()
-            elif command == 'cancel':
-                response = self._cancel_recording()
-            elif command == 'status':
-                response = self._get_status()
-            else:
-                response = {'error': f'Unknown command: {command}'}
+            with self._state_lock:
+                if command == 'start':
+                    response = self._start_recording(request.get('device'))
+                elif command == 'stop':
+                    response = self._stop_recording()
+                elif command == 'cancel':
+                    response = self._cancel_recording()
+                elif command == 'status':
+                    response = self._get_status()
+                else:
+                    response = {'error': f'Unknown command: {command}'}
                 
             try:
-                conn.send(json.dumps(response).encode())
+                conn.sendall(json.dumps(response).encode())
             except (BrokenPipeError, ConnectionResetError):
                 pass
             
         except Exception as e:
             response = {'error': str(e)}
             try:
-                conn.send(json.dumps(response).encode())
+                conn.sendall(json.dumps(response).encode())
             except (BrokenPipeError, ConnectionResetError):
                 pass
         finally:
@@ -219,25 +247,38 @@ class RecordingDaemon:
         """Start a new recording."""
         if self.recording:
             return {'error': 'Recording already in progress'}
-            
+
         try:
-            # Ensure temp directory exists
-            Path('/tmp/voicepipe').mkdir(parents=True, exist_ok=True)
+            device_index, device_error = parse_device_index(device_index)
+            if device_error:
+                return {"error": device_error}
+
+            tmp_dir = audio_tmp_dir(create=True)
 
             # Create temp file
-            fd, self.audio_file = tempfile.mkstemp(suffix='.mp3', prefix='voicepipe_', dir='/tmp/voicepipe')
+            fd, self.audio_file = tempfile.mkstemp(
+                suffix=".wav",
+                prefix="voicepipe_",
+                dir=str(tmp_dir),
+            )
             os.close(fd)
             
             # Use pre-initialized recorder if device matches, otherwise create new one
-            if device_index and device_index != self.default_device:
+            if device_index is not None and device_index != self.default_device:
                 # Different device requested, create new recorder
                 if self.recorder:
                     self.recorder.cleanup()
-                self.recorder = FastAudioRecorder(device_index=device_index)
+                self.recorder = FastAudioRecorder(
+                    device_index=device_index,
+                    use_mp3=False,
+                    max_duration=None,
+                )
             elif not self.recorder:
                 # No pre-initialized recorder, create one
                 self.recorder = FastAudioRecorder(
-                    device_index=device_index or self.default_device
+                    device_index=device_index if device_index is not None else self.default_device,
+                    use_mp3=False,
+                    max_duration=None,
                 )
             
             # Start recording with existing recorder
@@ -270,15 +311,16 @@ class RecordingDaemon:
     
     def _timeout_callback(self):
         """Called when recording timeout is reached."""
-        if self.recording:
-            print("Recording timeout reached (5 minutes), stopping...", file=sys.stderr)
-            self._timeout_triggered = True
-            try:
-                self._stop_recording()
-            except Exception as e:
-                print(f"Error during timeout handling: {e}", file=sys.stderr)
-                # Ensure we clean up gracefully even if stop fails
-                self._cleanup_timeout_state()
+        with self._state_lock:
+            if self.recording:
+                logger.info("Recording timeout reached (5 minutes), stopping...")
+                self._timeout_triggered = True
+                try:
+                    self._stop_recording()
+                except Exception as e:
+                    logger.exception("Error during timeout handling: %s", e)
+                    # Ensure we clean up gracefully even if stop fails
+                    self._cleanup_timeout_state()
             
     def _stop_recording(self):
         """Stop recording and save audio."""
@@ -378,7 +420,7 @@ class RecordingDaemon:
                     self.recorder.stop_recording()
                     self.recorder.cleanup()
                 except Exception as e:
-                    print(f"Error cleaning up recorder: {e}", file=sys.stderr)
+                    logger.exception("Error cleaning up recorder: %s", e)
             
             # Hide systray icon
             get_systray().hide()
@@ -389,11 +431,12 @@ class RecordingDaemon:
             # Keep audio_file reference so the file isn't deleted
             
         except Exception as e:
-            print(f"Error in cleanup_timeout_state: {e}", file=sys.stderr)
+            logger.exception("Error in cleanup_timeout_state: %s", e)
 
 
 def main():
     """Run the daemon."""
+    configure_logging(default_level=logging.INFO)
     daemon = RecordingDaemon()
     daemon.start()
 

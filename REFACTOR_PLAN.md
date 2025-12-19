@@ -67,6 +67,25 @@ This plan targets maintainability and reducing operational complexity beyond the
      - Use one canonical system for units (rendered in Python via `voicepipe/systemd.py`).
      - Introduce a `voicepipe.target` so starting/stopping “Voicepipe” is one systemd command.
 
+## Systemd target follow-ups
+
+1) [x] **Docs: consistently recommend `voicepipe.target`**
+   - Replace remaining references to restarting/checking only individual services with:
+     - `voicepipe service restart`
+     - `systemctl --user restart voicepipe.target`
+
+2) [x] **Doctor: prefer `voicepipe.target` restart + validate unit wiring**
+   - Extend `voicepipe doctor systemd` to:
+     - show whether the target wants both services
+     - show whether services are `PartOf=voicepipe.target`
+     - suggest `voicepipe service restart` / `systemctl --user restart voicepipe.target`
+
+3) [x] **Add unit rendering tests**
+   - Assert:
+     - recorder/transcriber include `PartOf=voicepipe.target`
+     - recorder/transcriber include `EnvironmentFile=-%h/.config/voicepipe/voicepipe.env`
+     - target includes `Wants=voicepipe-recorder.service voicepipe-transcriber.service`
+
 ## Suggested sequencing / checkpoints
 
 - Phase 1: CLI split + shared helpers (low risk, big readability win)

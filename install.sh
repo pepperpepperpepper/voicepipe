@@ -116,10 +116,10 @@ if command -v systemctl &> /dev/null; then
     echo "  $HOME/.local/bin/voicepipe service start"
     echo
     echo "To check service status:"
-    echo "  systemctl --user status voicepipe-recorder.service voicepipe-transcriber.service"
+    echo "  systemctl --user status voicepipe.target"
     echo
     echo "To restart services after API key changes:"
-    echo "  systemctl --user restart voicepipe-transcriber.service"
+    echo "  systemctl --user restart voicepipe.target"
 fi
 
 echo
@@ -150,8 +150,8 @@ echo "  echo 'OPENAI_API_KEY=sk-...' >> $VOICEPIPE_ENV_FILE"
 echo "Or (recommended, avoids shell history):"
 echo "  echo 'sk-...' | $HOME/.local/bin/voicepipe config set-openai-key --from-stdin"
 echo
-echo "Then restart the transcriber service:"
-echo "  systemctl --user restart voicepipe-transcriber.service"
+echo "Then restart Voicepipe:"
+echo "  systemctl --user restart voicepipe.target"
 echo
 echo "Hotkey Setup:"
 echo "============="

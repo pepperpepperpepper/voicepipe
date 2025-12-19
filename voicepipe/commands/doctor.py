@@ -147,9 +147,15 @@ def doctor_systemd() -> None:
             click.echo(f"  systemctl cat failed: {(cat.stderr or '').strip()}")
             continue
 
-        if unit != TARGET_UNIT:
-            has_env_file = "/.config/voicepipe/voicepipe.env" in (cat.stdout or "")
+        unit_text = cat.stdout or ""
+        if unit == TARGET_UNIT:
+            wants_both = (RECORDER_UNIT in unit_text) and (TRANSCRIBER_UNIT in unit_text)
+            click.echo(f"  unit wants recorder+transcriber: {wants_both}")
+        else:
+            has_env_file = "/.config/voicepipe/voicepipe.env" in unit_text
             click.echo(f"  unit references voicepipe.env: {has_env_file}")
+            part_of_target = f"PartOf={TARGET_UNIT}" in unit_text
+            click.echo(f"  unit PartOf {TARGET_UNIT}: {part_of_target}")
 
     # Suggested fixes
     if not (env_values.get("OPENAI_API_KEY") or "").strip() and not (
@@ -162,7 +168,8 @@ def doctor_systemd() -> None:
     click.echo("  voicepipe service install", err=True)
     click.echo("  voicepipe service enable", err=True)
     click.echo("  voicepipe service start", err=True)
-    click.echo(f"  systemctl --user restart {TRANSCRIBER_UNIT}", err=True)
+    click.echo("  voicepipe service restart", err=True)
+    click.echo(f"  systemctl --user restart {TARGET_UNIT}", err=True)
 
 
 def _doctor_daemon(

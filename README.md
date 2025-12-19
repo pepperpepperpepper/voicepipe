@@ -82,9 +82,11 @@ Voicepipe requires an OpenAI API key. Set it up using one of these methods:
    ```bash
    echo 'your-api-key-here' | voicepipe config set-openai-key --from-stdin
    ```
-   If you use the systemd services, restart the transcriber after changes:
+   If you use the systemd services, restart Voicepipe after changes:
    ```bash
-   systemctl --user restart voicepipe-transcriber.service
+   voicepipe service restart
+   # or:
+   systemctl --user restart voicepipe.target
    ```
 
 2. **Environment variable** (works for interactive shells; systemd services won’t see `.bashrc` exports):

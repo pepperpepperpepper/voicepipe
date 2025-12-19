@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 
 import click
 
+from voicepipe.config import ensure_env_file, read_env_file
 from voicepipe.systemd import (
     RECORDER_UNIT,
     TARGET_UNIT,
@@ -16,6 +18,7 @@ from voicepipe.systemd import (
     selected_units,
     systemctl_cat,
     systemctl_path,
+    user_unit_dir,
 )
 
 
@@ -50,6 +53,10 @@ def service_install() -> None:
 
     result = install_user_units()
     run_systemctl(["daemon-reload"], check=False)
+    env_path = ensure_env_file()
+    env_values = read_env_file(env_path)
+    has_key = bool((env_values.get("OPENAI_API_KEY") or "").strip())
+
     click.echo("Installed systemd user units:")
     click.echo(f"  {result.recorder_path}")
     click.echo(f"  {result.transcriber_path}")
@@ -60,6 +67,49 @@ def service_install() -> None:
     click.echo("Or:")
     click.echo("  voicepipe service enable")
     click.echo("  voicepipe service start")
+    click.echo("Config:")
+    click.echo(f"  env file: {env_path}")
+    if not has_key:
+        click.echo("  OPENAI_API_KEY not set (systemd won’t see your .bashrc exports).")
+        if (os.environ.get("OPENAI_API_KEY") or "").strip():
+            click.echo("  Detected OPENAI_API_KEY in this shell; migrate it with:")
+            click.echo("    voicepipe config migrate")
+        else:
+            click.echo("  Set it with (recommended, avoids shell history):")
+            click.echo("    echo 'sk-...' | voicepipe config set-openai-key --from-stdin")
+        click.echo("  Or run:")
+        click.echo("    voicepipe setup")
+
+
+@service_group.command("uninstall")
+def service_uninstall() -> None:
+    """Uninstall systemd user units from ~/.config/systemd/user/."""
+    if not systemctl_path():
+        raise click.ClickException("systemctl not found (is systemd installed?)")
+
+    # Stop/disable first to clean up wants/links.
+    run_systemctl(["disable", "--now", TARGET_UNIT], check=False)
+    run_systemctl(["disable", "--now", RECORDER_UNIT, TRANSCRIBER_UNIT], check=False)
+
+    unit_dir = user_unit_dir()
+    removed: list[str] = []
+    for unit in (RECORDER_UNIT, TRANSCRIBER_UNIT, TARGET_UNIT):
+        path = unit_dir / unit
+        try:
+            if path.exists():
+                path.unlink()
+                removed.append(str(path))
+        except Exception as e:
+            raise click.ClickException(f"failed to remove {path}: {e}") from e
+
+    run_systemctl(["daemon-reload"], check=False)
+
+    if removed:
+        click.echo("Removed systemd user units:")
+        for path in removed:
+            click.echo(f"  {path}")
+    else:
+        click.echo("No Voicepipe systemd user unit files found to remove.")
 
 
 @service_group.command("enable")

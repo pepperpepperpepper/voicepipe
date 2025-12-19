@@ -26,6 +26,12 @@ DEFAULT_TRANSCRIBE_MODEL = "gpt-4o-transcribe"
 
 _ENV_LOADED = False
 
+DEFAULT_ENV_FILE_TEMPLATE = """# Voicepipe environment config (used by systemd services and the CLI)
+# OPENAI_API_KEY=sk-...
+# VOICEPIPE_DEVICE=12
+# VOICEPIPE_TRANSCRIBE_MODEL=gpt-4o-transcribe
+"""
+
 
 class VoicepipeConfigError(RuntimeError):
     pass
@@ -160,6 +166,27 @@ def env_file_hint(*, create_dir: bool = False) -> str:
         except Exception:
             pass
     return str(path)
+
+
+def ensure_env_file(
+    *,
+    path: Optional[Path] = None,
+    create_dir: bool = True,
+    file_mode: int = 0o600,
+    dir_mode: int = 0o700,
+) -> Path:
+    """Ensure the canonical env file exists (without setting any values)."""
+
+    env_path = env_file_path() if path is None else Path(path)
+    if create_dir:
+        env_path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_path(env_path.parent, dir_mode)
+
+    if not env_path.exists():
+        _atomic_write(env_path, DEFAULT_ENV_FILE_TEMPLATE)
+
+    ensure_private_path(env_path, file_mode)
+    return env_path
 
 
 def read_env_file(path: Optional[Path] = None) -> dict[str, str]:

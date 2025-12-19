@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import os
+import shlex
+import shutil
+import subprocess
 import sys
 
 import click
 
 from voicepipe.config import (
     detect_openai_api_key,
+    ensure_env_file,
     env_file_path,
     env_file_permissions_ok,
     get_transcribe_model,
@@ -86,6 +90,34 @@ def config_show() -> None:
     click.echo(f"transcribe model resolved: {get_transcribe_model()}")
     click.echo(
         f"device env set (VOICEPIPE_DEVICE): {bool(os.environ.get('VOICEPIPE_DEVICE'))}"
+    )
+
+
+@config_group.command("edit")
+def config_edit() -> None:
+    """Edit the canonical env file in $EDITOR (never prints secrets)."""
+    env_path = ensure_env_file()
+
+    editor = (os.environ.get("EDITOR") or "").strip()
+    if not editor:
+        for candidate in ("nano", "vim", "vi"):
+            path = shutil.which(candidate)
+            if path:
+                editor = path
+                break
+
+    if not editor:
+        raise click.ClickException("No editor found (set $EDITOR)")
+
+    cmd = [*shlex.split(editor), str(env_path)]
+    rc = subprocess.run(cmd, check=False).returncode
+    if rc != 0:
+        raise SystemExit(rc)
+
+    click.echo(
+        "If you're using the systemd services, restart Voicepipe to pick up changes:\n"
+        "  voicepipe service restart\n"
+        f"  # or: systemctl --user restart {TARGET_UNIT}"
     )
 
 

@@ -30,12 +30,8 @@ git clone https://github.com/yourusername/voicepipe.git
 cd voicepipe
 ./install.sh
 
-# Set API key (recommended; safe for systemd)
-echo 'sk-...' | voicepipe config set-openai-key --from-stdin
-
-# Enable and start both services
-voicepipe service enable
-voicepipe service start
+# One-command setup (config + systemd services)
+voicepipe setup
 ```
 
 The systemd user services provide:
@@ -70,6 +66,11 @@ sudo apt-get install portaudio19-dev xdotool
 ### API Key Setup
 
 Voicepipe requires an OpenAI API key. Set it up using one of these methods:
+
+0. **One-command setup (recommended)**:
+   ```bash
+   voicepipe setup
+   ```
 
 1. **Env file (recommended; works for systemd services + CLI)**:
    ```bash

@@ -102,3 +102,17 @@ This plan targets maintainability and reducing operational complexity beyond the
 - Phase 3: Recorder consolidation (medium risk; verify with `voicepipe doctor daemon --record-test`)
 - Phase 4: Unify transcription + typing (improves hotkey reliability, reduces drift)
 - Phase 5: Permissions hardening + installer simplification
+
+## Next wave (ops/UX)
+
+1) [x] **Add `voicepipe setup` (one-command install/enable/start + key config)**
+   - Goal: eliminate “what do I run next?” after install and make the systemd + API-key flow obvious.
+
+2) [x] **Service install: always point users at the canonical env file**
+   - Ensure `voicepipe service install` prints the env file path and the preferred key setup commands.
+
+3) [x] **Add `voicepipe service uninstall`**
+   - Remove installed units from `~/.config/systemd/user/` and run `systemctl --user daemon-reload`.
+
+4) [x] **Add `voicepipe config edit` (optional)**
+   - Open `~/.config/voicepipe/voicepipe.env` in `$EDITOR` and remind to restart `voicepipe.target`.

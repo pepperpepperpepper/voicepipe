@@ -8,11 +8,13 @@ from .config import config_group
 from .doctor import doctor_group, doctor_legacy
 from .recording import cancel, daemon, start, status, stop, transcribe_file
 from .service import service_group
+from .setup import setup
 
 
 def register(main: click.Group) -> None:
     main.add_command(config_group)
     main.add_command(service_group)
+    main.add_command(setup)
     main.add_command(doctor_group)
     main.add_command(doctor_legacy)
 
@@ -22,4 +24,3 @@ def register(main: click.Group) -> None:
     main.add_command(cancel)
     main.add_command(transcribe_file)
     main.add_command(daemon)
-

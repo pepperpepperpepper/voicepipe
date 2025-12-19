@@ -149,6 +149,8 @@ echo "Example:"
 echo "  echo 'OPENAI_API_KEY=sk-...' >> $VOICEPIPE_ENV_FILE"
 echo "Or (recommended, avoids shell history):"
 echo "  echo 'sk-...' | $HOME/.local/bin/voicepipe config set-openai-key --from-stdin"
+echo "Or (recommended):"
+echo "  $HOME/.local/bin/voicepipe setup"
 echo
 echo "Then restart Voicepipe:"
 echo "  systemctl --user restart voicepipe.target"

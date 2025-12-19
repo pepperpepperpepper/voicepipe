@@ -70,3 +70,22 @@ def test_read_env_file_parses_basic_dotenv(tmp_path: Path, monkeypatch) -> None:
     assert values["FOO"] == "bar"
     assert values["QUOTED"] == "baz"
     assert values["EMPTY"] == ""
+
+
+def test_ensure_env_file_creates_template(tmp_path: Path, monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    env_path = config.ensure_env_file()
+    assert env_path.exists()
+    assert "Voicepipe environment config" in env_path.read_text(encoding="utf-8")
+    assert config.env_file_permissions_ok(env_path) is True
+
+
+def test_ensure_env_file_does_not_overwrite(tmp_path: Path, monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    env_path = config.env_file_path()
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text("OPENAI_API_KEY=existing\n", encoding="utf-8")
+    config.ensure_env_file()
+    assert env_path.read_text(encoding="utf-8") == "OPENAI_API_KEY=existing\n"

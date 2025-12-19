@@ -9,6 +9,8 @@ ExecStart=VOICEPIPE_COMMAND daemon
 Restart=on-failure
 RestartSec=5
 Environment="PATH=/usr/local/bin:/usr/bin:/bin:HOME_DIR/.local/bin"
+Environment="HOME=%h"
+EnvironmentFile=-%h/.config/voicepipe/voicepipe.env
 # Import display environment dynamically
 PassEnvironment=DISPLAY XAUTHORITY WAYLAND_DISPLAY
 # Fallback if not set

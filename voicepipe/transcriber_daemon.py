@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from voicepipe.config import get_transcribe_model, load_environment
 from voicepipe.logging_utils import configure_logging
 from voicepipe.paths import runtime_app_dir, transcriber_socket_path
 from voicepipe.transcriber import WhisperTranscriber
@@ -169,13 +170,11 @@ def main(argv: Optional[list[str]] = None) -> None:
     # Keep it simple: configuration via env vars.
     del argv
     configure_logging(default_level=logging.INFO)
-    model = os.environ.get("VOICEPIPE_TRANSCRIBE_MODEL") or os.environ.get(
-        "VOICEPIPE_MODEL", "gpt-4o-transcribe"
-    )
+    load_environment()
+    model = get_transcribe_model()
     logger.info("Initializing transcriber (model=%s)...", model)
     serve(model=model)
 
 
 if __name__ == "__main__":
     main()
-

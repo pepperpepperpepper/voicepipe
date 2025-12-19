@@ -1,9 +1,9 @@
 """OpenAI Whisper API integration for transcription."""
 
-import os
 import sys
-from pathlib import Path
 from typing import Optional
+
+from .config import get_openai_api_key
 
 try:
     from openai import OpenAI
@@ -30,25 +30,7 @@ Example: If speaker says "open quote hello close quote", transcribe as: "hello" 
     
     def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o-transcribe"):
         """Initialize the transcriber with API key and model."""
-        self.api_key = api_key or os.environ.get('OPENAI_API_KEY')
-        
-        if not self.api_key:
-            # Check common config locations
-            config_paths = [
-                Path.home() / '.config' / 'voicepipe' / 'api_key',
-                Path.home() / '.voicepipe_api_key',
-            ]
-            
-            for path in config_paths:
-                if path.exists():
-                    self.api_key = path.read_text().strip()
-                    break
-        
-        if not self.api_key:
-            raise ValueError(
-                "OpenAI API key not found. Please set OPENAI_API_KEY environment variable "
-                "or save your API key to ~/.config/voicepipe/api_key"
-            )
+        self.api_key = api_key or get_openai_api_key()
         
         self.client = OpenAI(api_key=self.api_key)
         self.model = model

@@ -12,11 +12,7 @@ from pathlib import Path
 
 import click
 
-try:
-    from dotenv import load_dotenv
-except Exception:
-    load_dotenv = None
-
+from .config import detect_openai_api_key, env_file_path, legacy_api_key_paths, load_environment
 from .ipc import daemon_socket_path, send_request, try_send_request, IpcError
 from .logging_utils import configure_logging
 from .paths import doctor_artifacts_dir, preserved_audio_dir, runtime_app_dir
@@ -127,8 +123,7 @@ def main(ctx, debug):
     """Voicepipe - Voice recording and transcription CLI tool."""
     ctx.ensure_object(dict)
     ctx.obj["debug"] = bool(debug)
-    if load_dotenv is not None:
-        load_dotenv()
+    load_environment()
     configure_logging(debug=bool(debug), default_level=logging.WARNING)
 
 
@@ -446,11 +441,12 @@ def doctor_env():
 
     # API key presence (never print the key)
     key_env = os.environ.get("OPENAI_API_KEY")
-    key_file = Path.home() / ".config" / "voicepipe" / "api_key"
-    key_alt = Path.home() / ".voicepipe_api_key"
+    key_env_file = env_file_path()
     print(f"OPENAI_API_KEY env set: {bool(key_env)}")
-    print(f"~/.config/voicepipe/api_key exists: {key_file.exists()}")
-    print(f"~/.voicepipe_api_key exists: {key_alt.exists()}")
+    print(f"env file exists: {key_env_file} {key_env_file.exists()}")
+    for path in legacy_api_key_paths():
+        print(f"legacy key file exists: {path} {path.exists()}")
+    print(f"api key resolvable: {detect_openai_api_key()}")
 
     ffmpeg_path = shutil.which("ffmpeg")
     xdotool_path = shutil.which("xdotool")

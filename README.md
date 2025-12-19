@@ -68,19 +68,31 @@ sudo apt-get install portaudio19-dev xdotool
 
 Voicepipe requires an OpenAI API key. Set it up using one of these methods:
 
-1. **Environment variable** (recommended):
+1. **Env file (recommended; works for systemd services + CLI)**:
+   ```bash
+   mkdir -p ~/.config/voicepipe
+   chmod 700 ~/.config/voicepipe
+   echo 'OPENAI_API_KEY=your-api-key-here' >> ~/.config/voicepipe/voicepipe.env
+   chmod 600 ~/.config/voicepipe/voicepipe.env
+   ```
+   If you use the systemd services, restart the transcriber after changes:
+   ```bash
+   systemctl --user restart voicepipe-transcriber.service
+   ```
+
+2. **Environment variable** (works for interactive shells; systemd services won’t see `.bashrc` exports):
    ```bash
    export OPENAI_API_KEY="your-api-key-here"
    ```
    Voicepipe also loads a `.env` file (if present) on startup.
 
-2. **Config file**:
+3. **Legacy config file**:
    ```bash
    mkdir -p ~/.config/voicepipe
    echo "your-api-key-here" > ~/.config/voicepipe/api_key
    ```
 
-3. **Alternative config location**:
+4. **Legacy alternative location**:
    ```bash
    echo "your-api-key-here" > ~/.voicepipe_api_key
    ```

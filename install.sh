@@ -74,6 +74,25 @@ if [ -x "$VOICEPIPE_TRANSCRIBER_DAEMON_CMD" ]; then
     echo "✓ voicepipe-transcriber-daemon symlinked to ~/.local/bin/voicepipe-transcriber-daemon"
 fi
 
+# Ensure a systemd-friendly env file exists for config/secrets.
+VOICEPIPE_CONFIG_DIR="$HOME/.config/voicepipe"
+VOICEPIPE_ENV_FILE="$VOICEPIPE_CONFIG_DIR/voicepipe.env"
+mkdir -p "$VOICEPIPE_CONFIG_DIR"
+chmod 700 "$VOICEPIPE_CONFIG_DIR" 2>/dev/null || true
+if [ ! -f "$VOICEPIPE_ENV_FILE" ]; then
+    if [ -n "$OPENAI_API_KEY" ]; then
+        printf 'OPENAI_API_KEY=%s\n' "$OPENAI_API_KEY" > "$VOICEPIPE_ENV_FILE"
+    else
+        cat > "$VOICEPIPE_ENV_FILE" << EOF
+# Voicepipe environment config (used by systemd services and the CLI)
+# OPENAI_API_KEY=sk-...
+# VOICEPIPE_DEVICE=12
+# VOICEPIPE_TRANSCRIBE_MODEL=gpt-4o-transcribe
+EOF
+    fi
+    chmod 600 "$VOICEPIPE_ENV_FILE" 2>/dev/null || true
+fi
+
 # Setup systemd service
 if command -v systemctl &> /dev/null; then
     echo "Setting up systemd user service..."
@@ -165,9 +184,13 @@ echo "• Fast recording startup (daemon mode)"
 echo "• Systray icon during recording"
 echo "• Automatic transcription with OpenAI"
 echo
-echo "Remember to set your OpenAI API key in your shell configuration:"
-echo "  Add 'export OPENAI_API_KEY=your-api-key-here' to ~/.bashrc or ~/.api-keys"
-echo "  Then restart the voicepipe service: systemctl --user restart voicepipe-transcriber.service"
+echo "Set your OpenAI API key here (works for systemd services and CLI):"
+echo "  $VOICEPIPE_ENV_FILE"
+echo "Example:"
+echo "  echo 'OPENAI_API_KEY=sk-...' >> $VOICEPIPE_ENV_FILE"
+echo
+echo "Then restart the transcriber service:"
+echo "  systemctl --user restart voicepipe-transcriber.service"
 echo
 echo "Hotkey Setup:"
 echo "============="

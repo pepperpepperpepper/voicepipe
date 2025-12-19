@@ -33,7 +33,7 @@ Conventions:
   - Tasks:
     - Choose a canonical env file path (recommended):
       - `~/.config/voicepipe/voicepipe.env`
-    - Update `voicepipe-transcriber.service.template` (and recorder unit if needed) to include:
+    - Ensure systemd user units (rendered by `voicepipe/systemd.py`) include:
       - `EnvironmentFile=-%h/.config/voicepipe/voicepipe.env`
     - Ensure this env file can also be used by non-systemd runs (via the shared config module).
   - Acceptance:
@@ -61,7 +61,7 @@ Conventions:
   - Goal: hide systemd complexity behind one CLI.
   - Tasks:
     - Add `voicepipe service` subcommands:
-      - `install` (writes user units from templates + daemon-reload)
+      - `install` (renders/writes user units via `voicepipe/systemd.py` + daemon-reload)
       - `enable`, `disable`
       - `start`, `stop`, `restart`
       - `status`

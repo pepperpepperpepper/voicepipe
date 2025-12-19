@@ -95,66 +95,22 @@ fi
 
 # Setup systemd service
 if command -v systemctl &> /dev/null; then
-    echo "Setting up systemd user service..."
-    
-    # Create systemd user directory
-    mkdir -p ~/.config/systemd/user/
-    
-    # Generate service file
-    if [ -f "voicepipe-recorder.service.template" ]; then
-        sed -e "s|VOICEPIPE_COMMAND|$VOICEPIPE_CMD|g" \
-            -e "s|HOME_DIR|$HOME|g" \
-            voicepipe-recorder.service.template > ~/.config/systemd/user/voicepipe-recorder.service
+    echo "Setting up systemd user services..."
+    if "$VOICEPIPE_CMD" service install; then
+        echo "✓ Systemd user units installed"
     else
-        # Create service file directly
-        cat > ~/.config/systemd/user/voicepipe-recorder.service << EOF
-[Unit]
-Description=Voicepipe Recorder Service
-After=graphical-session.target
-
-[Service]
-Type=simple
-ExecStart=$VOICEPIPE_CMD daemon
-Restart=on-failure
-RestartSec=5
-Environment="PATH=/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin"
-
-# Security hardening
-PrivateTmp=no
-ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/tmp %t
-NoNewPrivileges=true
-
-[Install]
-WantedBy=default.target
-EOF
+        echo "Warning: failed to install systemd user units." >&2
+        echo "You can retry with: $HOME/.local/bin/voicepipe service install" >&2
     fi
-    
-    # Reload systemd
-    systemctl --user daemon-reload
-    
-    # Install transcriber service from template
-    if [ -f "voicepipe-transcriber.service.template" ]; then
-        TRANSCRIBER_COMMAND="$VENV_PATH/bin/voicepipe-transcriber-daemon"
-        sed -e "s|{{TRANSCRIBER_COMMAND}}|$TRANSCRIBER_COMMAND|g" \
-            voicepipe-transcriber.service.template > ~/.config/systemd/user/voicepipe-transcriber.service
-    fi
-    
-    
-    
-    # Reload systemd
-    systemctl --user daemon-reload
-    
-    echo "✓ Systemd services configured"
     echo
     echo "Services installed:"
     echo "  • voicepipe-recorder.service - Fast recording daemon"
     echo "  • voicepipe-transcriber.service - Persistent transcription daemon"
+    echo "  • voicepipe.target - Starts/stops both"
     echo
     echo "To enable and start both services:"
-    echo "  systemctl --user enable voicepipe-recorder.service voicepipe-transcriber.service"
-    echo "  systemctl --user start voicepipe-recorder.service voicepipe-transcriber.service"
+    echo "  systemctl --user enable voicepipe.target"
+    echo "  systemctl --user start voicepipe.target"
     echo "Or:"
     echo "  $HOME/.local/bin/voicepipe service enable"
     echo "  $HOME/.local/bin/voicepipe service start"

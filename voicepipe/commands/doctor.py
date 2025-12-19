@@ -23,6 +23,7 @@ from voicepipe.ipc import IpcError, daemon_socket_path, send_request, try_send_r
 from voicepipe.paths import doctor_artifacts_dir, preserved_audio_dir, runtime_app_dir
 from voicepipe.systemd import (
     RECORDER_UNIT,
+    TARGET_UNIT,
     TRANSCRIBER_UNIT,
     systemctl_cat,
     systemctl_path,
@@ -114,7 +115,7 @@ def doctor_systemd() -> None:
     )
 
     # Basic unit status
-    units = [RECORDER_UNIT, TRANSCRIBER_UNIT]
+    units = [TARGET_UNIT, RECORDER_UNIT, TRANSCRIBER_UNIT]
     props_wanted = [
         "LoadState",
         "ActiveState",
@@ -142,11 +143,13 @@ def doctor_systemd() -> None:
             click.echo(f"  FragmentPath: {fragment}")
 
         cat = systemctl_cat(unit)
-        if cat.returncode == 0:
+        if cat.returncode != 0:
+            click.echo(f"  systemctl cat failed: {(cat.stderr or '').strip()}")
+            continue
+
+        if unit != TARGET_UNIT:
             has_env_file = "/.config/voicepipe/voicepipe.env" in (cat.stdout or "")
             click.echo(f"  unit references voicepipe.env: {has_env_file}")
-        else:
-            click.echo(f"  systemctl cat failed: {(cat.stderr or '').strip()}")
 
     # Suggested fixes
     if not (env_values.get("OPENAI_API_KEY") or "").strip() and not (
@@ -442,4 +445,3 @@ def doctor_legacy(
             play=bool(play),
             cleanup=False,
         )
-

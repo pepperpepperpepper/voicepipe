@@ -15,6 +15,7 @@ from voicepipe.config import env_file_path
 
 RECORDER_UNIT = "voicepipe-recorder.service"
 TRANSCRIBER_UNIT = "voicepipe-transcriber.service"
+TARGET_UNIT = "voicepipe.target"
 
 
 def user_unit_dir() -> Path:
@@ -54,6 +55,7 @@ def render_recorder_unit() -> str:
 Description=Voicepipe Recording Service
 After=graphical-session.target
 Wants=graphical-session.target
+PartOf={TARGET_UNIT}
 
 [Service]
 Type=simple
@@ -84,6 +86,7 @@ def render_transcriber_unit() -> str:
     return f"""[Unit]
 Description=Voicepipe Transcriber Service
 After=network.target
+PartOf={TARGET_UNIT}
 
 [Service]
 Type=simple
@@ -101,10 +104,21 @@ WantedBy=default.target
 """
 
 
+def render_target_unit() -> str:
+    return f"""[Unit]
+Description=Voicepipe (Recorder + Transcriber)
+Wants={RECORDER_UNIT} {TRANSCRIBER_UNIT}
+
+[Install]
+WantedBy=default.target
+"""
+
+
 @dataclass(frozen=True)
 class UnitInstallResult:
     recorder_path: Path
     transcriber_path: Path
+    target_path: Path
 
 
 def install_user_units(*, unit_dir: Optional[Path] = None) -> UnitInstallResult:
@@ -113,11 +127,17 @@ def install_user_units(*, unit_dir: Optional[Path] = None) -> UnitInstallResult:
 
     recorder_path = dest_dir / RECORDER_UNIT
     transcriber_path = dest_dir / TRANSCRIBER_UNIT
+    target_path = dest_dir / TARGET_UNIT
 
     recorder_path.write_text(render_recorder_unit(), encoding="utf-8")
     transcriber_path.write_text(render_transcriber_unit(), encoding="utf-8")
+    target_path.write_text(render_target_unit(), encoding="utf-8")
 
-    return UnitInstallResult(recorder_path=recorder_path, transcriber_path=transcriber_path)
+    return UnitInstallResult(
+        recorder_path=recorder_path,
+        transcriber_path=transcriber_path,
+        target_path=target_path,
+    )
 
 
 def run_systemctl(args: list[str], *, check: bool = False) -> subprocess.CompletedProcess:

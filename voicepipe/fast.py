@@ -76,9 +76,10 @@ def send_transcribe_request(audio_file: str) -> str:
             file=sys.stderr,
         )
         print(
-            "[TRANSCRIBE] Start it with: systemctl --user start voicepipe-transcriber.service",
+            "[TRANSCRIBE] Start it with: systemctl --user start voicepipe.target",
             file=sys.stderr,
         )
+        print("[TRANSCRIBE] Or: voicepipe service start", file=sys.stderr)
     try:
         return transcribe_audio_file(
             audio_file,
@@ -226,9 +227,10 @@ def execute_toggle() -> None:
         print(f"[TOGGLE] IPC unavailable: {e}", file=sys.stderr)
         print("Error: Cannot connect to voicepipe daemon. Is it running?", file=sys.stderr)
         print(
-            "Start it with: systemctl --user start voicepipe-recorder.service",
+            "Start it with: systemctl --user start voicepipe.target",
             file=sys.stderr,
         )
+        print("Or: voicepipe service start", file=sys.stderr)
         raise SystemExit(1)
     except IpcError as e:
         print(f"[TOGGLE] IPC error: {e}", file=sys.stderr)
@@ -311,9 +313,10 @@ def main(argv: Optional[list[str]] = None) -> None:
     except IpcUnavailable:
         print("Error: Cannot connect to voicepipe daemon. Is it running?", file=sys.stderr)
         print(
-            "Start it with: systemctl --user start voicepipe-recorder.service",
+            "Start it with: systemctl --user start voicepipe.target",
             file=sys.stderr,
         )
+        print("Or: voicepipe service start", file=sys.stderr)
         raise SystemExit(1)
     except IpcError as e:
         print(f"Error: {e}", file=sys.stderr)

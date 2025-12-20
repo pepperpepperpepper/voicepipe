@@ -128,7 +128,8 @@ def start(device: int | None) -> None:
     default=None,
     help=(
         "Transcription model to use (defaults to VOICEPIPE_TRANSCRIBE_MODEL / "
-        "VOICEPIPE_MODEL or gpt-4o-transcribe)"
+        "VOICEPIPE_MODEL; backend via VOICEPIPE_TRANSCRIBE_BACKEND). "
+        "You can also prefix: openai:whisper-1 or elevenlabs:scribe_v1"
     ),
 )
 @click.option(
@@ -210,7 +211,8 @@ def status() -> None:
     default=None,
     help=(
         "Transcription model to use (defaults to VOICEPIPE_TRANSCRIBE_MODEL / "
-        "VOICEPIPE_MODEL or gpt-4o-transcribe)"
+        "VOICEPIPE_MODEL; backend via VOICEPIPE_TRANSCRIBE_BACKEND). "
+        "You can also prefix: openai:whisper-1 or elevenlabs:scribe_v1"
     ),
 )
 @click.option(
@@ -279,7 +281,8 @@ def transcribe_file(
     default=None,
     help=(
         "Transcription model to use (defaults to VOICEPIPE_TRANSCRIBE_MODEL / "
-        "VOICEPIPE_MODEL or gpt-4o-transcribe)"
+        "VOICEPIPE_MODEL; backend via VOICEPIPE_TRANSCRIBE_BACKEND). "
+        "You can also prefix: openai:whisper-1 or elevenlabs:scribe_v1"
     ),
 )
 @click.option(
@@ -305,6 +308,13 @@ def dictate(
     prefer_daemon: bool,
 ) -> None:
     """Record from the mic, transcribe, and optionally type (one command)."""
+    if seconds is None:
+        if not sys.stdin.isatty():
+            raise click.ClickException("No TTY available; pass --seconds to auto-stop")
+    else:
+        if float(seconds) <= 0:
+            raise click.ClickException("--seconds must be > 0")
+
     backend = AutoRecorderBackend() if prefer_daemon else SubprocessRecorderBackend()
     started = False
     try:
@@ -312,13 +322,9 @@ def dictate(
         started = True
 
         if seconds is None:
-            if not sys.stdin.isatty():
-                raise click.ClickException("No TTY available; pass --seconds to auto-stop")
             click.echo("Recording... press ENTER to stop (Ctrl+C to cancel).", err=True)
             _ = sys.stdin.readline()
         else:
-            if float(seconds) <= 0:
-                raise click.ClickException("--seconds must be > 0")
             click.echo(f"Recording for {float(seconds):.1f}s...", err=True)
             time.sleep(float(seconds))
 

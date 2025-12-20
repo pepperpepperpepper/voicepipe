@@ -1,7 +1,8 @@
 """`voicepipe smoke` command.
 
 This is intended for manual, end-to-end verification in a real environment
-(audio deps + OpenAI API key). It is not used by the offline pytest suite.
+(audio deps + network + API key for your configured backend). It is not used by
+the offline pytest suite.
 """
 
 from __future__ import annotations
@@ -69,7 +70,8 @@ def _normalize(text: str) -> str:
     default=None,
     help=(
         "Transcription model to use (defaults to VOICEPIPE_TRANSCRIBE_MODEL / "
-        "VOICEPIPE_MODEL or gpt-4o-transcribe)"
+        "VOICEPIPE_MODEL; backend via VOICEPIPE_TRANSCRIBE_BACKEND). "
+        "You can also prefix: openai:whisper-1 or elevenlabs:scribe_v1"
     ),
 )
 @click.option(

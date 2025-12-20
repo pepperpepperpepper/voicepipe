@@ -13,10 +13,12 @@ from pathlib import Path
 import click
 
 from voicepipe.config import (
+    detect_elevenlabs_api_key,
     detect_openai_api_key,
     env_file_path,
     env_file_permissions_ok,
     legacy_api_key_paths,
+    legacy_elevenlabs_key_paths,
     read_env_file,
 )
 from voicepipe.ipc import IpcError, daemon_socket_path, send_request, try_send_request
@@ -29,7 +31,6 @@ from voicepipe.systemd import (
     systemctl_path,
     systemctl_show_properties,
 )
-from voicepipe.transcriber import WhisperTranscriber
 
 
 @click.group(name="doctor", invoke_without_command=True)
@@ -82,12 +83,19 @@ def doctor_env() -> None:
 
     # API key presence (never print the key)
     key_env = os.environ.get("OPENAI_API_KEY")
+    key_eleven_env = (os.environ.get("ELEVENLABS_API_KEY") or "") or (
+        os.environ.get("XI_API_KEY") or ""
+    )
     key_env_file = env_file_path()
     click.echo(f"OPENAI_API_KEY env set: {bool(key_env)}")
+    click.echo(f"ELEVENLABS_API_KEY/XI_API_KEY env set: {bool(key_eleven_env)}")
     click.echo(f"env file exists: {key_env_file} {key_env_file.exists()}")
     for path in legacy_api_key_paths():
         click.echo(f"legacy key file exists: {path} {path.exists()}")
+    for path in legacy_elevenlabs_key_paths():
+        click.echo(f"legacy elevenlabs key file exists: {path} {path.exists()}")
     click.echo(f"api key resolvable: {detect_openai_api_key()}")
+    click.echo(f"elevenlabs api key resolvable: {detect_elevenlabs_api_key()}")
 
     ffmpeg_path = shutil.which("ffmpeg")
     xdotool_path = shutil.which("xdotool")
@@ -105,13 +113,30 @@ def doctor_systemd() -> None:
     env_path = env_file_path()
     env_values = read_env_file(env_path)
 
+    backend_raw = (
+        env_values.get("VOICEPIPE_TRANSCRIBE_BACKEND")
+        or env_values.get("VOICEPIPE_BACKEND")
+        or "openai"
+    )
+    backend = str(backend_raw).strip().lower()
+    if backend in {"xi", "eleven", "eleven-labs"}:
+        backend = "elevenlabs"
+
+    has_openai_key = bool((env_values.get("OPENAI_API_KEY") or "").strip())
+    has_eleven_key = bool(
+        (env_values.get("ELEVENLABS_API_KEY") or "").strip()
+        or (env_values.get("XI_API_KEY") or "").strip()
+    )
+
     click.echo(f"env file: {env_path} exists: {env_path.exists()}")
     click.echo(f"env file perms 0600: {env_file_permissions_ok(env_path)}")
+    click.echo(f"transcribe backend (env file): {backend}")
+    click.echo(f"env file has OPENAI_API_KEY: {has_openai_key}")
+    click.echo(f"env file has ELEVENLABS_API_KEY/XI_API_KEY: {has_eleven_key}")
+    click.echo(f"OPENAI_API_KEY env set (this process): {bool(os.environ.get('OPENAI_API_KEY'))}")
     click.echo(
-        f"env file has OPENAI_API_KEY: {bool((env_values.get('OPENAI_API_KEY') or '').strip())}"
-    )
-    click.echo(
-        f"OPENAI_API_KEY env set (this process): {bool(os.environ.get('OPENAI_API_KEY'))}"
+        "ELEVENLABS_API_KEY/XI_API_KEY env set (this process): "
+        f"{bool((os.environ.get('ELEVENLABS_API_KEY') or '').strip() or (os.environ.get('XI_API_KEY') or '').strip())}"
     )
 
     # Basic unit status
@@ -158,15 +183,27 @@ def doctor_systemd() -> None:
             click.echo(f"  unit PartOf {TARGET_UNIT}: {part_of_target}")
 
     # Suggested fixes
-    if not (env_values.get("OPENAI_API_KEY") or "").strip() and not (
-        os.environ.get("OPENAI_API_KEY") or ""
-    ).strip():
-        click.echo("missing api key: set it with:", err=True)
-        click.echo("  voicepipe setup", err=True)
-        click.echo("  voicepipe config set-openai-key --from-stdin", err=True)
+    if backend == "elevenlabs":
+        if not has_eleven_key and not (
+            (os.environ.get("ELEVENLABS_API_KEY") or "").strip()
+            or (os.environ.get("XI_API_KEY") or "").strip()
+        ):
+            click.echo("missing api key: set it with:", err=True)
+            click.echo("  voicepipe setup --backend elevenlabs", err=True)
+            click.echo("  voicepipe config set-elevenlabs-key --from-stdin", err=True)
 
-    click.echo("quick setup (recommended):", err=True)
-    click.echo("  voicepipe setup", err=True)
+        click.echo("quick setup (recommended):", err=True)
+        click.echo("  voicepipe setup --backend elevenlabs", err=True)
+    else:
+        if not has_openai_key and not (
+            os.environ.get("OPENAI_API_KEY") or ""
+        ).strip():
+            click.echo("missing api key: set it with:", err=True)
+            click.echo("  voicepipe setup", err=True)
+            click.echo("  voicepipe config set-openai-key --from-stdin", err=True)
+
+        click.echo("quick setup (recommended):", err=True)
+        click.echo("  voicepipe setup", err=True)
 
     click.echo("common fixes:", err=True)
     click.echo("  voicepipe service install", err=True)
@@ -325,8 +362,15 @@ def _doctor_daemon(
             click.echo("transcribe-test: skipped (no record-test file)", err=True)
         else:
             try:
-                transcriber = WhisperTranscriber(model="whisper-1")
-                text = transcriber.transcribe(recorded_file)
+                from voicepipe.config import get_transcribe_model
+                from voicepipe.transcription import transcribe_audio_file
+
+                model = get_transcribe_model()
+                text = transcribe_audio_file(
+                    recorded_file,
+                    model=model,
+                    prefer_daemon=True,
+                )
                 click.echo("transcribe-test text:")
                 click.echo(text)
             except Exception as e:

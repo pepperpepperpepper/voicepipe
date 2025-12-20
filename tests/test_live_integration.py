@@ -62,6 +62,34 @@ def test_live_transcribe_known_sample_contains_expected_phrase() -> None:
     assert want and want in got
 
 
+def test_live_elevenlabs_transcribe_known_sample_contains_expected_phrase() -> None:
+    from voicepipe.config import detect_elevenlabs_api_key
+    from voicepipe.transcription import transcribe_audio_file
+
+    if not detect_elevenlabs_api_key(load_env=True):
+        pytest.skip(
+            "ELEVENLABS_API_KEY/XI_API_KEY not configured (set ELEVENLABS_API_KEY or run `voicepipe setup --backend elevenlabs`)."
+        )
+
+    audio = _asset_path("test.mp3")
+    expected = _asset_path("test.expected.txt").read_text(encoding="utf-8").strip()
+
+    model_id = (
+        os.environ.get("VOICEPIPE_LIVE_ELEVENLABS_TRANSCRIBE_MODEL") or "scribe_v1"
+    ).strip()
+    text = transcribe_audio_file(
+        str(audio),
+        model=f"elevenlabs:{model_id}",
+        language="en",
+        temperature=0.0,
+        prefer_daemon=False,
+    )
+
+    want = _normalize(expected)
+    got = _normalize(text)
+    assert want and want in got
+
+
 def test_live_recording_can_capture_audio(tmp_path: Path) -> None:
     """Exercise the actual recording stack (requires a working input device)."""
     try:
@@ -102,4 +130,3 @@ def test_live_recording_can_capture_audio(tmp_path: Path) -> None:
             recorder.cleanup()
         except Exception:
             pass
-

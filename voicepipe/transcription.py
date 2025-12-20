@@ -12,6 +12,7 @@ import socket
 from pathlib import Path
 from typing import Optional
 
+from voicepipe.config import get_transcribe_backend
 from voicepipe.paths import transcriber_socket_path
 
 
@@ -21,6 +22,27 @@ class TranscriptionError(RuntimeError):
 
 class TranscriberDaemonUnavailable(TranscriptionError):
     pass
+
+
+def _normalize_backend(value: str) -> str:
+    raw = (value or "").strip().lower()
+    if raw in {"xi", "eleven", "eleven-labs"}:
+        return "elevenlabs"
+    return raw
+
+
+def _resolve_backend_and_model(model: str) -> tuple[str, str, str]:
+    """Return (backend, model_id, model_for_daemon)."""
+    raw = (model or "").strip()
+    if ":" in raw:
+        maybe_backend, _sep, rest = raw.partition(":")
+        backend = _normalize_backend(maybe_backend)
+        model_id = rest.strip()
+        if backend in {"openai", "elevenlabs"} and model_id:
+            return backend, model_id, raw
+
+    backend = _normalize_backend(get_transcribe_backend(load_env=True))
+    return backend, raw, raw
 
 
 def _transcribe_via_daemon(
@@ -107,11 +129,13 @@ def transcribe_audio_file(
     prefer_daemon: bool = True,
 ) -> str:
     """Transcribe an on-disk audio file."""
+    backend, resolved_model, model_for_daemon = _resolve_backend_and_model(model)
+
     if prefer_daemon:
         try:
             return _transcribe_via_daemon(
                 audio_file,
-                model=model,
+                model=model_for_daemon,
                 language=language,
                 prompt=prompt,
                 temperature=float(temperature),
@@ -119,15 +143,37 @@ def transcribe_audio_file(
         except TranscriberDaemonUnavailable:
             pass
 
-    from voicepipe.transcriber import WhisperTranscriber
+    if backend == "openai":
+        from voicepipe.transcriber import WhisperTranscriber
 
-    try:
-        transcriber = WhisperTranscriber(model=model)
-        return transcriber.transcribe(
-            audio_file,
-            language=language,
-            prompt=prompt,
-            temperature=float(temperature),
-        )
-    except Exception as e:
-        raise TranscriptionError(str(e)) from e
+        try:
+            transcriber = WhisperTranscriber(model=resolved_model)
+            return transcriber.transcribe(
+                audio_file,
+                language=language,
+                prompt=prompt,
+                temperature=float(temperature),
+            )
+        except Exception as e:
+            raise TranscriptionError(str(e)) from e
+
+    if backend == "elevenlabs":
+        from voicepipe.elevenlabs_transcriber import ElevenLabsTranscriber
+
+        try:
+            transcriber = ElevenLabsTranscriber(model_id=resolved_model)
+            return transcriber.transcribe(
+                audio_file,
+                language=language,
+                prompt=prompt,
+                temperature=float(temperature),
+            )
+        except Exception as e:
+            raise TranscriptionError(str(e)) from e
+
+    raise TranscriptionError(
+        "Unsupported transcription backend.\n\n"
+        "Set VOICEPIPE_TRANSCRIBE_BACKEND to one of: openai, elevenlabs\n"
+        "Or prefix the model like: openai:whisper-1 or elevenlabs:scribe_v1\n"
+        f"Got backend={backend!r} model={model!r}"
+    )

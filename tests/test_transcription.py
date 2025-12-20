@@ -133,3 +133,45 @@ def test_transcribe_audio_file_falls_back_when_daemon_unavailable(monkeypatch) -
     out = transcribe_audio_file("a.wav", model="m", prefer_daemon=True)
     assert out == "ok:a.wav:m"
 
+
+def test_transcribe_audio_file_uses_elevenlabs_backend_when_configured(monkeypatch) -> None:
+    monkeypatch.setenv("VOICEPIPE_TRANSCRIBE_BACKEND", "elevenlabs")
+
+    monkeypatch.setattr(
+        "voicepipe.transcription._transcribe_via_daemon",
+        lambda *args, **kwargs: (_ for _ in ()).throw(TranscriberDaemonUnavailable("nope")),
+    )
+
+    calls = {}
+
+    class _FakeElevenLabs:
+        def __init__(self, model_id: str):
+            calls["model_id"] = model_id
+
+        def transcribe(self, audio_file: str, **_kwargs) -> str:
+            calls["audio_file"] = audio_file
+            return f"ok-eleven:{audio_file}"
+
+    monkeypatch.setattr(
+        "voicepipe.elevenlabs_transcriber.ElevenLabsTranscriber", _FakeElevenLabs
+    )
+
+    out = transcribe_audio_file("a.wav", model="scribe_v1", prefer_daemon=True)
+    assert out == "ok-eleven:a.wav"
+    assert calls["model_id"] == "scribe_v1"
+
+
+def test_transcribe_audio_file_model_prefix_overrides_backend(monkeypatch) -> None:
+    monkeypatch.setenv("VOICEPIPE_TRANSCRIBE_BACKEND", "elevenlabs")
+
+    class _FakeWhisper:
+        def __init__(self, model: str):
+            self.model = model
+
+        def transcribe(self, audio_file: str, **_kwargs) -> str:
+            return f"ok-openai:{audio_file}:{self.model}"
+
+    monkeypatch.setattr("voicepipe.transcriber.WhisperTranscriber", _FakeWhisper)
+
+    out = transcribe_audio_file("a.wav", model="openai:whisper-1", prefer_daemon=False)
+    assert out == "ok-openai:a.wav:whisper-1"

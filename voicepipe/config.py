@@ -22,13 +22,21 @@ except Exception:  # pragma: no cover
 
 
 APP_NAME = "voicepipe"
-DEFAULT_TRANSCRIBE_MODEL = "gpt-4o-transcribe"
+DEFAULT_TRANSCRIBE_BACKEND = "openai"
+DEFAULT_OPENAI_TRANSCRIBE_MODEL = "gpt-4o-transcribe"
+DEFAULT_ELEVENLABS_TRANSCRIBE_MODEL = "scribe_v1"
+
+# Backward-compatible name (historically OpenAI-only).
+DEFAULT_TRANSCRIBE_MODEL = DEFAULT_OPENAI_TRANSCRIBE_MODEL
 
 _ENV_LOADED = False
 
 DEFAULT_ENV_FILE_TEMPLATE = """# Voicepipe environment config (used by systemd services and the CLI)
 # OPENAI_API_KEY=sk-...
+# ELEVENLABS_API_KEY=...
+# or: XI_API_KEY=...
 # VOICEPIPE_DEVICE=12
+# VOICEPIPE_TRANSCRIBE_BACKEND=openai
 # VOICEPIPE_TRANSCRIBE_MODEL=gpt-4o-transcribe
 """
 
@@ -94,15 +102,48 @@ def load_environment(*, load_cwd_dotenv: bool = True) -> None:
 
 
 def get_transcribe_model(
-    *, default: str = DEFAULT_TRANSCRIBE_MODEL, load_env: bool = True
+    *, default: str | None = None, load_env: bool = True
 ) -> str:
     if load_env:
         load_environment()
-    return (
-        os.environ.get("VOICEPIPE_TRANSCRIBE_MODEL")
-        or os.environ.get("VOICEPIPE_MODEL")
+    raw = (
+        os.environ.get("VOICEPIPE_TRANSCRIBE_MODEL") or os.environ.get("VOICEPIPE_MODEL") or ""
+    ).strip()
+    if raw:
+        return raw
+
+    if default is not None:
+        return str(default)
+
+    backend = get_transcribe_backend(load_env=False)
+    if backend == "elevenlabs":
+        return DEFAULT_ELEVENLABS_TRANSCRIBE_MODEL
+    return DEFAULT_OPENAI_TRANSCRIBE_MODEL
+
+
+def _normalize_transcribe_backend(value: str) -> str:
+    raw = (value or "").strip().lower()
+    if not raw:
+        return DEFAULT_TRANSCRIBE_BACKEND
+    aliases = {
+        "xi": "elevenlabs",
+        "eleven-labs": "elevenlabs",
+        "eleven": "elevenlabs",
+    }
+    return aliases.get(raw, raw)
+
+
+def get_transcribe_backend(
+    *, default: str = DEFAULT_TRANSCRIBE_BACKEND, load_env: bool = True
+) -> str:
+    if load_env:
+        load_environment()
+    raw = (
+        os.environ.get("VOICEPIPE_TRANSCRIBE_BACKEND")
+        or os.environ.get("VOICEPIPE_BACKEND")
         or default
     )
+    return _normalize_transcribe_backend(str(raw))
 
 
 def get_openai_api_key(*, load_env: bool = True) -> str:
@@ -152,6 +193,68 @@ def detect_openai_api_key(*, load_env: bool = True) -> bool:
     """Return True if an API key is available (never returns the key)."""
     try:
         _ = get_openai_api_key(load_env=load_env)
+        return True
+    except Exception:
+        return False
+
+
+def legacy_elevenlabs_key_paths() -> list[Path]:
+    return [
+        config_dir() / "elevenlabs_api_key",
+        Path.home() / ".elevenlabs_api_key",
+    ]
+
+
+def get_elevenlabs_api_key(*, load_env: bool = True) -> str:
+    if load_env:
+        load_environment()
+
+    for env_name in ("ELEVENLABS_API_KEY", "XI_API_KEY"):
+        api_key = (os.environ.get(env_name) or "").strip()
+        if api_key:
+            return api_key
+
+    cred_dir = os.environ.get("CREDENTIALS_DIRECTORY")
+    if cred_dir:
+        for name in (
+            "elevenlabs_api_key",
+            "ELEVENLABS_API_KEY",
+            "xi_api_key",
+            "XI_API_KEY",
+        ):
+            try:
+                cred_path = Path(cred_dir) / name
+                if cred_path.exists():
+                    api_key = cred_path.read_text(encoding="utf-8").strip()
+                    if api_key:
+                        return api_key
+            except Exception:
+                continue
+
+    for path in legacy_elevenlabs_key_paths():
+        try:
+            if path.exists():
+                api_key = path.read_text(encoding="utf-8").strip()
+                if api_key:
+                    return api_key
+        except Exception:
+            continue
+
+    raise VoicepipeConfigError(
+        "ElevenLabs API key not found.\n\n"
+        "Recommended (works for systemd services and CLI):\n"
+        f"  Save it in: {env_file_path()}\n"
+        "  Example line: ELEVENLABS_API_KEY=...\n\n"
+        "Alternatives:\n"
+        "  - Set ELEVENLABS_API_KEY or XI_API_KEY in the current environment\n"
+        "  - Legacy file locations: ~/.config/voicepipe/elevenlabs_api_key or ~/.elevenlabs_api_key\n"
+    )
+
+
+def detect_elevenlabs_api_key(*, load_env: bool = True) -> bool:
+    """Return True if an ElevenLabs API key is available (never returns the key)."""
+    try:
+        _ = get_elevenlabs_api_key(load_env=load_env)
         return True
     except Exception:
         return False

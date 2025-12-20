@@ -55,7 +55,21 @@ def service_install() -> None:
     run_systemctl(["daemon-reload"], check=False)
     env_path = ensure_env_file()
     env_values = read_env_file(env_path)
-    has_key = bool((env_values.get("OPENAI_API_KEY") or "").strip())
+    backend_raw = (
+        env_values.get("VOICEPIPE_TRANSCRIBE_BACKEND")
+        or env_values.get("VOICEPIPE_BACKEND")
+        or "openai"
+    )
+    backend = str(backend_raw).strip().lower()
+    if backend in {"xi", "eleven", "eleven-labs"}:
+        backend = "elevenlabs"
+
+    has_openai_key = bool((env_values.get("OPENAI_API_KEY") or "").strip())
+    has_eleven_key = bool(
+        (env_values.get("ELEVENLABS_API_KEY") or "").strip()
+        or (env_values.get("XI_API_KEY") or "").strip()
+    )
+    has_key = has_openai_key if backend != "elevenlabs" else has_eleven_key
 
     click.echo("Installed systemd user units:")
     click.echo(f"  {result.recorder_path}")
@@ -70,15 +84,38 @@ def service_install() -> None:
     click.echo("Config:")
     click.echo(f"  env file: {env_path}")
     if not has_key:
-        click.echo("  OPENAI_API_KEY not set (systemd won’t see your .bashrc exports).")
-        if (os.environ.get("OPENAI_API_KEY") or "").strip():
-            click.echo("  Detected OPENAI_API_KEY in this shell; migrate it with:")
-            click.echo("    voicepipe config migrate")
+        if backend == "elevenlabs":
+            click.echo(
+                "  ElevenLabs API key not set (systemd won’t see your .bashrc exports)."
+            )
+            if (os.environ.get("ELEVENLABS_API_KEY") or "").strip() or (
+                os.environ.get("XI_API_KEY") or ""
+            ).strip():
+                click.echo(
+                    "  Detected ELEVENLABS_API_KEY/XI_API_KEY in this shell; store it with:"
+                )
+                click.echo(
+                    "    echo '...' | voicepipe config set-elevenlabs-key --from-stdin"
+                )
+            else:
+                click.echo("  Set it with (recommended, avoids shell history):")
+                click.echo(
+                    "    echo '...' | voicepipe config set-elevenlabs-key --from-stdin"
+                )
+            click.echo("  Or run:")
+            click.echo("    voicepipe setup --backend elevenlabs")
         else:
-            click.echo("  Set it with (recommended, avoids shell history):")
-            click.echo("    echo 'sk-...' | voicepipe config set-openai-key --from-stdin")
-        click.echo("  Or run:")
-        click.echo("    voicepipe setup")
+            click.echo("  OPENAI_API_KEY not set (systemd won’t see your .bashrc exports).")
+            if (os.environ.get("OPENAI_API_KEY") or "").strip():
+                click.echo("  Detected OPENAI_API_KEY in this shell; migrate it with:")
+                click.echo("    voicepipe config migrate")
+            else:
+                click.echo("  Set it with (recommended, avoids shell history):")
+                click.echo(
+                    "    echo 'sk-...' | voicepipe config set-openai-key --from-stdin"
+                )
+            click.echo("  Or run:")
+            click.echo("    voicepipe setup")
 
 
 @service_group.command("uninstall")

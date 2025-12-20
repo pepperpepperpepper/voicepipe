@@ -1,4 +1,4 @@
-"""Persistent transcriber daemon with a pre-initialized OpenAI client.
+"""Persistent transcriber daemon with a pre-initialized client.
 
 This provides a simple newline-delimited JSON protocol over a Unix domain
 socket. Clients send a single JSON object and receive streaming JSON lines.
@@ -16,9 +16,10 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from voicepipe.config import get_transcribe_model, load_environment
+from voicepipe.config import get_transcribe_backend, get_transcribe_model, load_environment
 from voicepipe.logging_utils import configure_logging
 from voicepipe.paths import runtime_app_dir, transcriber_socket_path
+from voicepipe.elevenlabs_transcriber import ElevenLabsTranscriber
 from voicepipe.transcriber import WhisperTranscriber
 
 logger = logging.getLogger("voicepipe.transcriber_daemon")
@@ -63,16 +64,59 @@ def _send_error(conn: socket.socket, message: str) -> None:
     conn.sendall((json.dumps({"type": "error", "message": message}) + "\n").encode("utf-8"))
 
 
+def _normalize_backend(value: str) -> str:
+    raw = (value or "").strip().lower()
+    if raw in {"xi", "eleven", "eleven-labs"}:
+        return "elevenlabs"
+    return raw
+
+
+def _resolve_backend_and_model(
+    model: Optional[str],
+    *,
+    default_backend: str,
+    default_model: str,
+) -> tuple[str, str]:
+    raw = (model or "").strip()
+    if raw and ":" in raw:
+        maybe_backend, _sep, rest = raw.partition(":")
+        backend = _normalize_backend(maybe_backend)
+        model_id = rest.strip()
+        if backend in {"openai", "elevenlabs"} and model_id:
+            return backend, model_id
+
+    backend = _normalize_backend(default_backend)
+    return backend, raw or default_model
+
+
+def _build_transcriber(backend: str, model: str):
+    if backend == "openai":
+        return WhisperTranscriber(model=model)
+    if backend == "elevenlabs":
+        return ElevenLabsTranscriber(model_id=model)
+    raise RuntimeError(
+        "Unsupported transcription backend for daemon. "
+        "Set VOICEPIPE_TRANSCRIBE_BACKEND to openai or elevenlabs."
+    )
+
+
 def serve(
     *,
+    backend: str = "openai",
     model: str = "gpt-4o-transcribe",
     socket_path: Optional[Path] = None,
 ) -> None:
     socket_file = socket_path or transcriber_socket_path(create_dir=True)
     tmp_dir = runtime_app_dir(create=True)
 
-    transcriber = WhisperTranscriber(model=model)
-    logger.info("Transcriber ready (model=%s)", model)
+    default_backend, default_model = _resolve_backend_and_model(
+        model, default_backend=backend, default_model=model
+    )
+    transcribers: dict[str, object] = {}
+    transcribers[default_backend] = _build_transcriber(default_backend, default_model)
+    logger.info(
+        "Transcriber ready (backend=%s model=%s)", default_backend, default_model
+    )
 
     _unlink_if_exists(socket_file)
 
@@ -128,13 +172,23 @@ def serve(
                     else None
                 )
                 temp = float(request_temperature) if request_temperature is not None else 0.0
-                req_model = (
+                req_model_raw = (
                     str(request_model)
                     if isinstance(request_model, str) and request_model.strip()
                     else None
                 )
                 if isinstance(suffix, str) and suffix and not suffix.startswith("."):
                     suffix = "." + suffix
+
+                req_backend, req_model = _resolve_backend_and_model(
+                    req_model_raw,
+                    default_backend=default_backend,
+                    default_model=default_model,
+                )
+                transcriber = transcribers.get(req_backend)
+                if transcriber is None:
+                    transcribers[req_backend] = _build_transcriber(req_backend, req_model)
+                    transcriber = transcribers[req_backend]
 
                 if audio_hex:
                     audio_data = bytes.fromhex(audio_hex)
@@ -147,7 +201,7 @@ def serve(
                         tmp_path = tmp_file.name
                     try:
                         start_time = time.time()
-                        text = transcriber.transcribe(
+                        text = transcriber.transcribe(  # type: ignore[attr-defined]
                             tmp_path,
                             language=language,
                             prompt=prompt,
@@ -155,9 +209,11 @@ def serve(
                             model=req_model,
                         )
                         logger.info(
-                            "Transcribed hex audio in %.2fs (%s)",
+                            "Transcribed hex audio in %.2fs (%s) backend=%s model=%s",
                             time.time() - start_time,
                             tmp_path,
+                            req_backend,
+                            req_model,
                         )
                         _stream_text(conn, text)
                     finally:
@@ -167,7 +223,7 @@ def serve(
                             pass
                 elif isinstance(audio_file, str) and os.path.exists(audio_file):
                     start_time = time.time()
-                    text = transcriber.transcribe(
+                    text = transcriber.transcribe(  # type: ignore[attr-defined]
                         audio_file,
                         language=language,
                         prompt=prompt,
@@ -175,9 +231,11 @@ def serve(
                         model=req_model,
                     )
                     logger.info(
-                        "Transcribed file in %.2fs (%s)",
+                        "Transcribed file in %.2fs (%s) backend=%s model=%s",
                         time.time() - start_time,
                         audio_file,
+                        req_backend,
+                        req_model,
                     )
                     _stream_text(conn, text)
                 else:
@@ -208,9 +266,10 @@ def main(argv: Optional[list[str]] = None) -> None:
     del argv
     configure_logging(default_level=logging.INFO)
     load_environment()
+    backend = get_transcribe_backend()
     model = get_transcribe_model()
-    logger.info("Initializing transcriber (model=%s)...", model)
-    serve(model=model)
+    logger.info("Initializing transcriber (backend=%s model=%s)...", backend, model)
+    serve(backend=backend, model=model)
 
 
 if __name__ == "__main__":

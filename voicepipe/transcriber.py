@@ -53,9 +53,13 @@ Example: If speaker says "open quote hello close quote", transcribe as: "hello" 
     ) -> str:
         """Transcribe an audio file using Whisper API."""
         try:
+            effective_model = (model or self.model or "").strip()
+            if not effective_model:
+                raise RuntimeError("No model specified for transcription")
+
             with open(audio_file, 'rb') as f:
                 params = {
-                    "model": model or self.model,
+                    "model": effective_model,
                     "file": f,
                     "response_format": "text",
                     "temperature": temperature,
@@ -66,9 +70,9 @@ Example: If speaker says "open quote hello close quote", transcribe as: "hello" 
                 
                 # Use appropriate default prompt if none provided
                 if prompt is None:
-                    if self.model.startswith('gpt-4'):
+                    if effective_model.startswith('gpt-4'):
                         prompt = self.GPT4_PROMPT
-                    elif self.model == 'whisper-1':
+                    elif effective_model == 'whisper-1':
                         prompt = self.WHISPER_PROMPT
                 
                 if prompt:

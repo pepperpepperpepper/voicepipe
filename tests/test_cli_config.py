@@ -22,6 +22,19 @@ def test_config_set_openai_key_writes_env_file(isolated_home: Path) -> None:
     assert mode == 0o600
 
 
+def test_config_set_elevenlabs_key_writes_env_file(isolated_home: Path) -> None:
+    runner = CliRunner()
+    result = runner.invoke(main, ["config", "set-elevenlabs-key", "el-test-123"])
+    assert result.exit_code == 0, result.output
+
+    env_path = isolated_home / ".config" / "voicepipe" / "voicepipe.env"
+    assert env_path.exists()
+    assert "ELEVENLABS_API_KEY=el-test-123" in env_path.read_text(encoding="utf-8")
+
+    mode = stat.S_IMODE(env_path.stat().st_mode)
+    assert mode == 0o600
+
+
 def test_config_show_never_prints_secret(isolated_home: Path) -> None:
     env_path = isolated_home / ".config" / "voicepipe" / "voicepipe.env"
     env_path.parent.mkdir(parents=True, exist_ok=True)
@@ -33,6 +46,19 @@ def test_config_show_never_prints_secret(isolated_home: Path) -> None:
     assert result.exit_code == 0, result.output
     assert "sk-secret" not in result.output
     assert "env file has OPENAI_API_KEY: True" in result.output
+
+
+def test_config_show_never_prints_elevenlabs_secret(isolated_home: Path) -> None:
+    env_path = isolated_home / ".config" / "voicepipe" / "voicepipe.env"
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text("ELEVENLABS_API_KEY=el-secret\n", encoding="utf-8")
+    os.chmod(env_path, 0o600)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["config", "show"])
+    assert result.exit_code == 0, result.output
+    assert "el-secret" not in result.output
+    assert "env file has ELEVENLABS_API_KEY/XI_API_KEY: True" in result.output
 
 
 def test_config_migrate_from_legacy_file_deletes_legacy_when_requested(
@@ -61,4 +87,3 @@ def test_config_edit_uses_editor_env_var(isolated_home: Path, tmp_path: Path, mo
     result = runner.invoke(main, ["config", "edit"])
     assert result.exit_code == 0, result.output
     assert "restart Voicepipe" in result.output
-

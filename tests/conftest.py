@@ -29,8 +29,12 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
     # Avoid leaking developer/user config into tests.
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    monkeypatch.delenv("XI_API_KEY", raising=False)
     monkeypatch.delenv("CREDENTIALS_DIRECTORY", raising=False)
     monkeypatch.delenv("VOICEPIPE_DEVICE", raising=False)
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIBE_BACKEND", raising=False)
+    monkeypatch.delenv("VOICEPIPE_BACKEND", raising=False)
     monkeypatch.delenv("VOICEPIPE_TRANSCRIBE_MODEL", raising=False)
     monkeypatch.delenv("VOICEPIPE_MODEL", raising=False)
 

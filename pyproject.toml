@@ -61,7 +61,7 @@ target-version = ['py39']
 [tool.pytest.ini_options]
 pythonpath = ["."]
 markers = [
-    "live: opt-in integration tests requiring mic/network/OpenAI (enable via VOICEPIPE_LIVE_TESTS=1)",
+    "live: opt-in integration tests requiring mic/network/API keys (enable via VOICEPIPE_LIVE_TESTS=1)",
 ]
 
 [tool.mypy]

@@ -5,7 +5,7 @@ Voice recording and transcription daemon for Linux.
 ## Features
 
 - Simple voice recording with automatic device detection
-- High-quality transcription using OpenAI Whisper API
+- High-quality transcription using OpenAI or ElevenLabs (configurable)
 - Optional automatic typing of transcribed text via xdotool
 - Robust daemon-based session management
 - Automatic cleanup of temporary files
@@ -47,7 +47,7 @@ The CLI automatically detects and uses the services if running, or falls back to
 
 - Python 3.9+
 - sounddevice (for recording; requires PortAudio)
-- OpenAI Python SDK
+- OpenAI Python SDK (for the OpenAI backend)
 - Click (for CLI)
 - xdotool (optional, for --type functionality)
 
@@ -63,25 +63,55 @@ sudo apt-get install portaudio19-dev xdotool
 
 ## Configuration
 
+### Transcription Backend
+
+Voicepipe supports multiple transcription backends:
+
+- `openai` (default): models like `gpt-4o-transcribe`, `whisper-1`
+- `elevenlabs`: models like `scribe_v1`
+
+Configure in `~/.config/voicepipe/voicepipe.env`:
+```bash
+VOICEPIPE_TRANSCRIBE_BACKEND=openai
+VOICEPIPE_TRANSCRIBE_MODEL=gpt-4o-transcribe
+```
+
+You can also override per command by prefixing the model:
+```bash
+voicepipe stop --model openai:whisper-1
+voicepipe stop --model elevenlabs:scribe_v1
+```
+
 ### API Key Setup
 
-Voicepipe requires an OpenAI API key. Set it up using one of these methods:
+Voicepipe requires an API key for the selected backend:
+
+- `openai`: `OPENAI_API_KEY`
+- `elevenlabs`: `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
+
+Set it up using one of these methods:
 
 0. **One-command setup (recommended)**:
    ```bash
    voicepipe setup
+   # Or:
+   voicepipe setup --backend elevenlabs
    ```
 
 1. **Env file (recommended; works for systemd services + CLI)**:
    ```bash
    mkdir -p ~/.config/voicepipe
    chmod 700 ~/.config/voicepipe
+   echo 'VOICEPIPE_TRANSCRIBE_BACKEND=openai' >> ~/.config/voicepipe/voicepipe.env
+   echo 'VOICEPIPE_TRANSCRIBE_MODEL=gpt-4o-transcribe' >> ~/.config/voicepipe/voicepipe.env
    echo 'OPENAI_API_KEY=your-api-key-here' >> ~/.config/voicepipe/voicepipe.env
    chmod 600 ~/.config/voicepipe/voicepipe.env
    ```
    Or use the CLI (avoids shell history):
    ```bash
    echo 'your-api-key-here' | voicepipe config set-openai-key --from-stdin
+   # For ElevenLabs:
+   echo 'your-api-key-here' | voicepipe config set-elevenlabs-key --from-stdin
    ```
    If you use the systemd services, restart Voicepipe after changes:
    ```bash
@@ -93,6 +123,8 @@ Voicepipe requires an OpenAI API key. Set it up using one of these methods:
 2. **Environment variable** (works for interactive shells; systemd services won’t see `.bashrc` exports):
    ```bash
    export OPENAI_API_KEY="your-api-key-here"
+   # ElevenLabs:
+   export ELEVENLABS_API_KEY="your-api-key-here"
    ```
    Voicepipe also loads a `.env` file (if present) on startup.
 
@@ -208,16 +240,22 @@ voicepipe stop --language de  # German
 ```
 
 #### Model Selection
-Voicepipe supports multiple transcription models:
-- `gpt-4o-transcribe`: best quality (typically higher cost)
-- `gpt-4o-mini-transcribe`: faster/cheaper (typically lower quality)
-- `whisper-1`: legacy Whisper model
+Voicepipe supports multiple backends and models:
+
+- OpenAI (`VOICEPIPE_TRANSCRIBE_BACKEND=openai`):
+  - `gpt-4o-transcribe`: best quality (typically higher cost)
+  - `gpt-4o-mini-transcribe`: faster/cheaper (typically lower quality)
+  - `whisper-1`: legacy Whisper model
+- ElevenLabs (`VOICEPIPE_TRANSCRIBE_BACKEND=elevenlabs`):
+  - `scribe_v1`: default
+  - `scribe_v1_experimental`: experimental
 
 ```bash
 voicepipe start
 voicepipe stop --model gpt-4o-transcribe
 voicepipe stop --model gpt-4o-mini-transcribe
 voicepipe stop --model whisper-1
+voicepipe stop --model elevenlabs:scribe_v1
 ```
 
 #### Shell Scripting
@@ -282,7 +320,8 @@ All errors are printed to stderr.
 Common issues:
 - **"No active recording session found"**: No recording is in progress
 - **"Recording already in progress"**: A recording session is already active
-- **"OpenAI API key not found"**: Set up your API key as described above
+- **"OpenAI API key not found"**: Configure `OPENAI_API_KEY` (backend=`openai`)
+- **"ElevenLabs API key not found"**: Configure `ELEVENLABS_API_KEY` (backend=`elevenlabs`)
 - **"xdotool not found"**: Install xdotool for --type functionality
 
 Diagnostics:
@@ -309,7 +348,7 @@ Offline/unit tests (no mic/systemd/OpenAI required):
 pytest -q
 ```
 
-Opt-in live integration tests (uses OpenAI + may use your microphone):
+Opt-in live integration tests (network + API key; may use your microphone):
 ```bash
 VOICEPIPE_LIVE_TESTS=1 pytest -q tests/test_live_integration.py
 ```

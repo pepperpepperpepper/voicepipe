@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import sys
+import time
 from pathlib import Path
 
 import click
@@ -12,12 +14,79 @@ import click
 from voicepipe.config import get_transcribe_model
 from voicepipe.logging_utils import configure_logging
 from voicepipe.paths import preserved_audio_dir
-from voicepipe.recording_backend import AutoRecorderBackend, RecordingError
+from voicepipe.recording_backend import (
+    AutoRecorderBackend,
+    RecordingError,
+    SubprocessRecorderBackend,
+)
 from voicepipe.session import RecordingSession
 from voicepipe.transcription import transcribe_audio_file
 from voicepipe.typing import type_text
 
 logger = logging.getLogger(__name__)
+
+
+def _transcribe_and_finalize(
+    *,
+    audio_file: str | None,
+    session: dict | None,
+    resolved_model: str,
+    language: str | None,
+    prompt: str | None,
+    temperature: float,
+    type_: bool,
+    prefer_daemon: bool = True,
+) -> None:
+    transcription_ok = False
+    try:
+        if not audio_file:
+            raise RuntimeError("No audio file produced")
+        text = transcribe_audio_file(
+            audio_file,
+            model=resolved_model,
+            language=language,
+            prompt=prompt,
+            temperature=float(temperature),
+            prefer_daemon=bool(prefer_daemon),
+        )
+        transcription_ok = True
+
+        click.echo(text)
+
+        if type_:
+            ok, err = type_text(text)
+            if not ok:
+                click.echo(f"Error typing text: {err}", err=True)
+    except SystemExit:
+        raise
+    except Exception as e:
+        error_msg = str(e)
+        click.echo(f"Error: {error_msg}", err=True)
+        if type_:
+            type_text(f"Error: {error_msg}")
+        raise SystemExit(1)
+    finally:
+        if session:
+            try:
+                RecordingSession.cleanup_session(session)
+            except Exception:
+                pass
+
+        if audio_file and os.path.exists(audio_file):
+            if transcription_ok:
+                try:
+                    os.unlink(audio_file)
+                except Exception:
+                    pass
+            else:
+                try:
+                    dst_dir = preserved_audio_dir(create=True)
+                    dst = dst_dir / Path(audio_file).name
+                    shutil.move(audio_file, dst)
+                    audio_file = str(dst)
+                except Exception:
+                    pass
+                click.echo(f"Preserved audio file: {audio_file}", err=True)
 
 
 @click.command()
@@ -80,54 +149,16 @@ def stop(
         resolved_model = (model or get_transcribe_model()).strip()
         backend = AutoRecorderBackend()
         stop_result = backend.stop()
-
-        session = stop_result.session
-        audio_file = stop_result.audio_file
-        transcription_ok = False
-
-        try:
-            text = transcribe_audio_file(
-                audio_file,
-                model=resolved_model,
-                language=language,
-                prompt=prompt,
-                temperature=temperature,
-                prefer_daemon=True,
-            )
-            transcription_ok = True
-
-            # Output to stdout
-            click.echo(text)
-
-            if type_:
-                ok, err = type_text(text)
-                if not ok:
-                    click.echo(f"Error typing text: {err}", err=True)
-
-        except Exception as e:
-            error_msg = str(e)
-            click.echo(f"Error: {error_msg}", err=True)
-            if type_:
-                type_text(f"Error: {error_msg}")
-            raise SystemExit(1)
-        finally:
-            # Clean up session (only for subprocess mode).
-            if session:
-                RecordingSession.cleanup_session(session)
-
-            # Clean up audio file only on successful transcription; otherwise preserve.
-            if audio_file and os.path.exists(audio_file):
-                if transcription_ok:
-                    os.unlink(audio_file)
-                else:
-                    try:
-                        dst_dir = preserved_audio_dir(create=True)
-                        dst = dst_dir / Path(audio_file).name
-                        shutil.move(audio_file, dst)
-                        audio_file = str(dst)
-                    except Exception:
-                        pass
-                    click.echo(f"Preserved audio file: {audio_file}", err=True)
+        _transcribe_and_finalize(
+            audio_file=stop_result.audio_file,
+            session=stop_result.session,
+            resolved_model=resolved_model,
+            language=language,
+            prompt=prompt,
+            temperature=float(temperature),
+            type_=bool(type_),
+            prefer_daemon=True,
+        )
 
     except RecordingError as e:
         click.echo(f"Error: {e}", err=True)
@@ -217,6 +248,116 @@ def transcribe_file(
     except SystemExit:
         raise
     except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(1)
+
+
+@click.command("dictate")
+@click.option(
+    "--seconds",
+    type=float,
+    default=None,
+    help="Record for N seconds (default: wait for ENTER on a TTY).",
+)
+@click.option(
+    "--device",
+    envvar="VOICEPIPE_DEVICE",
+    type=int,
+    help="Audio device index to use",
+)
+@click.option("--type", "type_", is_flag=True, help="Type the transcribed text using xdotool")
+@click.option("--language", help="Language code for transcription (e.g., en, es, fr)")
+@click.option(
+    "--prompt",
+    help=(
+        "Context prompt to guide transcription style. For dictation with quotes, "
+        'say "open quote" and "close quote"'
+    ),
+)
+@click.option(
+    "--model",
+    default=None,
+    help=(
+        "Transcription model to use (defaults to VOICEPIPE_TRANSCRIBE_MODEL / "
+        "VOICEPIPE_MODEL or gpt-4o-transcribe)"
+    ),
+)
+@click.option(
+    "--temperature",
+    default=0.0,
+    type=float,
+    help="Temperature for transcription (0.0 for deterministic, default: 0.0)",
+)
+@click.option(
+    "--prefer-daemon/--no-daemon",
+    default=True,
+    show_default=True,
+    help="Prefer the daemon backend when available (falls back automatically).",
+)
+def dictate(
+    seconds: float | None,
+    device: int | None,
+    type_: bool,
+    language: str | None,
+    prompt: str | None,
+    model: str | None,
+    temperature: float,
+    prefer_daemon: bool,
+) -> None:
+    """Record from the mic, transcribe, and optionally type (one command)."""
+    backend = AutoRecorderBackend() if prefer_daemon else SubprocessRecorderBackend()
+    started = False
+    try:
+        backend.start(device=device)
+        started = True
+
+        if seconds is None:
+            if not sys.stdin.isatty():
+                raise click.ClickException("No TTY available; pass --seconds to auto-stop")
+            click.echo("Recording... press ENTER to stop (Ctrl+C to cancel).", err=True)
+            _ = sys.stdin.readline()
+        else:
+            if float(seconds) <= 0:
+                raise click.ClickException("--seconds must be > 0")
+            click.echo(f"Recording for {float(seconds):.1f}s...", err=True)
+            time.sleep(float(seconds))
+
+        stop_result = backend.stop()
+        started = False
+        resolved_model = (model or get_transcribe_model()).strip()
+        _transcribe_and_finalize(
+            audio_file=stop_result.audio_file,
+            session=stop_result.session,
+            resolved_model=resolved_model,
+            language=language,
+            prompt=prompt,
+            temperature=float(temperature),
+            type_=bool(type_),
+            prefer_daemon=True,
+        )
+    except KeyboardInterrupt:
+        if started:
+            try:
+                backend.cancel()
+            except Exception:
+                pass
+        raise SystemExit(130)
+    except RecordingError as e:
+        if started:
+            try:
+                backend.cancel()
+            except Exception:
+                pass
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(1)
+    except SystemExit:
+        raise
+    except Exception as e:
+        if started:
+            try:
+                backend.cancel()
+            except Exception:
+                pass
         click.echo(f"Error: {e}", err=True)
         raise SystemExit(1)
 

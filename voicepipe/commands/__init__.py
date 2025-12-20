@@ -6,7 +6,8 @@ import click
 
 from .config import config_group
 from .doctor import doctor_group, doctor_legacy
-from .recording import cancel, daemon, start, status, stop, transcribe_file
+from .recording import cancel, daemon, dictate, start, status, stop, transcribe_file
+from . import smoke as smoke_module
 from .service import service_group
 from .setup import setup
 
@@ -17,9 +18,11 @@ def register(main: click.Group) -> None:
     main.add_command(setup)
     main.add_command(doctor_group)
     main.add_command(doctor_legacy)
+    main.add_command(smoke_module.smoke)
 
     main.add_command(start)
     main.add_command(stop)
+    main.add_command(dictate)
     main.add_command(status)
     main.add_command(cancel)
     main.add_command(transcribe_file)

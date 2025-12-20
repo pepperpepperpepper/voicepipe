@@ -165,6 +165,31 @@ voicepipe stop --type
 # Text is typed into current application
 ```
 
+#### One-Command Dictation
+Record, stop, transcribe, and optionally type in a single command:
+```bash
+# Record until you press ENTER, then transcribe:
+voicepipe dictate
+
+# Record for a fixed duration, then transcribe and type:
+voicepipe dictate --seconds 5 --type
+```
+
+#### Transcribe an Existing Audio File
+```bash
+voicepipe transcribe-file path/to/audio.mp3
+voicepipe transcribe-file path/to/audio.mp3 --type
+```
+
+#### Smoke Test
+Run an end-to-end file transcription against a known sample:
+```bash
+voicepipe smoke
+
+# Or test a specific file and expected phrase:
+voicepipe smoke test.mp3 --expected "ask not what your country can do for you"
+```
+
 #### Save to Clipboard
 ```bash
 voicepipe start
@@ -215,14 +240,19 @@ voicepipe start && voicepipe stop | tr '[:lower:]' '[:upper:]'
 ### i3/Sway
 Add to your config:
 ```
+# One-key toggle (recommended)
+# Starts recording if idle; stops, transcribes, and types if recording.
+bindsym $mod+r exec voicepipe-toggle
+
+# Manual start/stop (separate keys)
 # Start recording
-bindsym $mod+r exec voicepipe start
+bindsym $mod+Shift+r exec voicepipe start
 
 # Stop and transcribe
-bindsym $mod+Shift+r exec voicepipe stop
+bindsym $mod+Control+r exec voicepipe stop
 
 # Stop and type
-bindsym $mod+Control+r exec voicepipe stop --type
+bindsym $mod+Mod1+r exec voicepipe stop --type
 
 # Cancel recording
 bindsym $mod+Escape exec voicepipe cancel
@@ -231,8 +261,8 @@ bindsym $mod+Escape exec voicepipe cancel
 ### GNOME (using custom shortcuts)
 1. Open Settings → Keyboard → Keyboard Shortcuts
 2. Add custom shortcuts:
-   - Name: "Start Voice Recording"
-   - Command: `voicepipe start`
+   - Name: "Toggle Voice Recording"
+   - Command: `voicepipe-toggle`
    - Shortcut: Super+R
 
 ### KDE Plasma
@@ -242,8 +272,7 @@ bindsym $mod+Escape exec voicepipe cancel
 
 ### Awesome WM
 ```lua
-awful.key({ modkey }, "r", function() awful.spawn("voicepipe start") end),
-awful.key({ modkey, "Shift" }, "r", function() awful.spawn("voicepipe stop --type") end),
+awful.key({ modkey }, "r", function() awful.spawn("voicepipe-toggle") end),
 ```
 
 ## Error Handling

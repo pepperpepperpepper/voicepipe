@@ -50,6 +50,7 @@ all = ["pystray", "pillow"]
 [tool.poetry.scripts]
 voicepipe = "voicepipe.cli:main"
 voicepipe-fast = "voicepipe.fast:main"
+voicepipe-toggle = "voicepipe.fast:toggle_main"
 voicepipe-transcribe-file = "voicepipe.entrypoints:transcribe_file_main"
 voicepipe-transcriber-daemon = "voicepipe.transcriber_daemon:main"
 

@@ -328,6 +328,13 @@ def main(argv: Optional[list[str]] = None) -> None:
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         raise SystemExit(1)
+def toggle_main(argv: Optional[list[str]] = None) -> None:
+    """Entry point for a dedicated one-key hotkey command.
+
+    This mirrors: `voicepipe-fast toggle`
+    """
+    del argv
+    main(["toggle"])
 
 
 if __name__ == "__main__":

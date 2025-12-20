@@ -302,6 +302,18 @@ Diagnostics:
 - Automatic cleanup on process termination
 - PID-based session management prevents conflicts
 
+## Testing
+
+Offline/unit tests (no mic/systemd/OpenAI required):
+```bash
+pytest -q
+```
+
+Opt-in live integration tests (uses OpenAI + may use your microphone):
+```bash
+VOICEPIPE_LIVE_TESTS=1 pytest -q tests/test_live_integration.py
+```
+
 ## License
 
 MIT License - see LICENSE file for details

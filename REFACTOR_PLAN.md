@@ -116,3 +116,13 @@ This plan targets maintainability and reducing operational complexity beyond the
 
 4) [x] **Add `voicepipe config edit` (optional)**
    - Open `~/.config/voicepipe/voicepipe.env` in `$EDITOR` and remind to restart `voicepipe.target`.
+
+## Next wave (config consistency)
+
+1) [x] **Use `VOICEPIPE_TRANSCRIBE_MODEL` as the default everywhere**
+   - Ensure `voicepipe stop`, `voicepipe transcribe-file`, and `voicepipe-fast` default to `get_transcribe_model()` (env file + env var + default) instead of hardcoding `gpt-4o-transcribe`.
+
+## Next wave (diagnostics)
+
+1) [x] **Doctor: recommend `voicepipe setup` as the first fix**
+   - When systemd/key wiring is broken, point users at the one-command setup path.

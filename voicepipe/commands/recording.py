@@ -9,6 +9,7 @@ from pathlib import Path
 
 import click
 
+from voicepipe.config import get_transcribe_model
 from voicepipe.logging_utils import configure_logging
 from voicepipe.paths import preserved_audio_dir
 from voicepipe.recording_backend import AutoRecorderBackend, RecordingError
@@ -55,10 +56,10 @@ def start(device: int | None) -> None:
 )
 @click.option(
     "--model",
-    default="gpt-4o-transcribe",
+    default=None,
     help=(
-        "Transcription model to use (default: gpt-4o-transcribe, options: "
-        "gpt-4o-transcribe, gpt-4o-mini-transcribe, whisper-1)"
+        "Transcription model to use (defaults to VOICEPIPE_TRANSCRIBE_MODEL / "
+        "VOICEPIPE_MODEL or gpt-4o-transcribe)"
     ),
 )
 @click.option(
@@ -71,11 +72,12 @@ def stop(
     type_: bool,
     language: str | None,
     prompt: str | None,
-    model: str,
+    model: str | None,
     temperature: float,
 ) -> None:
     """Stop recording and transcribe the audio."""
     try:
+        resolved_model = (model or get_transcribe_model()).strip()
         backend = AutoRecorderBackend()
         stop_result = backend.stop()
 
@@ -86,7 +88,7 @@ def stop(
         try:
             text = transcribe_audio_file(
                 audio_file,
-                model=model,
+                model=resolved_model,
                 language=language,
                 prompt=prompt,
                 temperature=temperature,
@@ -174,10 +176,10 @@ def status() -> None:
 )
 @click.option(
     "--model",
-    default="gpt-4o-transcribe",
+    default=None,
     help=(
-        "Transcription model to use (default: gpt-4o-transcribe, options: "
-        "gpt-4o-transcribe, gpt-4o-mini-transcribe, whisper-1)"
+        "Transcription model to use (defaults to VOICEPIPE_TRANSCRIBE_MODEL / "
+        "VOICEPIPE_MODEL or gpt-4o-transcribe)"
     ),
 )
 @click.option(
@@ -191,14 +193,15 @@ def transcribe_file(
     audio_file: str,
     language: str | None,
     prompt: str | None,
-    model: str,
+    model: str | None,
     temperature: float,
 ) -> None:
     """Transcribe an audio file (no recording session required)."""
     try:
+        resolved_model = (model or get_transcribe_model()).strip()
         text = transcribe_audio_file(
             audio_file,
-            model=model,
+            model=resolved_model,
             language=language,
             prompt=prompt,
             temperature=temperature,

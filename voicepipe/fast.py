@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from voicepipe.config import get_transcribe_model
 from voicepipe.ipc import IpcError, IpcUnavailable, daemon_socket_path, send_request
 from voicepipe.paths import preserved_audio_dir, runtime_app_dir, transcriber_socket_path
 from voicepipe.transcription import transcribe_audio_file
@@ -81,9 +82,10 @@ def send_transcribe_request(audio_file: str) -> str:
         )
         print("[TRANSCRIBE] Or: voicepipe service start", file=sys.stderr)
     try:
+        model = get_transcribe_model()
         return transcribe_audio_file(
             audio_file,
-            model="gpt-4o-transcribe",
+            model=model,
             prefer_daemon=True,
         )
     except Exception as e:

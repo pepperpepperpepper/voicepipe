@@ -162,7 +162,11 @@ def doctor_systemd() -> None:
         os.environ.get("OPENAI_API_KEY") or ""
     ).strip():
         click.echo("missing api key: set it with:", err=True)
+        click.echo("  voicepipe setup", err=True)
         click.echo("  voicepipe config set-openai-key --from-stdin", err=True)
+
+    click.echo("quick setup (recommended):", err=True)
+    click.echo("  voicepipe setup", err=True)
 
     click.echo("common fixes:", err=True)
     click.echo("  voicepipe service install", err=True)

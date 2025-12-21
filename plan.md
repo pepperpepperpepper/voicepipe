@@ -146,9 +146,8 @@ Suggested fields (start small, allow expansion):
 ---
 
 ## Deliverables Checklist
-- [ ] Recorder ownership fix in `AutoRecorderBackend.stop/cancel`
-- [ ] `recording_id` in daemon + subprocess session
-- [ ] `TranscriptionResult` + `--json` output (default unchanged)
-- [ ] `IntentRouter` (prefix-only) returning `IntentResult`
-- [ ] Tests for ownership + result + router (offline)
-
+- [x] Recorder ownership fix in `AutoRecorderBackend.stop/cancel`
+- [x] `recording_id` in daemon + subprocess session
+- [x] `TranscriptionResult` + `--json` output (default unchanged)
+- [x] `IntentRouter` (prefix-only) returning `IntentResult`
+- [x] Tests for ownership + result + router (offline)

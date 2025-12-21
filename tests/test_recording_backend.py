@@ -156,3 +156,104 @@ def test_auto_backend_falls_back_to_subprocess(monkeypatch) -> None:
     out = backend.start(device=None)
     assert out.mode == "subprocess"
     assert out.pid == 999
+
+
+def test_auto_backend_stop_prefers_subprocess_when_daemon_idle(monkeypatch) -> None:
+    _session, rb = _reload_backend()
+
+    backend = rb.AutoRecorderBackend()
+
+    monkeypatch.setattr(
+        backend._daemon,
+        "status",
+        lambda: rb.StatusResult(mode="daemon", status="idle", pid=123),
+    )
+    monkeypatch.setattr(
+        backend._subprocess,
+        "status",
+        lambda: rb.StatusResult(mode="subprocess", status="recording", pid=777),
+    )
+    monkeypatch.setattr(backend._daemon, "stop", lambda: (_ for _ in ()).throw(AssertionError()))
+    monkeypatch.setattr(
+        backend._subprocess,
+        "stop",
+        lambda: rb.StopResult(mode="subprocess", audio_file="/tmp/a.wav", session={}),
+    )
+
+    out = backend.stop()
+    assert out.mode == "subprocess"
+    assert out.audio_file == "/tmp/a.wav"
+
+
+def test_auto_backend_stop_prefers_daemon_when_recording(monkeypatch) -> None:
+    _session, rb = _reload_backend()
+
+    backend = rb.AutoRecorderBackend()
+
+    monkeypatch.setattr(
+        backend._daemon,
+        "status",
+        lambda: rb.StatusResult(mode="daemon", status="recording", pid=123),
+    )
+    monkeypatch.setattr(
+        backend._subprocess,
+        "status",
+        lambda: rb.StatusResult(mode="subprocess", status="recording", pid=777),
+    )
+    monkeypatch.setattr(
+        backend._daemon,
+        "stop",
+        lambda: rb.StopResult(mode="daemon", audio_file="/tmp/d.wav", session=None),
+    )
+    monkeypatch.setattr(backend._subprocess, "stop", lambda: (_ for _ in ()).throw(AssertionError()))
+
+    out = backend.stop()
+    assert out.mode == "daemon"
+    assert out.audio_file == "/tmp/d.wav"
+
+
+def test_auto_backend_cancel_prefers_subprocess_when_daemon_idle(monkeypatch) -> None:
+    _session, rb = _reload_backend()
+
+    backend = rb.AutoRecorderBackend()
+
+    monkeypatch.setattr(
+        backend._daemon,
+        "status",
+        lambda: rb.StatusResult(mode="daemon", status="idle", pid=123),
+    )
+    monkeypatch.setattr(
+        backend._subprocess,
+        "status",
+        lambda: rb.StatusResult(mode="subprocess", status="recording", pid=777),
+    )
+    monkeypatch.setattr(backend._daemon, "cancel", lambda: (_ for _ in ()).throw(AssertionError()))
+    monkeypatch.setattr(
+        backend._subprocess,
+        "cancel",
+        lambda: rb.CancelResult(mode="subprocess"),
+    )
+
+    out = backend.cancel()
+    assert out.mode == "subprocess"
+
+
+def test_auto_backend_status_prefers_subprocess_when_daemon_idle(monkeypatch) -> None:
+    _session, rb = _reload_backend()
+
+    backend = rb.AutoRecorderBackend()
+
+    monkeypatch.setattr(
+        backend._daemon,
+        "status",
+        lambda: rb.StatusResult(mode="daemon", status="idle", pid=123),
+    )
+    monkeypatch.setattr(
+        backend._subprocess,
+        "status",
+        lambda: rb.StatusResult(mode="subprocess", status="recording", pid=777),
+    )
+
+    out = backend.status()
+    assert out.mode == "subprocess"
+    assert out.status == "recording"

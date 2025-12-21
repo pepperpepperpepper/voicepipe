@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -80,6 +81,7 @@ class RecordingSession:
         session: dict[str, Any] = {
             "pid": os.getpid(),
             "audio_file": audio_file,
+            "recording_id": uuid.uuid4().hex,
             "started_at": datetime.now().isoformat(),
         }
 

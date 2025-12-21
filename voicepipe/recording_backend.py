@@ -34,6 +34,7 @@ class StartResult:
     mode: BackendMode
     pid: int | None = None
     audio_file: str | None = None
+    recording_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,7 @@ class StopResult:
     mode: BackendMode
     audio_file: str
     session: dict[str, Any] | None = None
+    recording_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,9 @@ class DaemonRecorderBackend:
             mode=self.mode,
             pid=resp.get("pid") if isinstance(resp.get("pid"), int) else None,
             audio_file=resp.get("audio_file") if isinstance(resp.get("audio_file"), str) else None,
+            recording_id=resp.get("recording_id")
+            if isinstance(resp.get("recording_id"), str)
+            else None,
         )
 
     def stop(self) -> StopResult:
@@ -79,7 +84,13 @@ class DaemonRecorderBackend:
         audio_file = resp.get("audio_file")
         if not isinstance(audio_file, str) or not audio_file:
             raise RecordingError("daemon did not return an audio_file")
-        return StopResult(mode=self.mode, audio_file=audio_file, session=None)
+        recording_id = resp.get("recording_id")
+        return StopResult(
+            mode=self.mode,
+            audio_file=audio_file,
+            session=None,
+            recording_id=recording_id if isinstance(recording_id, str) else None,
+        )
 
     def cancel(self) -> CancelResult:
         self._call("cancel")
@@ -122,12 +133,22 @@ class SubprocessRecorderBackend:
             stderr = (proc.stderr.read() if proc.stderr else "") if proc.stderr else ""
             raise RecordingError(f"Error starting recording: {stderr}")
 
-        return StartResult(mode=self.mode, pid=proc.pid)
+        recording_id = None
+        try:
+            session = RecordingSession.get_current_session()
+            rid = session.get("recording_id")
+            if isinstance(rid, str) and rid:
+                recording_id = rid
+        except Exception:
+            pass
+
+        return StartResult(mode=self.mode, pid=proc.pid, recording_id=recording_id)
 
     def stop(self) -> StopResult:
         session = RecordingSession.get_current_session()
         pid = session["pid"]
         audio_file = session["audio_file"]
+        recording_id = session.get("recording_id") if isinstance(session, dict) else None
 
         try:
             os.kill(pid, signal.SIGTERM)
@@ -135,7 +156,12 @@ class SubprocessRecorderBackend:
         except ProcessLookupError:
             pass
 
-        return StopResult(mode=self.mode, audio_file=str(audio_file), session=session)
+        return StopResult(
+            mode=self.mode,
+            audio_file=str(audio_file),
+            session=session,
+            recording_id=recording_id if isinstance(recording_id, str) else None,
+        )
 
     def cancel(self) -> CancelResult:
         session = RecordingSession.get_current_session()
@@ -177,6 +203,15 @@ class AutoRecorderBackend:
         self._daemon = DaemonRecorderBackend()
         self._subprocess = SubprocessRecorderBackend()
 
+    def _daemon_status(self) -> StatusResult | None:
+        try:
+            return self._daemon.status()
+        except BackendUnavailable:
+            return None
+
+    def _subprocess_status(self) -> StatusResult:
+        return self._subprocess.status()
+
     def start(self, *, device: int | None) -> StartResult:
         try:
             return self._daemon.start(device=device)
@@ -184,20 +219,42 @@ class AutoRecorderBackend:
             return self._subprocess.start(device=device)
 
     def stop(self) -> StopResult:
-        try:
+        daemon_status = self._daemon_status()
+        if daemon_status and daemon_status.status == "recording":
             return self._daemon.stop()
-        except BackendUnavailable:
+
+        subprocess_status = self._subprocess_status()
+        if subprocess_status.status == "recording":
             return self._subprocess.stop()
 
+        if daemon_status is None:
+            raise RecordingError("No active recording session found")
+
+        raise RecordingError("No recording in progress")
+
     def cancel(self) -> CancelResult:
-        try:
+        daemon_status = self._daemon_status()
+        if daemon_status and daemon_status.status == "recording":
             return self._daemon.cancel()
-        except BackendUnavailable:
+
+        subprocess_status = self._subprocess_status()
+        if subprocess_status.status == "recording":
             return self._subprocess.cancel()
 
-    def status(self) -> StatusResult:
-        try:
-            return self._daemon.status()
-        except BackendUnavailable:
-            return self._subprocess.status()
+        if daemon_status is None:
+            raise RecordingError("No active recording session found")
 
+        raise RecordingError("No recording in progress")
+
+    def status(self) -> StatusResult:
+        daemon_status = self._daemon_status()
+        if daemon_status and daemon_status.status == "recording":
+            return daemon_status
+
+        subprocess_status = self._subprocess_status()
+        if subprocess_status.status == "recording":
+            return subprocess_status
+
+        if daemon_status is not None:
+            return daemon_status
+        return subprocess_status

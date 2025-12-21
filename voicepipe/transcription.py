@@ -14,6 +14,7 @@ from typing import Optional
 
 from voicepipe.config import get_transcribe_backend
 from voicepipe.paths import transcriber_socket_path
+from voicepipe.transcription_result import TranscriptionResult
 
 
 class TranscriptionError(RuntimeError):
@@ -176,4 +177,37 @@ def transcribe_audio_file(
         "Set VOICEPIPE_TRANSCRIBE_BACKEND to one of: openai, elevenlabs\n"
         "Or prefix the model like: openai:whisper-1 or elevenlabs:scribe_v1\n"
         f"Got backend={backend!r} model={model!r}"
+    )
+
+
+def transcribe_audio_file_result(
+    audio_file: str,
+    *,
+    model: str,
+    language: Optional[str] = None,
+    prompt: Optional[str] = None,
+    temperature: float = 0.0,
+    prefer_daemon: bool = True,
+    recording_id: str | None = None,
+    source: str | None = None,
+) -> TranscriptionResult:
+    """Transcribe an on-disk audio file and return a structured result."""
+    backend, resolved_model, _model_for_daemon = _resolve_backend_and_model(model)
+    resolved_model = resolved_model or model
+    text = transcribe_audio_file(
+        audio_file,
+        model=model,
+        language=language,
+        prompt=prompt,
+        temperature=float(temperature),
+        prefer_daemon=prefer_daemon,
+    )
+    return TranscriptionResult(
+        text=text,
+        backend=backend,
+        model=resolved_model,
+        audio_file=audio_file,
+        recording_id=recording_id,
+        source=source,
+        warnings=[],
     )

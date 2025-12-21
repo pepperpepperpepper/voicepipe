@@ -18,6 +18,8 @@ def test_create_and_cleanup_session(tmp_path: Path, monkeypatch) -> None:
     s = session.RecordingSession.create_session()
     audio_file = Path(s["audio_file"])
     assert audio_file.exists()
+    assert isinstance(s.get("recording_id"), str)
+    assert len(str(s.get("recording_id"))) >= 16
 
     state_file = session.RecordingSession.get_state_file(int(s["pid"]))
     assert state_file.exists()
@@ -28,4 +30,3 @@ def test_create_and_cleanup_session(tmp_path: Path, monkeypatch) -> None:
 
     session.RecordingSession.cleanup_session(s)
     assert not state_file.exists()
-

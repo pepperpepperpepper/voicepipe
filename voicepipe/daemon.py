@@ -9,6 +9,7 @@ import logging
 import threading
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 try:
@@ -35,6 +36,7 @@ class RecordingDaemon:
         self.recorder = None
         self.recording = False
         self.audio_file = None
+        self.recording_id = None
         self.running = True
         self.timeout_timer = None
         self.default_device = None
@@ -306,6 +308,7 @@ class RecordingDaemon:
             # Start recording with existing recorder
             self.recorder.start_recording(output_file=self.audio_file)
             self.recording = True
+            self.recording_id = uuid.uuid4().hex
             
             # Set up timeout (5 minutes)
             self.timeout_timer = threading.Timer(300, self._timeout_callback)
@@ -323,7 +326,8 @@ class RecordingDaemon:
             return {
                 'status': 'recording',
                 'audio_file': self.audio_file,
-                'pid': os.getpid()
+                'pid': os.getpid(),
+                'recording_id': self.recording_id,
             }
             
         except Exception as e:
@@ -350,6 +354,8 @@ class RecordingDaemon:
             return {'error': 'No recording in progress'}
             
         try:
+            recording_id = self.recording_id
+
             # Cancel timeout timer
             if self.timeout_timer:
                 self.timeout_timer.cancel()
@@ -367,7 +373,8 @@ class RecordingDaemon:
             
             response = {
                 'status': 'stopped',
-                'audio_file': self.audio_file
+                'audio_file': self.audio_file,
+                'recording_id': recording_id,
             }
             
             # Handle file cleanup - only delete on timeout, preserve for transcription
@@ -381,6 +388,7 @@ class RecordingDaemon:
             self.recording = False
             self.recorder = None
             self.audio_file = None
+            self.recording_id = None
             self._timeout_triggered = False
             
             return response
@@ -394,6 +402,8 @@ class RecordingDaemon:
             return {'error': 'No recording in progress'}
             
         try:
+            recording_id = self.recording_id
+
             # Cancel timeout timer
             if self.timeout_timer:
                 self.timeout_timer.cancel()
@@ -412,12 +422,13 @@ class RecordingDaemon:
             self.recording = False
             self.recorder = None
             self.audio_file = None
+            self.recording_id = None
             self._timeout_triggered = False
             
             # Hide systray icon
             get_systray().hide()
             
-            return {'status': 'cancelled'}
+            return {'status': 'cancelled', 'recording_id': recording_id}
             
         except Exception as e:
             return {'error': str(e)}
@@ -427,7 +438,8 @@ class RecordingDaemon:
         return {
             'status': 'recording' if self.recording else 'idle',
             'pid': os.getpid(),
-            'audio_file': self.audio_file
+            'audio_file': self.audio_file,
+            'recording_id': self.recording_id,
         }
 
     def _cleanup_timeout_state(self):

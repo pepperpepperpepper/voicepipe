@@ -137,6 +137,27 @@ Suggested fields (start small, allow expansion):
 
 ---
 
+## Phase 5 — Voicepipe-Fast Parity (New)
+**Objective:** ensure the hotkey-first `voicepipe-fast` path uses the same structured artifact + intent routing as the main CLI.
+
+1) Apply intent routing in `voicepipe-fast`
+- Route transcript prefixes (e.g. `command …`) before typing/output.
+- Preserve existing behavior: no command execution yet; just strip prefix and type/print the remainder.
+- Support `VOICEPIPE_COMMANDS_STRICT=1` (refuse to type/print command-mode; exit non-zero).
+
+2) Thread `recording_id` through `voicepipe-fast`
+- Capture `recording_id` from the recorder daemon stop response.
+- Attach it to the transcription artifact.
+
+3) Optional: structured output mode for `voicepipe-fast stop`
+- Add an opt-in JSON output mode (env var or flag) that prints the full structured artifact (including `intent`).
+
+**Acceptance criteria**
+- `voicepipe-fast toggle` types the routed text (prefix stripped) and still cleans up audio on successful transcription.
+- `voicepipe-fast stop` prints routed text by default; opt-in JSON output includes `intent` and `recording_id` when present.
+
+---
+
 ## Open Questions (Decide Before Adding Commands)
 - Wakeword policy: fixed prefixes vs configurable list vs “double-tap hotkey enables command mode”.
 - Command-mode UX: should command-mode ever type text by default?
@@ -151,3 +172,5 @@ Suggested fields (start small, allow expansion):
 - [x] `TranscriptionResult` + `--json` output (default unchanged)
 - [x] `IntentRouter` (prefix-only) returning `IntentResult`
 - [x] Tests for ownership + result + router (offline)
+- [x] Integrate intent routing + `recording_id` into `voicepipe-fast`
+- [x] Optional: `voicepipe-fast stop` structured JSON output

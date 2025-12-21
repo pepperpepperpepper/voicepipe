@@ -7,6 +7,7 @@ stderr visibility matter.
 from __future__ import annotations
 
 import fcntl
+import json
 import os
 import shutil
 import sys
@@ -15,9 +16,10 @@ from pathlib import Path
 from typing import Optional
 
 from voicepipe.config import get_transcribe_model
+from voicepipe.intent_router import route_intent
 from voicepipe.ipc import IpcError, IpcUnavailable, daemon_socket_path, send_request
 from voicepipe.paths import preserved_audio_dir, runtime_app_dir, transcriber_socket_path
-from voicepipe.transcription import transcribe_audio_file
+from voicepipe.transcription import transcribe_audio_file_result
 from voicepipe.typing import get_active_window_id, type_text
 
 
@@ -39,17 +41,33 @@ def _parent_is_fluxbox() -> bool:
         return False
 
 
-_LOG_ENABLED = (
-    (not sys.stderr.isatty())
-    or os.environ.get("VOICEPIPE_FAST_LOG") == "1"
-    or _parent_is_fluxbox()
-)
-if _LOG_ENABLED:
+_stderr_redirected = False
+
+
+def _maybe_redirect_stderr() -> None:
+    """Mirror stderr to a log file for hotkey invocations.
+
+    This is intentionally lazy so importing this module never mutates the
+    process-level stderr file descriptor (important for test runners).
+    """
+    global _stderr_redirected
+    if _stderr_redirected:
+        return
+    _stderr_redirected = True
+
+    enabled = (
+        (not sys.stderr.isatty())
+        or os.environ.get("VOICEPIPE_FAST_LOG") == "1"
+        or _parent_is_fluxbox()
+    )
+    if not enabled:
+        return
+
     try:
-        _log_fh = open(LOG_FILE, "a", buffering=1)
-        os.dup2(_log_fh.fileno(), sys.stderr.fileno())
+        log_fh = open(LOG_FILE, "a", buffering=1)
+        os.dup2(log_fh.fileno(), sys.stderr.fileno())
     except Exception:
-        pass
+        return
 
 DEBOUNCE_FILE = str(TMP_DIR / "voicepipe-fast.time")
 DEBOUNCE_MS = 500  # milliseconds
@@ -69,7 +87,12 @@ def send_cmd(cmd: str) -> dict:
     )
 
 
-def send_transcribe_request(audio_file: str) -> str:
+def send_transcribe_request(
+    audio_file: str,
+    *,
+    recording_id: str | None = None,
+    source: str,
+) -> tuple[bool, str, dict]:
     """Transcribe audio using daemon when available."""
     if not TRANSCRIBER_SOCKET.exists():
         print(
@@ -83,14 +106,31 @@ def send_transcribe_request(audio_file: str) -> str:
         print("[TRANSCRIBE] Or: voicepipe service start", file=sys.stderr)
     try:
         model = get_transcribe_model()
-        return transcribe_audio_file(
+        result = transcribe_audio_file_result(
             audio_file,
             model=model,
             prefer_daemon=True,
+            recording_id=recording_id,
+            source=source,
         )
+        intent = route_intent(result)
+        output_text = result.text
+        if intent.mode == "dictation" and intent.dictation_text is not None:
+            output_text = intent.dictation_text
+        elif intent.mode == "command" and intent.command_text is not None:
+            output_text = intent.command_text
+
+        payload = result.to_dict()
+        payload["intent"] = intent.to_dict()
+
+        strict_commands = os.environ.get("VOICEPIPE_COMMANDS_STRICT") == "1"
+        if strict_commands and intent.mode == "command":
+            return True, "", payload
+
+        return True, output_text, payload
     except Exception as e:
         print(f"[TRANSCRIBE] Error: {e}", file=sys.stderr)
-        return ""
+        return False, "", {}
 
 
 class FileLock:
@@ -170,28 +210,53 @@ def execute_toggle() -> None:
 
             if "error" not in result and "audio_file" in result:
                 audio_file = result["audio_file"]
+                recording_id = (
+                    result.get("recording_id")
+                    if isinstance(result.get("recording_id"), str)
+                    else None
+                )
                 print(f"[TOGGLE] Audio file: {audio_file}", file=sys.stderr)
 
-                text = send_transcribe_request(audio_file)
-                if text:
-                    cleaned_text = text.rstrip()
-                    print(f"[TOGGLE] Transcription: {cleaned_text}", file=sys.stderr)
-                    # Always persist the last transcript for debugging/recovery.
-                    try:
-                        (TMP_DIR / "voicepipe-last.txt").write_text(
-                            cleaned_text + "\n", encoding="utf-8"
-                        )
-                    except Exception:
-                        pass
-                    typed_ok, type_err = type_text(
-                        cleaned_text, window_id=target_window
-                    )
-                    if not typed_ok:
+                strict_exit_code = None
+                ok, text, payload = send_transcribe_request(
+                    audio_file,
+                    recording_id=recording_id,
+                    source="fast-toggle",
+                )
+                if ok:
+                    if payload:
+                        print(f"[TOGGLE] Intent: {payload.get('intent')}", file=sys.stderr)
+                    intent = payload.get("intent") if isinstance(payload, dict) else None
+                    if (
+                        os.environ.get("VOICEPIPE_COMMANDS_STRICT") == "1"
+                        and isinstance(intent, dict)
+                        and intent.get("mode") == "command"
+                    ):
                         print(
-                            f"[TOGGLE] Warning: typing failed: {type_err}",
+                            "[TOGGLE] Command-mode detected but commands are not implemented yet.",
                             file=sys.stderr,
                         )
-                    transcription_ok = True
+                        transcription_ok = True
+                        strict_exit_code = 2
+                    else:
+                        cleaned_text = text.rstrip()
+                        print(f"[TOGGLE] Transcription: {cleaned_text}", file=sys.stderr)
+                        # Always persist the last transcript for debugging/recovery.
+                        try:
+                            (TMP_DIR / "voicepipe-last.txt").write_text(
+                                cleaned_text + "\n", encoding="utf-8"
+                            )
+                        except Exception:
+                            pass
+                        typed_ok, type_err = type_text(
+                            cleaned_text, window_id=target_window
+                        )
+                        if not typed_ok:
+                            print(
+                                f"[TOGGLE] Warning: typing failed: {type_err}",
+                                file=sys.stderr,
+                            )
+                        transcription_ok = True
                 else:
                     print("[TOGGLE] No transcription returned", file=sys.stderr)
                     transcription_ok = False
@@ -213,6 +278,9 @@ def execute_toggle() -> None:
                     except Exception:
                         pass
                     print(f"[TOGGLE] Preserved audio file: {audio_file}", file=sys.stderr)
+
+                if strict_exit_code:
+                    raise SystemExit(strict_exit_code)
             else:
                 print(
                     f"[TOGGLE] Stop error: {result.get('error', 'Unknown error')}",
@@ -243,6 +311,7 @@ def execute_toggle() -> None:
 
 
 def main(argv: Optional[list[str]] = None) -> None:
+    _maybe_redirect_stderr()
     args = list(sys.argv[1:] if argv is None else argv)
     if len(args) < 1:
         print("Usage: voicepipe-fast [start|stop|toggle]")
@@ -288,15 +357,25 @@ def main(argv: Optional[list[str]] = None) -> None:
             result = send_cmd("stop")
             if "error" not in result and "audio_file" in result:
                 audio_file = result["audio_file"]
+                recording_id = (
+                    result.get("recording_id")
+                    if isinstance(result.get("recording_id"), str)
+                    else None
+                )
                 if os.path.exists(audio_file) and os.path.getsize(audio_file) > 0:
-                    text = send_transcribe_request(audio_file)
-                    # Output text
-                    if text:
+                    ok, text, payload = send_transcribe_request(
+                        audio_file,
+                        recording_id=recording_id,
+                        source="fast-stop",
+                    )
+                    if os.environ.get("VOICEPIPE_FAST_JSON") == "1" and payload:
+                        print(json.dumps(payload, ensure_ascii=False))
+                    elif text:
                         print(text)
                     # Clean up
-                    if text and os.path.exists(audio_file):
+                    if ok and os.path.exists(audio_file):
                         os.unlink(audio_file)
-                    elif not text:
+                    elif not ok:
                         try:
                             dst_dir = preserved_audio_dir(create=True)
                             dst = dst_dir / Path(audio_file).name
@@ -308,6 +387,18 @@ def main(argv: Optional[list[str]] = None) -> None:
                             f"[STOP] Preserved audio file: {audio_file}",
                             file=sys.stderr,
                         )
+
+                    intent = payload.get("intent") if isinstance(payload, dict) else None
+                    if (
+                        os.environ.get("VOICEPIPE_COMMANDS_STRICT") == "1"
+                        and isinstance(intent, dict)
+                        and intent.get("mode") == "command"
+                    ):
+                        print(
+                            "[STOP] Command-mode detected but commands are not implemented yet.",
+                            file=sys.stderr,
+                        )
+                        raise SystemExit(2)
             else:
                 if "error" in result:
                     print(f"Error: {result['error']}", file=sys.stderr)

@@ -16,6 +16,8 @@ from voicepipe.config import (
     ensure_env_file,
     env_file_path,
     env_file_permissions_ok,
+    get_intent_routing_enabled,
+    get_intent_wake_prefixes,
     get_transcribe_backend,
     get_transcribe_model,
     legacy_api_key_paths,
@@ -146,6 +148,12 @@ def config_show() -> None:
     click.echo(f"transcribe model resolved: {get_transcribe_model()}")
     click.echo(
         f"device env set (VOICEPIPE_DEVICE): {bool(os.environ.get('VOICEPIPE_DEVICE'))}"
+    )
+    prefixes = get_intent_wake_prefixes()
+    click.echo(f"intent routing enabled: {get_intent_routing_enabled()}")
+    click.echo(
+        "intent wake prefixes resolved: "
+        + (", ".join(prefixes) if prefixes else "(none)")
     )
 
 

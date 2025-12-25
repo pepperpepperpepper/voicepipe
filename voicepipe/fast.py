@@ -15,8 +15,12 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from voicepipe.config import get_transcribe_model
-from voicepipe.intent_router import route_intent
+from voicepipe.config import (
+    get_intent_routing_enabled,
+    get_intent_wake_prefixes,
+    get_transcribe_model,
+)
+from voicepipe.intent_router import IntentResult, route_intent
 from voicepipe.ipc import IpcError, IpcUnavailable, daemon_socket_path, send_request
 from voicepipe.paths import preserved_audio_dir, runtime_app_dir, transcriber_socket_path
 from voicepipe.transcription import transcribe_audio_file_result
@@ -113,18 +117,27 @@ def send_transcribe_request(
             recording_id=recording_id,
             source=source,
         )
-        intent = route_intent(result)
-        output_text = result.text
-        if intent.mode == "dictation" and intent.dictation_text is not None:
-            output_text = intent.dictation_text
-        elif intent.mode == "command" and intent.command_text is not None:
-            output_text = intent.command_text
+        routing_enabled = get_intent_routing_enabled()
+        if routing_enabled:
+            intent = route_intent(result, wake_prefixes=get_intent_wake_prefixes())
+            output_text = result.text
+            if intent.mode == "dictation" and intent.dictation_text is not None:
+                output_text = intent.dictation_text
+            elif intent.mode == "command" and intent.command_text is not None:
+                output_text = intent.command_text
+        else:
+            intent = IntentResult(
+                mode="dictation",
+                dictation_text=result.text,
+                reason="disabled",
+            )
+            output_text = result.text
 
         payload = result.to_dict()
         payload["intent"] = intent.to_dict()
 
         strict_commands = os.environ.get("VOICEPIPE_COMMANDS_STRICT") == "1"
-        if strict_commands and intent.mode == "command":
+        if strict_commands and routing_enabled and intent.mode == "command":
             return True, "", payload
 
         return True, output_text, payload

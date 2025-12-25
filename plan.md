@@ -158,6 +158,65 @@ Suggested fields (start small, allow expansion):
 
 ---
 
+## Phase 6 — Configurable / Disableable Intent Routing (New)
+**Objective:** make the transcript “command prefix” logic optional and user-configurable so it can be fully disabled (skipping the scan) or customized.
+
+### Configuration surface (systemd-friendly)
+1) Add env vars (read from `~/.config/voicepipe/voicepipe.env` just like API keys)
+- `VOICEPIPE_INTENT_ROUTING=1|0`
+  - When `0`, skip intent routing entirely (no wake-prefix scan; output is the raw transcript).
+- `VOICEPIPE_INTENT_WAKE_PREFIXES=command,computer`
+  - Comma-separated list of prefixes.
+  - Only used when intent routing is enabled.
+  - Empty string means “no prefixes” (effectively always dictation).
+
+2) Update `DEFAULT_ENV_FILE_TEMPLATE`
+- Add commented examples for the two vars above so users discover them via `voicepipe config edit`.
+
+### Code changes
+1) Centralize parsing in `voicepipe.config`
+- Add `get_intent_routing_enabled()` (bool).
+- Add `get_intent_wake_prefixes()` (list[str]) with trimming + empty filtering.
+
+2) Gate routing in the main CLI (`voicepipe stop|dictate|transcribe-file`)
+- If routing disabled:
+  - do not call `route_intent()` (skip scan)
+  - do not strip prefixes
+  - JSON mode: include a minimal `intent` object like `{mode: "dictation", reason: "disabled"}` (so downstream tooling stays stable), or intentionally omit the key (decide once).
+- If routing enabled:
+  - call `route_intent(result, wake_prefixes=...)` using configured prefixes
+
+3) Gate routing in `voicepipe-fast`
+- Same behavior as the CLI:
+  - routing disabled = skip scan, output raw transcript
+  - routing enabled = strip configured prefixes before typing/output
+- Ensure `VOICEPIPE_COMMANDS_STRICT=1` only triggers when routing is enabled and the intent is command-mode.
+
+### Tests (hermetic)
+1) Unit tests for config parsing
+- Defaults (enabled/disabled decision).
+- Prefix parsing (commas, spaces, empty string).
+
+2) CLI tests
+- With routing disabled, “command copy that” stays unchanged in plain output.
+- JSON output remains stable and does not leak secrets.
+
+3) `voicepipe-fast` tests
+- With routing disabled, command prefixes are not stripped.
+- With custom prefixes, stripping respects the configured list.
+
+### Documentation
+- Update README to document the env vars and recommended usage patterns.
+- Update `voicepipe config show` to display:
+  - intent routing enabled/disabled
+  - resolved wake-prefix list (never prints secrets)
+
+**Acceptance criteria**
+- Setting `VOICEPIPE_INTENT_ROUTING=0` causes zero wake-prefix scanning and no transcript rewriting.
+- Setting `VOICEPIPE_INTENT_ROUTING=1` + custom `VOICEPIPE_INTENT_WAKE_PREFIXES=...` changes routing behavior deterministically in both CLI and `voicepipe-fast`.
+
+---
+
 ## Open Questions (Decide Before Adding Commands)
 - Wakeword policy: fixed prefixes vs configurable list vs “double-tap hotkey enables command mode”.
 - Command-mode UX: should command-mode ever type text by default?
@@ -174,3 +233,7 @@ Suggested fields (start small, allow expansion):
 - [x] Tests for ownership + result + router (offline)
 - [x] Integrate intent routing + `recording_id` into `voicepipe-fast`
 - [x] Optional: `voicepipe-fast stop` structured JSON output
+- [x] Intent routing can be disabled (no scan)
+- [x] Wake-prefix list is configurable via env
+- [x] CLI + `voicepipe-fast` honor the config consistently
+- [x] Tests cover disabled + custom prefix cases

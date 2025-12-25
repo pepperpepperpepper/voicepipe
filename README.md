@@ -82,6 +82,23 @@ voicepipe stop --model openai:whisper-1
 voicepipe stop --model elevenlabs:scribe_v1
 ```
 
+### Intent Routing (wake prefixes; optional)
+
+Voicepipe can (optionally) scan the final transcript for a small set of configurable prefixes (default: `command`, `computer`). If the transcript starts with a prefix, Voicepipe tags it as `intent.mode=command` and strips the prefix before printing/typing. **No command execution is implemented yet** — this only affects transcript rewriting and `--json` metadata.
+
+Configure in `~/.config/voicepipe/voicepipe.env`:
+```bash
+# Disable intent routing entirely (no scan; no rewriting):
+VOICEPIPE_INTENT_ROUTING=0
+
+# Or enable and customize the prefixes (comma-separated):
+VOICEPIPE_INTENT_ROUTING=1
+VOICEPIPE_INTENT_WAKE_PREFIXES=command,computer
+
+# Optional: refuse to print/type command-mode (exit 2) until commands exist:
+VOICEPIPE_COMMANDS_STRICT=1
+```
+
 ### API Key Setup
 
 Voicepipe requires an API key for the selected backend:

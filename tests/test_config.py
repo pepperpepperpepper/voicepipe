@@ -89,3 +89,35 @@ def test_ensure_env_file_does_not_overwrite(tmp_path: Path, monkeypatch) -> None
     env_path.write_text("OPENAI_API_KEY=existing\n", encoding="utf-8")
     config.ensure_env_file()
     assert env_path.read_text(encoding="utf-8") == "OPENAI_API_KEY=existing\n"
+
+
+def test_get_intent_routing_enabled_defaults_true(monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.delenv("VOICEPIPE_INTENT_ROUTING", raising=False)
+    assert config.get_intent_routing_enabled(load_env=False) is True
+
+
+def test_get_intent_routing_enabled_false_values(monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.setenv("VOICEPIPE_INTENT_ROUTING", "0")
+    assert config.get_intent_routing_enabled(load_env=False) is False
+    monkeypatch.setenv("VOICEPIPE_INTENT_ROUTING", "false")
+    assert config.get_intent_routing_enabled(load_env=False) is False
+
+
+def test_get_intent_wake_prefixes_defaults(monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.delenv("VOICEPIPE_INTENT_WAKE_PREFIXES", raising=False)
+    assert config.get_intent_wake_prefixes(load_env=False) == ["command", "computer"]
+
+
+def test_get_intent_wake_prefixes_parses_commas(monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.setenv("VOICEPIPE_INTENT_WAKE_PREFIXES", "  foo, bar,, baz ,")
+    assert config.get_intent_wake_prefixes(load_env=False) == ["foo", "bar", "baz"]
+
+
+def test_get_intent_wake_prefixes_empty_string_means_none(monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.setenv("VOICEPIPE_INTENT_WAKE_PREFIXES", "")
+    assert config.get_intent_wake_prefixes(load_env=False) == []

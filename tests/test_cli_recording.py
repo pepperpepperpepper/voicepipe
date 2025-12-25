@@ -134,3 +134,81 @@ def test_stop_json_outputs_structured_result(tmp_path: Path, monkeypatch, isolat
     assert payload["intent"]["mode"] == "dictation"
     assert payload["intent"]["dictation_text"] == "hello"
     assert "sk-test-secret" not in result.output
+
+
+def test_stop_routing_disabled_does_not_strip_prefix(
+    tmp_path: Path, monkeypatch, isolated_home: Path
+) -> None:
+    import voicepipe.commands.recording as recording_cmd
+
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"abc")
+
+    class _FakeBackend:
+        def stop(self):
+            return _StopResult(audio_file=str(audio), session=None)
+
+    monkeypatch.setattr(recording_cmd, "AutoRecorderBackend", lambda: _FakeBackend())
+    monkeypatch.setenv("VOICEPIPE_INTENT_ROUTING", "0")
+    monkeypatch.setattr(
+        recording_cmd,
+        "transcribe_audio_file_result",
+        lambda *_a, **_k: TranscriptionResult(
+            text="command copy that",
+            backend="openai",
+            model="gpt-test",
+            audio_file=str(audio),
+            recording_id=None,
+            source="stop",
+            warnings=[],
+        ),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["stop"])
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == "command copy that"
+
+
+def test_stop_json_routing_disabled_reports_disabled_intent(
+    tmp_path: Path, monkeypatch, isolated_home: Path
+) -> None:
+    import json as _json
+
+    import voicepipe.commands.recording as recording_cmd
+
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"abc")
+
+    class _FakeBackend:
+        def stop(self):
+            return _StopResult(audio_file=str(audio), session=None)
+
+    monkeypatch.setattr(recording_cmd, "AutoRecorderBackend", lambda: _FakeBackend())
+    monkeypatch.setenv("VOICEPIPE_INTENT_ROUTING", "0")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-secret")
+    monkeypatch.setattr(
+        recording_cmd,
+        "transcribe_audio_file_result",
+        lambda *_a, **_k: TranscriptionResult(
+            text="command copy that",
+            backend="openai",
+            model="gpt-test",
+            audio_file=str(audio),
+            recording_id=None,
+            source="stop",
+            warnings=[],
+        ),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["stop", "--json"])
+    assert result.exit_code == 0, result.output
+
+    payload = _json.loads(result.output.strip())
+    assert payload["text"] == "command copy that"
+    assert payload["intent"]["mode"] == "dictation"
+    assert payload["intent"]["reason"] == "disabled"
+    assert payload["intent"]["dictation_text"] == "command copy that"
+    assert payload["intent"]["command_text"] is None
+    assert "sk-test-secret" not in result.output

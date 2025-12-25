@@ -37,6 +37,11 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.delenv("VOICEPIPE_BACKEND", raising=False)
     monkeypatch.delenv("VOICEPIPE_TRANSCRIBE_MODEL", raising=False)
     monkeypatch.delenv("VOICEPIPE_MODEL", raising=False)
+    monkeypatch.delenv("VOICEPIPE_INTENT_ROUTING", raising=False)
+    monkeypatch.delenv("VOICEPIPE_INTENT_WAKE_PREFIXES", raising=False)
+    monkeypatch.delenv("VOICEPIPE_COMMANDS_STRICT", raising=False)
+    monkeypatch.delenv("VOICEPIPE_FAST_JSON", raising=False)
+    monkeypatch.delenv("VOICEPIPE_FAST_LOG", raising=False)
 
     # Ensure we don't accidentally rely on per-shell config location.
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)

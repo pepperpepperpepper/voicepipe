@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import stat
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 try:
     from dotenv import load_dotenv
@@ -25,6 +25,10 @@ APP_NAME = "voicepipe"
 DEFAULT_TRANSCRIBE_BACKEND = "openai"
 DEFAULT_OPENAI_TRANSCRIBE_MODEL = "gpt-4o-transcribe"
 DEFAULT_ELEVENLABS_TRANSCRIBE_MODEL = "scribe_v1"
+
+# Intent routing (wake-prefix scan) defaults.
+DEFAULT_INTENT_ROUTING_ENABLED = True
+DEFAULT_INTENT_WAKE_PREFIXES: tuple[str, ...] = ("command", "computer")
 
 # Backward-compatible name (historically OpenAI-only).
 DEFAULT_TRANSCRIBE_MODEL = DEFAULT_OPENAI_TRANSCRIBE_MODEL
@@ -38,6 +42,9 @@ DEFAULT_ENV_FILE_TEMPLATE = """# Voicepipe environment config (used by systemd s
 # VOICEPIPE_DEVICE=12
 # VOICEPIPE_TRANSCRIBE_BACKEND=openai
 # VOICEPIPE_TRANSCRIBE_MODEL=gpt-4o-transcribe
+# VOICEPIPE_INTENT_ROUTING=1
+# VOICEPIPE_INTENT_WAKE_PREFIXES=command,computer
+# VOICEPIPE_COMMANDS_STRICT=0
 """
 
 
@@ -119,6 +126,50 @@ def get_transcribe_model(
     if backend == "elevenlabs":
         return DEFAULT_ELEVENLABS_TRANSCRIBE_MODEL
     return DEFAULT_OPENAI_TRANSCRIBE_MODEL
+
+
+def get_intent_routing_enabled(*, default: bool = DEFAULT_INTENT_ROUTING_ENABLED, load_env: bool = True) -> bool:
+    """Return True if wake-prefix intent routing is enabled.
+
+    This controls whether Voicepipe scans the transcript for configured wake
+    prefixes (e.g. "command", "computer") and rewrites output accordingly.
+
+    Env var: VOICEPIPE_INTENT_ROUTING=1|0 (also supports true/false, yes/no).
+    """
+    if load_env:
+        load_environment()
+    raw = (os.environ.get("VOICEPIPE_INTENT_ROUTING") or "").strip()
+    if not raw:
+        return bool(default)
+    lowered = raw.lower()
+    if lowered in ("1", "true", "yes", "on"):
+        return True
+    if lowered in ("0", "false", "no", "off"):
+        return False
+    return bool(default)
+
+
+def get_intent_wake_prefixes(
+    *,
+    default: Iterable[str] | None = None,
+    load_env: bool = True,
+) -> list[str]:
+    """Return the configured wake prefixes.
+
+    Env var: VOICEPIPE_INTENT_WAKE_PREFIXES=command,computer
+    - Unset: returns defaults.
+    - Empty string: returns [].
+    """
+    if load_env:
+        load_environment()
+
+    raw = os.environ.get("VOICEPIPE_INTENT_WAKE_PREFIXES")
+    if raw is None:
+        prefixes = DEFAULT_INTENT_WAKE_PREFIXES if default is None else default
+        return [p for p in (str(x).strip() for x in prefixes) if p]
+
+    parts = [p.strip() for p in str(raw).split(",")]
+    return [p for p in parts if p]
 
 
 def _normalize_transcribe_backend(value: str) -> str:

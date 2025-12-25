@@ -87,3 +87,14 @@ def test_config_edit_uses_editor_env_var(isolated_home: Path, tmp_path: Path, mo
     result = runner.invoke(main, ["config", "edit"])
     assert result.exit_code == 0, result.output
     assert "restart Voicepipe" in result.output
+
+
+def test_config_show_prints_intent_routing_fields(isolated_home: Path, monkeypatch) -> None:
+    monkeypatch.setenv("VOICEPIPE_INTENT_ROUTING", "0")
+    monkeypatch.setenv("VOICEPIPE_INTENT_WAKE_PREFIXES", "foo,bar")
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["config", "show"])
+    assert result.exit_code == 0, result.output
+    assert "intent routing enabled: False" in result.output
+    assert "intent wake prefixes resolved: foo, bar" in result.output

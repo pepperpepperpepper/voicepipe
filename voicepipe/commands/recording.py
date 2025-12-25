@@ -12,10 +12,14 @@ from pathlib import Path
 
 import click
 
-from voicepipe.config import get_transcribe_model
+from voicepipe.config import (
+    get_intent_routing_enabled,
+    get_intent_wake_prefixes,
+    get_transcribe_model,
+)
 from voicepipe.logging_utils import configure_logging
 from voicepipe.paths import preserved_audio_dir
-from voicepipe.intent_router import route_intent
+from voicepipe.intent_router import IntentResult, route_intent
 from voicepipe.recording_backend import (
     AutoRecorderBackend,
     RecordingError,
@@ -26,6 +30,24 @@ from voicepipe.transcription import transcribe_audio_file_result
 from voicepipe.typing import type_text
 
 logger = logging.getLogger(__name__)
+
+def _route_and_select_output_text(result) -> tuple[bool, IntentResult, str]:
+    routing_enabled = get_intent_routing_enabled()
+    if not routing_enabled:
+        intent = IntentResult(
+            mode="dictation",
+            dictation_text=result.text,
+            reason="disabled",
+        )
+        return routing_enabled, intent, result.text
+
+    intent = route_intent(result, wake_prefixes=get_intent_wake_prefixes())
+    output_text = result.text
+    if intent.mode == "dictation" and intent.dictation_text is not None:
+        output_text = intent.dictation_text
+    elif intent.mode == "command" and intent.command_text is not None:
+        output_text = intent.command_text
+    return routing_enabled, intent, output_text
 
 
 def _transcribe_and_finalize(
@@ -58,18 +80,13 @@ def _transcribe_and_finalize(
         )
         transcription_ok = True
 
-        intent = route_intent(result)
-        output_text = result.text
-        if intent.mode == "dictation" and intent.dictation_text is not None:
-            output_text = intent.dictation_text
-        elif intent.mode == "command" and intent.command_text is not None:
-            output_text = intent.command_text
+        routing_enabled, intent, output_text = _route_and_select_output_text(result)
 
         payload = result.to_dict()
         payload["intent"] = intent.to_dict()
 
         strict_commands = os.environ.get("VOICEPIPE_COMMANDS_STRICT") == "1"
-        if strict_commands and intent.mode == "command":
+        if strict_commands and routing_enabled and intent.mode == "command":
             if json_output:
                 click.echo(json.dumps(payload, ensure_ascii=False))
             click.echo(
@@ -278,18 +295,13 @@ def transcribe_file(
             prefer_daemon=True,
             source="transcribe-file",
         )
-        intent = route_intent(result)
-        output_text = result.text
-        if intent.mode == "dictation" and intent.dictation_text is not None:
-            output_text = intent.dictation_text
-        elif intent.mode == "command" and intent.command_text is not None:
-            output_text = intent.command_text
+        routing_enabled, intent, output_text = _route_and_select_output_text(result)
 
         payload = result.to_dict()
         payload["intent"] = intent.to_dict()
 
         strict_commands = os.environ.get("VOICEPIPE_COMMANDS_STRICT") == "1"
-        if strict_commands and intent.mode == "command":
+        if strict_commands and routing_enabled and intent.mode == "command":
             if json_:
                 click.echo(json.dumps(payload, ensure_ascii=False))
             click.echo(

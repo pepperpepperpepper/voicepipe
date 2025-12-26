@@ -82,20 +82,43 @@ voicepipe stop --model openai:whisper-1
 voicepipe stop --model elevenlabs:scribe_v1
 ```
 
-### Intent Routing (wake prefixes; optional)
+### Zwingli Mode (intent routing + LLM postprocessing; optional)
 
-Voicepipe can (optionally) scan the final transcript for a small set of configurable prefixes (default: `command`, `computer`). If the transcript starts with a prefix, Voicepipe tags it as `intent.mode=command` and strips the prefix before printing/typing. **No command execution is implemented yet** — this only affects transcript rewriting and `--json` metadata.
+Voicepipe can (optionally) scan the final transcript for configurable wake prefixes (default: `zwingli`). If the transcript starts with a wake prefix, Voicepipe:
 
-Configure in `~/.config/voicepipe/voicepipe.env`:
+1. Strips the prefix (it is **not** sent to the LLM)
+2. Sends the remaining text to an LLM ("zwingli processing")
+3. Prints/types **the LLM output**
+
+This is *not* command execution/automation yet — it only generates text to output/type.
+
+Configure in `~/.config/voicepipe/config.toml` (non-secret settings):
+```toml
+[intent]
+routing_enabled = true
+wake_prefixes = ["zwingli"]
+
+[zwingli]
+model = "gpt-4o-mini"
+temperature = 0.0
+# system_prompt = "Return only the text to type."
+```
+
+You can also configure via env vars (systemd-friendly; put them in `~/.config/voicepipe/voicepipe.env`):
 ```bash
-# Disable intent routing entirely (no scan; no rewriting):
+# Disable intent routing entirely (no scan; no LLM call; no rewriting):
 VOICEPIPE_INTENT_ROUTING=0
 
-# Or enable and customize the prefixes (comma-separated):
+# Or enable and customize the wake prefixes (comma-separated):
 VOICEPIPE_INTENT_ROUTING=1
-VOICEPIPE_INTENT_WAKE_PREFIXES=command,computer
+VOICEPIPE_INTENT_WAKE_PREFIXES=zwingli
 
-# Optional: refuse to print/type command-mode (exit 2) until commands exist:
+# LLM settings (override config.toml):
+VOICEPIPE_ZWINGLI_MODEL=gpt-4o-mini
+VOICEPIPE_ZWINGLI_TEMPERATURE=0.0
+# VOICEPIPE_ZWINGLI_SYSTEM_PROMPT=...
+
+# Optional safety valve: refuse to output on zwingli-mode (exit 2; no LLM call):
 VOICEPIPE_COMMANDS_STRICT=1
 ```
 

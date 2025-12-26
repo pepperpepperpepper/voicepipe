@@ -4,8 +4,9 @@ Voicepipe is used both interactively (from a shell) and as a systemd user
 service. systemd user services generally do not load shell init files like
 `.bashrc`/`.zshrc`, so configuration must come from a source systemd can read.
 
-The canonical Voicepipe config file is:
-  ~/.config/voicepipe/voicepipe.env
+Voicepipe uses two config files under `~/.config/voicepipe/`:
+- `voicepipe.env` for secrets / env vars (systemd-friendly)
+- `config.toml` for non-secret settings (wake prefixes, etc.)
 """
 
 from __future__ import annotations
@@ -13,12 +14,21 @@ from __future__ import annotations
 import os
 import stat
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Any, Iterable, Optional
 
 try:
     from dotenv import load_dotenv
 except Exception:  # pragma: no cover
     load_dotenv = None
+
+try:  # Python 3.11+
+    import tomllib  # type: ignore[attr-defined]
+except Exception:  # pragma: no cover
+    tomllib = None  # type: ignore[assignment]
+    try:
+        import tomli as _tomli  # type: ignore[import-not-found]
+    except Exception:  # pragma: no cover
+        _tomli = None  # type: ignore[assignment]
 
 
 APP_NAME = "voicepipe"
@@ -28,12 +38,22 @@ DEFAULT_ELEVENLABS_TRANSCRIBE_MODEL = "scribe_v1"
 
 # Intent routing (wake-prefix scan) defaults.
 DEFAULT_INTENT_ROUTING_ENABLED = True
-DEFAULT_INTENT_WAKE_PREFIXES: tuple[str, ...] = ("command", "computer")
+DEFAULT_INTENT_WAKE_PREFIXES: tuple[str, ...] = ("zwingli",)
+
+# Zwingli (LLM postprocessor) defaults.
+DEFAULT_ZWINGLI_MODEL = "gpt-4o-mini"
+DEFAULT_ZWINGLI_TEMPERATURE = 0.0
+DEFAULT_ZWINGLI_SYSTEM_PROMPT = (
+    "You are Voicepipe's zwingli processor. The user will provide a spoken instruction.\n"
+    "Return only the exact text that should be typed/inserted. Do not add commentary."
+)
 
 # Backward-compatible name (historically OpenAI-only).
 DEFAULT_TRANSCRIBE_MODEL = DEFAULT_OPENAI_TRANSCRIBE_MODEL
 
 _ENV_LOADED = False
+_SETTINGS_LOADED = False
+_SETTINGS: dict[str, Any] = {}
 
 DEFAULT_ENV_FILE_TEMPLATE = """# Voicepipe environment config (used by systemd services and the CLI)
 # OPENAI_API_KEY=sk-...
@@ -43,8 +63,34 @@ DEFAULT_ENV_FILE_TEMPLATE = """# Voicepipe environment config (used by systemd s
 # VOICEPIPE_TRANSCRIBE_BACKEND=openai
 # VOICEPIPE_TRANSCRIBE_MODEL=gpt-4o-transcribe
 # VOICEPIPE_INTENT_ROUTING=1
-# VOICEPIPE_INTENT_WAKE_PREFIXES=command,computer
+# VOICEPIPE_INTENT_WAKE_PREFIXES=zwingli
+# VOICEPIPE_ZWINGLI_MODEL=gpt-4o-mini
+# VOICEPIPE_ZWINGLI_TEMPERATURE=0.0
+# VOICEPIPE_ZWINGLI_SYSTEM_PROMPT=Return only the text to type.
 # VOICEPIPE_COMMANDS_STRICT=0
+"""
+
+DEFAULT_SETTINGS_FILE_TEMPLATE = """# Voicepipe settings (non-secret).
+#
+# This file is loaded by both the CLI and systemd-launched services.
+# Secrets (API keys) should go in: voicepipe.env
+
+[intent]
+# Enable/disable intent routing entirely (wake-prefix scanning).
+routing_enabled = true
+
+# Wake prefixes that trigger "command mode" (a.k.a. zwingli mode).
+wake_prefixes = ["zwingli"]
+
+[zwingli]
+# Model used when a transcript begins with a wake prefix.
+model = "gpt-4o-mini"
+
+# Temperature for the LLM (0.0 is deterministic).
+temperature = 0.0
+
+# System prompt for zwingli processing.
+# system_prompt = "Return only the text to type."
 """
 
 
@@ -68,6 +114,11 @@ def config_dir(*, create: bool = False) -> Path:
 
 def env_file_path() -> Path:
     return config_dir() / f"{APP_NAME}.env"
+
+
+def settings_file_path() -> Path:
+    """Path to the non-secret settings file (TOML)."""
+    return config_dir() / "config.toml"
 
 
 def legacy_api_key_paths() -> list[Path]:
@@ -108,6 +159,123 @@ def load_environment(*, load_cwd_dotenv: bool = True) -> None:
             pass
 
 
+def _load_settings() -> dict[str, Any]:
+    """Load settings from ~/.config/voicepipe/config.toml (best-effort)."""
+    global _SETTINGS_LOADED, _SETTINGS
+    if _SETTINGS_LOADED:
+        return _SETTINGS
+    _SETTINGS_LOADED = True
+
+    settings_path = settings_file_path()
+    if not settings_path.exists():
+        _SETTINGS = {}
+        return _SETTINGS
+
+    parser = tomllib or _tomli
+    if parser is None:  # pragma: no cover
+        _SETTINGS = {}
+        return _SETTINGS
+
+    try:
+        _SETTINGS = parser.loads(settings_path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+    except Exception:
+        _SETTINGS = {}
+    return _SETTINGS
+
+
+def ensure_settings_file(
+    *,
+    path: Optional[Path] = None,
+    create_dir: bool = True,
+    file_mode: int = 0o600,
+    dir_mode: int = 0o700,
+) -> Path:
+    """Ensure the canonical settings TOML exists (without setting any values)."""
+
+    settings_path = settings_file_path() if path is None else Path(path)
+    if create_dir:
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_path(settings_path.parent, dir_mode)
+
+    if not settings_path.exists():
+        _atomic_write(settings_path, DEFAULT_SETTINGS_FILE_TEMPLATE)
+
+    ensure_private_path(settings_path, file_mode)
+    return settings_path
+
+
+def read_settings_file(path: Optional[Path] = None) -> dict[str, Any]:
+    settings_path = settings_file_path() if path is None else Path(path)
+    if not settings_path.exists():
+        return {}
+    parser = tomllib or _tomli
+    if parser is None:  # pragma: no cover
+        return {}
+    try:
+        return parser.loads(settings_path.read_text(encoding="utf-8"))  # type: ignore[no-any-return]
+    except Exception:
+        return {}
+
+
+def _get_settings_value(settings: dict[str, Any], dotted_key: str) -> Any:
+    cur: Any = settings
+    for part in dotted_key.split("."):
+        if not isinstance(cur, dict):
+            return None
+        if part not in cur:
+            return None
+        cur = cur.get(part)
+    return cur
+
+
+def _as_bool(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("1", "true", "yes", "on"):
+            return True
+        if lowered in ("0", "false", "no", "off"):
+            return False
+    return None
+
+
+def _as_str_list(value: Any) -> Optional[list[str]]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        raw = value.strip()
+        if raw == "":
+            return []
+        parts = [p.strip() for p in raw.split(",")]
+        return [p for p in parts if p]
+    if isinstance(value, (list, tuple)):
+        out: list[str] = []
+        for item in value:
+            s = str(item).strip()
+            if s:
+                out.append(s)
+        return out
+    return None
+
+
+def _as_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except Exception:
+            return None
+    return None
+
+
 def get_transcribe_model(
     *, default: str | None = None, load_env: bool = True
 ) -> str:
@@ -132,7 +300,7 @@ def get_intent_routing_enabled(*, default: bool = DEFAULT_INTENT_ROUTING_ENABLED
     """Return True if wake-prefix intent routing is enabled.
 
     This controls whether Voicepipe scans the transcript for configured wake
-    prefixes (e.g. "command", "computer") and rewrites output accordingly.
+    prefixes (e.g. "zwingli") and rewrites output accordingly.
 
     Env var: VOICEPIPE_INTENT_ROUTING=1|0 (also supports true/false, yes/no).
     """
@@ -140,7 +308,9 @@ def get_intent_routing_enabled(*, default: bool = DEFAULT_INTENT_ROUTING_ENABLED
         load_environment()
     raw = (os.environ.get("VOICEPIPE_INTENT_ROUTING") or "").strip()
     if not raw:
-        return bool(default)
+        settings = _load_settings() if load_env else {}
+        from_file = _as_bool(_get_settings_value(settings, "intent.routing_enabled"))
+        return bool(default) if from_file is None else bool(from_file)
     lowered = raw.lower()
     if lowered in ("1", "true", "yes", "on"):
         return True
@@ -156,7 +326,7 @@ def get_intent_wake_prefixes(
 ) -> list[str]:
     """Return the configured wake prefixes.
 
-    Env var: VOICEPIPE_INTENT_WAKE_PREFIXES=command,computer
+    Env var: VOICEPIPE_INTENT_WAKE_PREFIXES=zwingli
     - Unset: returns defaults.
     - Empty string: returns [].
     """
@@ -165,11 +335,83 @@ def get_intent_wake_prefixes(
 
     raw = os.environ.get("VOICEPIPE_INTENT_WAKE_PREFIXES")
     if raw is None:
+        settings = _load_settings() if load_env else {}
+        from_file = _as_str_list(_get_settings_value(settings, "intent.wake_prefixes"))
+        if from_file is not None:
+            return from_file
         prefixes = DEFAULT_INTENT_WAKE_PREFIXES if default is None else default
         return [p for p in (str(x).strip() for x in prefixes) if p]
 
     parts = [p.strip() for p in str(raw).split(",")]
     return [p for p in parts if p]
+
+
+def get_zwingli_model(*, default: str = DEFAULT_ZWINGLI_MODEL, load_env: bool = True) -> str:
+    """Return the model used for zwingli prompt processing.
+
+    Precedence:
+    - VOICEPIPE_ZWINGLI_MODEL env var
+    - ~/.config/voicepipe/config.toml [zwingli].model
+    - DEFAULT_ZWINGLI_MODEL
+    """
+    if load_env:
+        load_environment()
+
+    raw = (os.environ.get("VOICEPIPE_ZWINGLI_MODEL") or "").strip()
+    if raw:
+        return raw
+
+    settings = _load_settings() if load_env else {}
+    from_file = _get_settings_value(settings, "zwingli.model")
+    if from_file is not None:
+        value = str(from_file).strip()
+        if value:
+            return value
+
+    return str(default)
+
+
+def get_zwingli_temperature(
+    *, default: float = DEFAULT_ZWINGLI_TEMPERATURE, load_env: bool = True
+) -> float:
+    """Return the temperature used for zwingli prompt processing."""
+    if load_env:
+        load_environment()
+
+    raw = (os.environ.get("VOICEPIPE_ZWINGLI_TEMPERATURE") or "").strip()
+    if raw:
+        try:
+            return float(raw)
+        except Exception:
+            pass
+
+    settings = _load_settings() if load_env else {}
+    from_file = _as_float(_get_settings_value(settings, "zwingli.temperature"))
+    if from_file is not None:
+        return float(from_file)
+
+    return float(default)
+
+
+def get_zwingli_system_prompt(
+    *, default: str = DEFAULT_ZWINGLI_SYSTEM_PROMPT, load_env: bool = True
+) -> str:
+    """Return the system prompt used for zwingli prompt processing."""
+    if load_env:
+        load_environment()
+
+    raw = os.environ.get("VOICEPIPE_ZWINGLI_SYSTEM_PROMPT")
+    if raw is not None:
+        value = str(raw)
+        if value.strip():
+            return value
+
+    settings = _load_settings() if load_env else {}
+    from_file = _get_settings_value(settings, "zwingli.system_prompt")
+    if isinstance(from_file, str) and from_file.strip():
+        return from_file
+
+    return str(default)
 
 
 def _normalize_transcribe_backend(value: str) -> str:

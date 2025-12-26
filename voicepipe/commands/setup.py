@@ -10,6 +10,7 @@ import click
 
 from voicepipe.config import (
     ensure_env_file,
+    ensure_settings_file,
     env_file_permissions_ok,
     legacy_api_key_paths,
     legacy_elevenlabs_key_paths,
@@ -88,6 +89,7 @@ def setup(
         raise click.UsageError("--skip-key cannot be combined with --api-key/--from-stdin")
 
     env_path = ensure_env_file()
+    settings_path = ensure_settings_file()
     env_values = read_env_file(env_path)
     selected_backend = (
         (backend or "").strip()
@@ -172,6 +174,7 @@ def setup(
 
     click.echo(f"env file: {env_path}")
     click.echo(f"env file perms 0600: {env_file_permissions_ok(env_path)}")
+    click.echo(f"settings file: {settings_path}")
     click.echo(f"transcribe backend: {selected_backend}")
     if selected_backend == "elevenlabs":
         click.echo(f"env file has ELEVENLABS_API_KEY/XI_API_KEY: {has_key_in_file}")

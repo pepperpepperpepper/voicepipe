@@ -28,6 +28,9 @@ def test_setup_writes_env_file_installs_units_and_enables_target(
     assert env_path.exists()
     assert "OPENAI_API_KEY=sk-test" in env_path.read_text(encoding="utf-8")
 
+    settings_path = isolated_home / ".config" / "voicepipe" / "config.toml"
+    assert settings_path.exists()
+
     unit_dir = isolated_home / ".config" / "systemd" / "user"
     assert (unit_dir / TARGET_UNIT).exists()
 
@@ -53,4 +56,3 @@ def test_setup_skip_key_cannot_be_combined_with_api_key(fake_systemd: Path) -> N
     result = runner.invoke(main, ["setup", "--skip-key", "--api-key", "sk-test"])
     assert result.exit_code != 0
     assert "--skip-key cannot be combined" in result.output
-

@@ -25,6 +25,7 @@ from voicepipe.ipc import IpcError, IpcUnavailable, daemon_socket_path, send_req
 from voicepipe.paths import preserved_audio_dir, runtime_app_dir, transcriber_socket_path
 from voicepipe.transcription import transcribe_audio_file_result
 from voicepipe.typing import get_active_window_id, type_text
+from voicepipe.zwingli import process_zwingli_prompt
 
 
 SOCKET_PATH = daemon_socket_path()
@@ -120,26 +121,29 @@ def send_transcribe_request(
         routing_enabled = get_intent_routing_enabled()
         if routing_enabled:
             intent = route_intent(result, wake_prefixes=get_intent_wake_prefixes())
-            output_text = result.text
-            if intent.mode == "dictation" and intent.dictation_text is not None:
-                output_text = intent.dictation_text
-            elif intent.mode == "command" and intent.command_text is not None:
-                output_text = intent.command_text
         else:
             intent = IntentResult(
                 mode="dictation",
                 dictation_text=result.text,
                 reason="disabled",
             )
-            output_text = result.text
 
         payload = result.to_dict()
         payload["intent"] = intent.to_dict()
 
         strict_commands = os.environ.get("VOICEPIPE_COMMANDS_STRICT") == "1"
         if strict_commands and routing_enabled and intent.mode == "command":
+            payload["output_text"] = ""
             return True, "", payload
 
+        if intent.mode == "command":
+            output_text = process_zwingli_prompt(intent.command_text or "")
+        elif intent.mode == "dictation" and intent.dictation_text is not None:
+            output_text = intent.dictation_text
+        else:
+            output_text = result.text
+
+        payload["output_text"] = output_text
         return True, output_text, payload
     except Exception as e:
         print(f"[TRANSCRIBE] Error: {e}", file=sys.stderr)
@@ -246,7 +250,7 @@ def execute_toggle() -> None:
                         and intent.get("mode") == "command"
                     ):
                         print(
-                            "[TOGGLE] Command-mode detected but commands are not implemented yet.",
+                            "[TOGGLE] Zwingli-mode detected but VOICEPIPE_COMMANDS_STRICT=1; refusing to output.",
                             file=sys.stderr,
                         )
                         transcription_ok = True
@@ -408,7 +412,7 @@ def main(argv: Optional[list[str]] = None) -> None:
                         and intent.get("mode") == "command"
                     ):
                         print(
-                            "[STOP] Command-mode detected but commands are not implemented yet.",
+                            "[STOP] Zwingli-mode detected but VOICEPIPE_COMMANDS_STRICT=1; refusing to output.",
                             file=sys.stderr,
                         )
                         raise SystemExit(2)

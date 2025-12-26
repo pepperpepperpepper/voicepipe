@@ -108,7 +108,7 @@ def test_get_intent_routing_enabled_false_values(monkeypatch) -> None:
 def test_get_intent_wake_prefixes_defaults(monkeypatch) -> None:
     config = _reload_config()
     monkeypatch.delenv("VOICEPIPE_INTENT_WAKE_PREFIXES", raising=False)
-    assert config.get_intent_wake_prefixes(load_env=False) == ["command", "computer"]
+    assert config.get_intent_wake_prefixes(load_env=False) == ["zwingli"]
 
 
 def test_get_intent_wake_prefixes_parses_commas(monkeypatch) -> None:
@@ -121,3 +121,58 @@ def test_get_intent_wake_prefixes_empty_string_means_none(monkeypatch) -> None:
     config = _reload_config()
     monkeypatch.setenv("VOICEPIPE_INTENT_WAKE_PREFIXES", "")
     assert config.get_intent_wake_prefixes(load_env=False) == []
+
+
+def test_intent_settings_from_config_file_are_used_when_env_unset(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = _reload_config()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("VOICEPIPE_INTENT_WAKE_PREFIXES", raising=False)
+    monkeypatch.delenv("VOICEPIPE_INTENT_ROUTING", raising=False)
+
+    settings_path = tmp_path / ".config" / "voicepipe" / "config.toml"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(
+        "[intent]\nrouting_enabled = false\nwake_prefixes = [\"foo\", \"bar\"]\n",
+        encoding="utf-8",
+    )
+
+    assert config.get_intent_routing_enabled() is False
+    assert config.get_intent_wake_prefixes() == ["foo", "bar"]
+
+
+def test_intent_env_vars_override_config_file(tmp_path: Path, monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    settings_path = tmp_path / ".config" / "voicepipe" / "config.toml"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(
+        "[intent]\nrouting_enabled = false\nwake_prefixes = [\"foo\"]\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("VOICEPIPE_INTENT_ROUTING", "1")
+    monkeypatch.setenv("VOICEPIPE_INTENT_WAKE_PREFIXES", "bar,baz")
+
+    assert config.get_intent_routing_enabled() is True
+    assert config.get_intent_wake_prefixes() == ["bar", "baz"]
+
+
+def test_zwingli_settings_from_config_file(tmp_path: Path, monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("VOICEPIPE_ZWINGLI_MODEL", raising=False)
+    monkeypatch.delenv("VOICEPIPE_ZWINGLI_TEMPERATURE", raising=False)
+    monkeypatch.delenv("VOICEPIPE_ZWINGLI_SYSTEM_PROMPT", raising=False)
+
+    settings_path = tmp_path / ".config" / "voicepipe" / "config.toml"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(
+        "[zwingli]\nmodel = \"gpt-test\"\ntemperature = 0.25\nsystem_prompt = \"test\"\n",
+        encoding="utf-8",
+    )
+
+    assert config.get_zwingli_model() == "gpt-test"
+    assert config.get_zwingli_temperature() == 0.25
+    assert config.get_zwingli_system_prompt() == "test"

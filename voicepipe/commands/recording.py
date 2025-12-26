@@ -28,10 +28,11 @@ from voicepipe.recording_backend import (
 from voicepipe.session import RecordingSession
 from voicepipe.transcription import transcribe_audio_file_result
 from voicepipe.typing import type_text
+from voicepipe.zwingli import process_zwingli_prompt
 
 logger = logging.getLogger(__name__)
 
-def _route_and_select_output_text(result) -> tuple[bool, IntentResult, str]:
+def _route_intent(result) -> tuple[bool, IntentResult]:
     routing_enabled = get_intent_routing_enabled()
     if not routing_enabled:
         intent = IntentResult(
@@ -39,15 +40,10 @@ def _route_and_select_output_text(result) -> tuple[bool, IntentResult, str]:
             dictation_text=result.text,
             reason="disabled",
         )
-        return routing_enabled, intent, result.text
+        return routing_enabled, intent
 
     intent = route_intent(result, wake_prefixes=get_intent_wake_prefixes())
-    output_text = result.text
-    if intent.mode == "dictation" and intent.dictation_text is not None:
-        output_text = intent.dictation_text
-    elif intent.mode == "command" and intent.command_text is not None:
-        output_text = intent.command_text
-    return routing_enabled, intent, output_text
+    return routing_enabled, intent
 
 
 def _transcribe_and_finalize(
@@ -80,21 +76,30 @@ def _transcribe_and_finalize(
         )
         transcription_ok = True
 
-        routing_enabled, intent, output_text = _route_and_select_output_text(result)
+        routing_enabled, intent = _route_intent(result)
 
         payload = result.to_dict()
         payload["intent"] = intent.to_dict()
 
         strict_commands = os.environ.get("VOICEPIPE_COMMANDS_STRICT") == "1"
         if strict_commands and routing_enabled and intent.mode == "command":
+            payload["output_text"] = ""
             if json_output:
                 click.echo(json.dumps(payload, ensure_ascii=False))
             click.echo(
-                "Command-mode detected but commands are not implemented yet.",
+                "Zwingli-mode detected but VOICEPIPE_COMMANDS_STRICT=1; refusing to output.",
                 err=True,
             )
             raise SystemExit(2)
 
+        if intent.mode == "command":
+            output_text = process_zwingli_prompt(intent.command_text or "")
+        elif intent.mode == "dictation":
+            output_text = intent.dictation_text if intent.dictation_text is not None else result.text
+        else:
+            output_text = result.text
+
+        payload["output_text"] = output_text
         if json_output:
             click.echo(json.dumps(payload, ensure_ascii=False))
         else:
@@ -295,21 +300,30 @@ def transcribe_file(
             prefer_daemon=True,
             source="transcribe-file",
         )
-        routing_enabled, intent, output_text = _route_and_select_output_text(result)
+        routing_enabled, intent = _route_intent(result)
 
         payload = result.to_dict()
         payload["intent"] = intent.to_dict()
 
         strict_commands = os.environ.get("VOICEPIPE_COMMANDS_STRICT") == "1"
         if strict_commands and routing_enabled and intent.mode == "command":
+            payload["output_text"] = ""
             if json_:
                 click.echo(json.dumps(payload, ensure_ascii=False))
             click.echo(
-                "Command-mode detected but commands are not implemented yet.",
+                "Zwingli-mode detected but VOICEPIPE_COMMANDS_STRICT=1; refusing to output.",
                 err=True,
             )
             raise SystemExit(2)
 
+        if intent.mode == "command":
+            output_text = process_zwingli_prompt(intent.command_text or "")
+        elif intent.mode == "dictation":
+            output_text = intent.dictation_text if intent.dictation_text is not None else result.text
+        else:
+            output_text = result.text
+
+        payload["output_text"] = output_text
         if json_:
             click.echo(json.dumps(payload, ensure_ascii=False))
         else:

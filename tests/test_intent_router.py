@@ -6,7 +6,7 @@ from voicepipe.transcription_result import TranscriptionResult
 
 def test_intent_router_routes_command_prefix() -> None:
     tr = TranscriptionResult(
-        text="command copy that",
+        text="zwingli copy that",
         backend="openai",
         model="gpt-test",
         audio_file="a.wav",
@@ -18,7 +18,19 @@ def test_intent_router_routes_command_prefix() -> None:
 
 def test_intent_router_routes_command_prefix_with_punctuation() -> None:
     tr = TranscriptionResult(
-        text="Computer, open the browser",
+        text="Zwingli, open the browser",
+        backend="openai",
+        model="gpt-test",
+        audio_file="a.wav",
+    )
+    intent = route_intent(tr)
+    assert intent.mode == "command"
+    assert intent.command_text == "open the browser"
+
+
+def test_intent_router_routes_command_prefix_without_word_boundary() -> None:
+    tr = TranscriptionResult(
+        text="zwingli:open the browser",
         backend="openai",
         model="gpt-test",
         audio_file="a.wav",
@@ -39,3 +51,13 @@ def test_intent_router_defaults_to_dictation() -> None:
     assert intent.mode == "dictation"
     assert intent.dictation_text == "hello world"
 
+
+def test_intent_router_only_triggers_when_first_word() -> None:
+    tr = TranscriptionResult(
+        text="hey zwingli open the browser",
+        backend="openai",
+        model="gpt-test",
+        audio_file="a.wav",
+    )
+    intent = route_intent(tr, wake_prefixes=["zwingli"])
+    assert intent.mode == "dictation"

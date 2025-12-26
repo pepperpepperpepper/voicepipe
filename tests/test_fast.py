@@ -18,7 +18,7 @@ def test_fast_send_transcribe_request_routes_command_prefix(
 
     def _fake_transcribe(audio_file: str, **kwargs):
         return TranscriptionResult(
-            text="command copy that",
+            text="zwingli copy that",
             backend="openai",
             model="gpt-test",
             audio_file=audio_file,
@@ -28,15 +28,21 @@ def test_fast_send_transcribe_request_routes_command_prefix(
         )
 
     monkeypatch.setattr(fast, "transcribe_audio_file_result", _fake_transcribe)
+    monkeypatch.setattr(
+        fast,
+        "process_zwingli_prompt",
+        lambda prompt, **_k: f"LLM:{prompt}",
+    )
 
     ok, text, payload = fast.send_transcribe_request(
         "a.wav", recording_id="rid123", source="fast-stop"
     )
     assert ok is True
-    assert text == "copy that"
+    assert text == "LLM:copy that"
     assert payload["recording_id"] == "rid123"
     assert payload["intent"]["mode"] == "command"
     assert payload["intent"]["command_text"] == "copy that"
+    assert payload["output_text"] == "LLM:copy that"
 
 
 def test_fast_send_transcribe_request_strict_mode_refuses_command_output(
@@ -55,7 +61,7 @@ def test_fast_send_transcribe_request_strict_mode_refuses_command_output(
         fast,
         "transcribe_audio_file_result",
         lambda audio_file, **kwargs: TranscriptionResult(
-            text="computer, open browser",
+            text="zwingli open browser",
             backend="openai",
             model="gpt-test",
             audio_file=audio_file,
@@ -65,10 +71,18 @@ def test_fast_send_transcribe_request_strict_mode_refuses_command_output(
         ),
     )
 
+    called: list[str] = []
+    monkeypatch.setattr(
+        fast,
+        "process_zwingli_prompt",
+        lambda *_a, **_k: called.append("x") or "",
+    )
+
     ok, text, payload = fast.send_transcribe_request("a.wav", source="fast-stop")
     assert ok is True
     assert text == ""
     assert payload["intent"]["mode"] == "command"
+    assert called == []
 
 
 def test_fast_send_transcribe_request_routing_disabled_does_not_strip_prefix(
@@ -87,7 +101,7 @@ def test_fast_send_transcribe_request_routing_disabled_does_not_strip_prefix(
         fast,
         "transcribe_audio_file_result",
         lambda audio_file, **kwargs: TranscriptionResult(
-            text="command copy that",
+            text="zwingli copy that",
             backend="openai",
             model="gpt-test",
             audio_file=audio_file,
@@ -99,7 +113,7 @@ def test_fast_send_transcribe_request_routing_disabled_does_not_strip_prefix(
 
     ok, text, payload = fast.send_transcribe_request("a.wav", source="fast-stop")
     assert ok is True
-    assert text == "command copy that"
+    assert text == "zwingli copy that"
     assert payload["intent"]["mode"] == "dictation"
     assert payload["intent"]["reason"] == "disabled"
 
@@ -128,9 +142,14 @@ def test_fast_send_transcribe_request_custom_wake_prefixes(tmp_path: Path, monke
             warnings=[],
         ),
     )
+    monkeypatch.setattr(
+        fast,
+        "process_zwingli_prompt",
+        lambda prompt, **_k: f"LLM:{prompt}",
+    )
 
     ok, text, payload = fast.send_transcribe_request("a.wav", source="fast-stop")
     assert ok is True
-    assert text == "open browser"
+    assert text == "LLM:open browser"
     assert payload["intent"]["mode"] == "command"
     assert payload["intent"]["command_text"] == "open browser"

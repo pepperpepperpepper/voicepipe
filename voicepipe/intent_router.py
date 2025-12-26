@@ -25,7 +25,7 @@ class IntentResult:
         }
 
 
-DEFAULT_WAKE_PREFIXES: tuple[str, ...] = ("command", "computer")
+DEFAULT_WAKE_PREFIXES: tuple[str, ...] = ("zwingli",)
 
 
 def route_intent(
@@ -33,30 +33,29 @@ def route_intent(
     *,
     wake_prefixes: Iterable[str] = DEFAULT_WAKE_PREFIXES,
 ) -> IntentResult:
-    text = (transcription.text or "").strip()
+    raw_text = transcription.text or ""
+    text = raw_text.strip()
     if not text:
         return IntentResult(mode="unknown", dictation_text="", reason="empty")
 
     lowered = text.lower()
     for raw_prefix in wake_prefixes:
-        prefix = (raw_prefix or "").strip().lower()
-        if not prefix:
+        raw_prefix_str = (raw_prefix or "").strip()
+        if not raw_prefix_str:
+            continue
+        prefix = raw_prefix_str.lower()
+
+        if not lowered.startswith(prefix):
             continue
 
-        if lowered == prefix:
-            return IntentResult(mode="command", command_text="", reason=f"prefix:{prefix}")
-
-        if lowered.startswith(prefix + " "):
-            stripped = text[len(prefix) :].lstrip()
-            return IntentResult(mode="command", command_text=stripped, reason=f"prefix:{prefix}")
-
-        if lowered.startswith(prefix + ","):
-            stripped = text[len(prefix) + 1 :].lstrip()
-            return IntentResult(mode="command", command_text=stripped, reason=f"prefix:{prefix}")
-
-        if lowered.startswith(prefix + ":"):
-            stripped = text[len(prefix) + 1 :].lstrip()
-            return IntentResult(mode="command", command_text=stripped, reason=f"prefix:{prefix}")
+        stripped = text[len(raw_prefix_str) :]
+        stripped = stripped.lstrip()
+        while stripped and stripped[0] in (",", ":", ";", "-", "—", "–", ".", "!", "?"):
+            stripped = stripped[1:].lstrip()
+        return IntentResult(
+            mode="command",
+            command_text=stripped,
+            reason=f"prefix:{prefix}",
+        )
 
     return IntentResult(mode="dictation", dictation_text=text, reason="default")
-

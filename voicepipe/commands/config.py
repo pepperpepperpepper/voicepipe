@@ -14,15 +14,20 @@ from voicepipe.config import (
     detect_elevenlabs_api_key,
     detect_openai_api_key,
     ensure_env_file,
+    ensure_settings_file,
     env_file_path,
     env_file_permissions_ok,
     get_intent_routing_enabled,
     get_intent_wake_prefixes,
     get_transcribe_backend,
     get_transcribe_model,
+    get_zwingli_model,
+    get_zwingli_temperature,
     legacy_api_key_paths,
     legacy_elevenlabs_key_paths,
+    read_settings_file,
     read_env_file,
+    settings_file_path,
     upsert_env_var,
 )
 from voicepipe.systemd import TARGET_UNIT
@@ -116,6 +121,8 @@ def config_show() -> None:
     """Show which config sources are present (never prints secrets)."""
     env_path = env_file_path()
     env_values = read_env_file(env_path)
+    settings_path = settings_file_path()
+    settings_values = read_settings_file(settings_path)
 
     key_env = bool((os.environ.get("OPENAI_API_KEY") or "").strip())
     key_env_file = bool((env_values.get("OPENAI_API_KEY") or "").strip())
@@ -135,6 +142,7 @@ def config_show() -> None:
     click.echo(f"env file perms 0600: {env_file_permissions_ok(env_path)}")
     click.echo(f"env file has OPENAI_API_KEY: {key_env_file}")
     click.echo(f"env file has ELEVENLABS_API_KEY/XI_API_KEY: {eleven_env_file}")
+    click.echo(f"settings file exists: {settings_path} {settings_path.exists()}")
     click.echo(f"systemd credentials available: {creds_dir}")
 
     for path in legacy_api_key_paths():
@@ -155,6 +163,20 @@ def config_show() -> None:
         "intent wake prefixes resolved: "
         + (", ".join(prefixes) if prefixes else "(none)")
     )
+    click.echo(f"zwingli model resolved: {get_zwingli_model()}")
+    click.echo(f"zwingli temperature resolved: {get_zwingli_temperature()}")
+    intent_settings = settings_values.get("intent") if isinstance(settings_values, dict) else None
+    if isinstance(intent_settings, dict):
+        click.echo(
+            f"settings intent.routing_enabled: {intent_settings.get('routing_enabled')}"
+        )
+        click.echo(
+            "settings intent.wake_prefixes: "
+            + (
+                ", ".join(str(x) for x in intent_settings.get("wake_prefixes") or [])
+                or "(unset)"
+            )
+        )
 
 
 @config_group.command("edit")
@@ -174,6 +196,34 @@ def config_edit() -> None:
         raise click.ClickException("No editor found (set $EDITOR)")
 
     cmd = [*shlex.split(editor), str(env_path)]
+    rc = subprocess.run(cmd, check=False).returncode
+    if rc != 0:
+        raise SystemExit(rc)
+
+    click.echo(
+        "If you're using the systemd services, restart Voicepipe to pick up changes:\n"
+        "  voicepipe service restart\n"
+        f"  # or: systemctl --user restart {TARGET_UNIT}"
+    )
+
+
+@config_group.command("edit-settings")
+def config_edit_settings() -> None:
+    """Edit the canonical settings TOML in $EDITOR."""
+    settings_path = ensure_settings_file()
+
+    editor = (os.environ.get("EDITOR") or "").strip()
+    if not editor:
+        for candidate in ("nano", "vim", "vi"):
+            path = shutil.which(candidate)
+            if path:
+                editor = path
+                break
+
+    if not editor:
+        raise click.ClickException("No editor found (set $EDITOR)")
+
+    cmd = [*shlex.split(editor), str(settings_path)]
     rc = subprocess.run(cmd, check=False).returncode
     if rc != 0:
         raise SystemExit(rc)

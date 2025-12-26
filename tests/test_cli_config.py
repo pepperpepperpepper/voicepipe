@@ -89,6 +89,24 @@ def test_config_edit_uses_editor_env_var(isolated_home: Path, tmp_path: Path, mo
     assert "restart Voicepipe" in result.output
 
 
+def test_config_edit_settings_uses_editor_env_var(
+    isolated_home: Path, tmp_path: Path, monkeypatch
+) -> None:
+    # Fake editor that just exits 0.
+    editor = tmp_path / "editor"
+    editor.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    os.chmod(editor, 0o700)
+    monkeypatch.setenv("EDITOR", str(editor))
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["config", "edit-settings"])
+    assert result.exit_code == 0, result.output
+    assert "restart Voicepipe" in result.output
+
+    settings_path = isolated_home / ".config" / "voicepipe" / "config.toml"
+    assert settings_path.exists()
+
+
 def test_config_show_prints_intent_routing_fields(isolated_home: Path, monkeypatch) -> None:
     monkeypatch.setenv("VOICEPIPE_INTENT_ROUTING", "0")
     monkeypatch.setenv("VOICEPIPE_INTENT_WAKE_PREFIXES", "foo,bar")

@@ -42,7 +42,9 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.delenv("VOICEPIPE_COMMANDS_STRICT", raising=False)
     monkeypatch.delenv("VOICEPIPE_ZWINGLI_MODEL", raising=False)
     monkeypatch.delenv("VOICEPIPE_ZWINGLI_TEMPERATURE", raising=False)
+    monkeypatch.delenv("VOICEPIPE_ZWINGLI_USER_PROMPT", raising=False)
     monkeypatch.delenv("VOICEPIPE_ZWINGLI_SYSTEM_PROMPT", raising=False)
+    monkeypatch.delenv("VOICEPIPE_ERROR_REPORTING", raising=False)
     monkeypatch.delenv("VOICEPIPE_FAST_JSON", raising=False)
     monkeypatch.delenv("VOICEPIPE_FAST_LOG", raising=False)
 

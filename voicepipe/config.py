@@ -43,10 +43,14 @@ DEFAULT_INTENT_WAKE_PREFIXES: tuple[str, ...] = ("zwingli",)
 # Zwingli (LLM postprocessor) defaults.
 DEFAULT_ZWINGLI_MODEL = "gpt-4o-mini"
 DEFAULT_ZWINGLI_TEMPERATURE = 0.0
+DEFAULT_ZWINGLI_USER_PROMPT = ""
 DEFAULT_ZWINGLI_SYSTEM_PROMPT = (
     "You are Voicepipe's zwingli processor. The user will provide a spoken instruction.\n"
     "Return only the exact text that should be typed/inserted. Do not add commentary."
 )
+
+# Error reporting defaults.
+DEFAULT_ERROR_REPORTING_ENABLED = True
 
 # Backward-compatible name (historically OpenAI-only).
 DEFAULT_TRANSCRIBE_MODEL = DEFAULT_OPENAI_TRANSCRIBE_MODEL
@@ -66,7 +70,9 @@ DEFAULT_ENV_FILE_TEMPLATE = """# Voicepipe environment config (used by systemd s
 # VOICEPIPE_INTENT_WAKE_PREFIXES=zwingli
 # VOICEPIPE_ZWINGLI_MODEL=gpt-4o-mini
 # VOICEPIPE_ZWINGLI_TEMPERATURE=0.0
+# VOICEPIPE_ZWINGLI_USER_PROMPT=
 # VOICEPIPE_ZWINGLI_SYSTEM_PROMPT=Return only the text to type.
+# VOICEPIPE_ERROR_REPORTING=1
 # VOICEPIPE_COMMANDS_STRICT=0
 """
 
@@ -89,8 +95,16 @@ model = "gpt-4o-mini"
 # Temperature for the LLM (0.0 is deterministic).
 temperature = 0.0
 
+# Optional user prompt (sent as an additional user message before the spoken prompt).
+# user_prompt = ""
+
 # System prompt for zwingli processing.
 # system_prompt = "Return only the text to type."
+
+[errors]
+# When enabled, Voicepipe will attempt to type error messages into the target window
+# (useful for hotkey workflows where stderr isn't visible).
+reporting_enabled = true
 """
 
 
@@ -393,6 +407,25 @@ def get_zwingli_temperature(
     return float(default)
 
 
+def get_zwingli_user_prompt(
+    *, default: str = DEFAULT_ZWINGLI_USER_PROMPT, load_env: bool = True
+) -> str:
+    """Return the optional user prompt used for zwingli prompt processing."""
+    if load_env:
+        load_environment()
+
+    raw = os.environ.get("VOICEPIPE_ZWINGLI_USER_PROMPT")
+    if raw is not None:
+        return str(raw)
+
+    settings = _load_settings() if load_env else {}
+    from_file = _get_settings_value(settings, "zwingli.user_prompt")
+    if isinstance(from_file, str):
+        return from_file
+
+    return str(default)
+
+
 def get_zwingli_system_prompt(
     *, default: str = DEFAULT_ZWINGLI_SYSTEM_PROMPT, load_env: bool = True
 ) -> str:
@@ -412,6 +445,30 @@ def get_zwingli_system_prompt(
         return from_file
 
     return str(default)
+
+
+def get_error_reporting_enabled(
+    *, default: bool = DEFAULT_ERROR_REPORTING_ENABLED, load_env: bool = True
+) -> bool:
+    """Return True if error reporting (typing errors into the target) is enabled."""
+    if load_env:
+        load_environment()
+
+    raw = (os.environ.get("VOICEPIPE_ERROR_REPORTING") or "").strip()
+    if raw:
+        lowered = raw.lower()
+        if lowered in ("1", "true", "yes", "on"):
+            return True
+        if lowered in ("0", "false", "no", "off"):
+            return False
+        return bool(default)
+
+    settings = _load_settings() if load_env else {}
+    from_file = _as_bool(_get_settings_value(settings, "errors.reporting_enabled"))
+    if from_file is not None:
+        return bool(from_file)
+
+    return bool(default)
 
 
 def _normalize_transcribe_backend(value: str) -> str:

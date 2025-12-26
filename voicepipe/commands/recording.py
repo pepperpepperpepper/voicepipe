@@ -13,6 +13,7 @@ from pathlib import Path
 import click
 
 from voicepipe.config import (
+    get_error_reporting_enabled,
     get_intent_routing_enabled,
     get_intent_wake_prefixes,
     get_transcribe_model,
@@ -90,6 +91,10 @@ def _transcribe_and_finalize(
                 "Zwingli-mode detected but VOICEPIPE_COMMANDS_STRICT=1; refusing to output.",
                 err=True,
             )
+            if type_ and get_error_reporting_enabled():
+                type_text(
+                    "Error: Zwingli-mode detected but VOICEPIPE_COMMANDS_STRICT=1; refusing to output."
+                )
             raise SystemExit(2)
 
         if intent.mode == "command":
@@ -114,7 +119,7 @@ def _transcribe_and_finalize(
     except Exception as e:
         error_msg = str(e)
         click.echo(f"Error: {error_msg}", err=True)
-        if type_:
+        if type_ and get_error_reporting_enabled():
             type_text(f"Error: {error_msg}")
         raise SystemExit(1)
     finally:
@@ -314,6 +319,10 @@ def transcribe_file(
                 "Zwingli-mode detected but VOICEPIPE_COMMANDS_STRICT=1; refusing to output.",
                 err=True,
             )
+            if type_ and get_error_reporting_enabled():
+                type_text(
+                    "Error: Zwingli-mode detected but VOICEPIPE_COMMANDS_STRICT=1; refusing to output."
+                )
             raise SystemExit(2)
 
         if intent.mode == "command":

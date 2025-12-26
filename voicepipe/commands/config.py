@@ -19,9 +19,11 @@ from voicepipe.config import (
     env_file_permissions_ok,
     get_intent_routing_enabled,
     get_intent_wake_prefixes,
+    get_error_reporting_enabled,
     get_transcribe_backend,
     get_transcribe_model,
     get_zwingli_model,
+    get_zwingli_user_prompt,
     get_zwingli_temperature,
     legacy_api_key_paths,
     legacy_elevenlabs_key_paths,
@@ -163,8 +165,10 @@ def config_show() -> None:
         "intent wake prefixes resolved: "
         + (", ".join(prefixes) if prefixes else "(none)")
     )
+    click.echo(f"error reporting enabled: {get_error_reporting_enabled()}")
     click.echo(f"zwingli model resolved: {get_zwingli_model()}")
     click.echo(f"zwingli temperature resolved: {get_zwingli_temperature()}")
+    click.echo(f"zwingli user prompt set: {bool(get_zwingli_user_prompt().strip())}")
     intent_settings = settings_values.get("intent") if isinstance(settings_values, dict) else None
     if isinstance(intent_settings, dict):
         click.echo(

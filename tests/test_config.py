@@ -164,15 +164,40 @@ def test_zwingli_settings_from_config_file(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("VOICEPIPE_ZWINGLI_MODEL", raising=False)
     monkeypatch.delenv("VOICEPIPE_ZWINGLI_TEMPERATURE", raising=False)
+    monkeypatch.delenv("VOICEPIPE_ZWINGLI_USER_PROMPT", raising=False)
     monkeypatch.delenv("VOICEPIPE_ZWINGLI_SYSTEM_PROMPT", raising=False)
 
     settings_path = tmp_path / ".config" / "voicepipe" / "config.toml"
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     settings_path.write_text(
-        "[zwingli]\nmodel = \"gpt-test\"\ntemperature = 0.25\nsystem_prompt = \"test\"\n",
+        "[zwingli]\nmodel = \"gpt-test\"\ntemperature = 0.25\nuser_prompt = \"user\"\nsystem_prompt = \"test\"\n",
         encoding="utf-8",
     )
 
     assert config.get_zwingli_model() == "gpt-test"
     assert config.get_zwingli_temperature() == 0.25
+    assert config.get_zwingli_user_prompt() == "user"
     assert config.get_zwingli_system_prompt() == "test"
+
+
+def test_error_reporting_settings_from_config_file(tmp_path: Path, monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("VOICEPIPE_ERROR_REPORTING", raising=False)
+
+    settings_path = tmp_path / ".config" / "voicepipe" / "config.toml"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text("[errors]\nreporting_enabled = false\n", encoding="utf-8")
+
+    assert config.get_error_reporting_enabled() is False
+
+
+def test_error_reporting_env_overrides_config_file(tmp_path: Path, monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    settings_path = tmp_path / ".config" / "voicepipe" / "config.toml"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text("[errors]\nreporting_enabled = false\n", encoding="utf-8")
+
+    monkeypatch.setenv("VOICEPIPE_ERROR_REPORTING", "1")
+    assert config.get_error_reporting_enabled() is True

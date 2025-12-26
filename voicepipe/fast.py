@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from voicepipe.config import (
+    get_error_reporting_enabled,
     get_intent_routing_enabled,
     get_intent_wake_prefixes,
     get_transcribe_model,
@@ -109,8 +110,8 @@ def send_transcribe_request(
             file=sys.stderr,
         )
         print("[TRANSCRIBE] Or: voicepipe service start", file=sys.stderr)
+    model = get_transcribe_model()
     try:
-        model = get_transcribe_model()
         result = transcribe_audio_file_result(
             audio_file,
             model=model,
@@ -118,6 +119,23 @@ def send_transcribe_request(
             recording_id=recording_id,
             source=source,
         )
+    except Exception as e:
+        msg = str(e)
+        print(f"[TRANSCRIBE] Error: {msg}", file=sys.stderr)
+        return (
+            False,
+            "",
+            {
+                "error": msg,
+                "stage": "transcribe",
+                "audio_file": audio_file,
+                "recording_id": recording_id,
+                "source": source,
+                "model": model,
+            },
+        )
+
+    try:
         routing_enabled = get_intent_routing_enabled()
         if routing_enabled:
             intent = route_intent(result, wake_prefixes=get_intent_wake_prefixes())
@@ -137,7 +155,15 @@ def send_transcribe_request(
             return True, "", payload
 
         if intent.mode == "command":
-            output_text = process_zwingli_prompt(intent.command_text or "")
+            try:
+                output_text = process_zwingli_prompt(intent.command_text or "")
+            except Exception as e:
+                msg = str(e)
+                print(f"[ZWINGLI] Error: {msg}", file=sys.stderr)
+                payload["error"] = msg
+                payload["stage"] = "zwingli"
+                payload["output_text"] = ""
+                return False, "", payload
         elif intent.mode == "dictation" and intent.dictation_text is not None:
             output_text = intent.dictation_text
         else:
@@ -146,8 +172,20 @@ def send_transcribe_request(
         payload["output_text"] = output_text
         return True, output_text, payload
     except Exception as e:
-        print(f"[TRANSCRIBE] Error: {e}", file=sys.stderr)
-        return False, "", {}
+        msg = str(e)
+        print(f"[TRANSCRIBE] Error: {msg}", file=sys.stderr)
+        return (
+            False,
+            "",
+            {
+                "error": msg,
+                "stage": "internal",
+                "audio_file": audio_file,
+                "recording_id": recording_id,
+                "source": source,
+                "model": model,
+            },
+        )
 
 
 class FileLock:
@@ -208,18 +246,27 @@ def execute_toggle() -> None:
     """Execute toggle command logic."""
     try:
         print("[TOGGLE] Starting toggle execution", file=sys.stderr)
+        error_reporting = get_error_reporting_enabled()
+        target_window = get_active_window_id()
+        if target_window:
+            print(f"[TOGGLE] Target window: {target_window}", file=sys.stderr)
+        else:
+            print("[TOGGLE] Target window: (unknown)", file=sys.stderr)
+
+        def _type_error(message: str) -> None:
+            if not error_reporting:
+                return
+            typed_ok, type_err = type_text(f"Error: {message}", window_id=target_window)
+            if not typed_ok:
+                print(
+                    f"[TOGGLE] Warning: error typing failed: {type_err}",
+                    file=sys.stderr,
+                )
+
         status = send_cmd("status")
         print(f"[TOGGLE] Status: {status}", file=sys.stderr)
 
         if status.get("status") == "recording":
-            # Capture the current active window early so we can type back into it
-            # after transcription (hotkey invocations sometimes lose focus).
-            target_window = get_active_window_id()
-            if target_window:
-                print(f"[TOGGLE] Target window: {target_window}", file=sys.stderr)
-            else:
-                print("[TOGGLE] Target window: (unknown)", file=sys.stderr)
-
             print("[TOGGLE] Recording active, stopping...", file=sys.stderr)
             # Stop and transcribe
             result = send_cmd("stop")
@@ -249,10 +296,11 @@ def execute_toggle() -> None:
                         and isinstance(intent, dict)
                         and intent.get("mode") == "command"
                     ):
-                        print(
-                            "[TOGGLE] Zwingli-mode detected but VOICEPIPE_COMMANDS_STRICT=1; refusing to output.",
-                            file=sys.stderr,
+                        strict_msg = (
+                            "Zwingli-mode detected but VOICEPIPE_COMMANDS_STRICT=1; refusing to output."
                         )
+                        print(f"[TOGGLE] {strict_msg}", file=sys.stderr)
+                        _type_error(strict_msg)
                         transcription_ok = True
                         strict_exit_code = 2
                     else:
@@ -275,7 +323,15 @@ def execute_toggle() -> None:
                             )
                         transcription_ok = True
                 else:
-                    print("[TOGGLE] No transcription returned", file=sys.stderr)
+                    err = ""
+                    if isinstance(payload, dict):
+                        err = str(payload.get("error") or "").strip()
+                    if err:
+                        print(f"[TOGGLE] Transcription error: {err}", file=sys.stderr)
+                        _type_error(err)
+                    else:
+                        print("[TOGGLE] No transcription returned", file=sys.stderr)
+                        _type_error("No transcription returned")
                     transcription_ok = False
 
                 # Clean up
@@ -299,20 +355,24 @@ def execute_toggle() -> None:
                 if strict_exit_code:
                     raise SystemExit(strict_exit_code)
             else:
-                print(
-                    f"[TOGGLE] Stop error: {result.get('error', 'Unknown error')}",
-                    file=sys.stderr,
-                )
+                err = str(result.get("error", "Unknown error")).strip()
+                print(f"[TOGGLE] Stop error: {err}", file=sys.stderr)
+                _type_error(err)
         else:
             print("[TOGGLE] Starting recording...", file=sys.stderr)
             # Start recording
             result = send_cmd("start")
             print(f"[TOGGLE] Start result: {result}", file=sys.stderr)
             if "error" in result:
-                print(f"[TOGGLE] Start error: {result['error']}", file=sys.stderr)
+                err = str(result["error"]).strip()
+                print(f"[TOGGLE] Start error: {err}", file=sys.stderr)
+                _type_error(err)
     except IpcUnavailable as e:
         print(f"[TOGGLE] IPC unavailable: {e}", file=sys.stderr)
-        print("Error: Cannot connect to voicepipe daemon. Is it running?", file=sys.stderr)
+        msg = "Cannot connect to voicepipe daemon. Is it running?"
+        print(f"Error: {msg}", file=sys.stderr)
+        if get_error_reporting_enabled():
+            type_text(f"Error: {msg}")
         print(
             "Start it with: systemctl --user start voicepipe.target",
             file=sys.stderr,
@@ -321,9 +381,13 @@ def execute_toggle() -> None:
         raise SystemExit(1)
     except IpcError as e:
         print(f"[TOGGLE] IPC error: {e}", file=sys.stderr)
+        if get_error_reporting_enabled():
+            type_text(f"Error: {e}")
         raise SystemExit(1)
     except Exception as e:
         print(f"[TOGGLE] Unexpected error: {e}", file=sys.stderr)
+        if get_error_reporting_enabled():
+            type_text(f"Error: {e}")
         raise
 
 

@@ -153,3 +153,41 @@ def test_fast_send_transcribe_request_custom_wake_prefixes(tmp_path: Path, monke
     assert text == "LLM:open browser"
     assert payload["intent"]["mode"] == "command"
     assert payload["intent"]["command_text"] == "open browser"
+
+
+def test_fast_send_transcribe_request_zwingli_error_returns_payload(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import voicepipe.fast as fast
+
+    sock = tmp_path / "transcriber.sock"
+    sock.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(fast, "TRANSCRIBER_SOCKET", sock)
+
+    monkeypatch.setattr(fast, "get_transcribe_model", lambda: "gpt-test")
+    monkeypatch.setattr(
+        fast,
+        "transcribe_audio_file_result",
+        lambda audio_file, **kwargs: TranscriptionResult(
+            text="zwingli do the thing",
+            backend="openai",
+            model="gpt-test",
+            audio_file=audio_file,
+            recording_id=kwargs.get("recording_id"),
+            source=kwargs.get("source"),
+            warnings=[],
+        ),
+    )
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(fast, "process_zwingli_prompt", _boom)
+
+    ok, text, payload = fast.send_transcribe_request("a.wav", source="fast-stop")
+    assert ok is False
+    assert text == ""
+    assert payload["stage"] == "zwingli"
+    assert "boom" in payload["error"]
+    assert payload["intent"]["mode"] == "command"
+    assert payload["output_text"] == ""

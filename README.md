@@ -101,7 +101,11 @@ wake_prefixes = ["zwingli"]
 [zwingli]
 model = "gpt-4o-mini"
 temperature = 0.0
+# user_prompt = ""
 # system_prompt = "Return only the text to type."
+
+[errors]
+reporting_enabled = true
 ```
 
 You can also configure via env vars (systemd-friendly; put them in `~/.config/voicepipe/voicepipe.env`):
@@ -116,7 +120,9 @@ VOICEPIPE_INTENT_WAKE_PREFIXES=zwingli
 # LLM settings (override config.toml):
 VOICEPIPE_ZWINGLI_MODEL=gpt-4o-mini
 VOICEPIPE_ZWINGLI_TEMPERATURE=0.0
+# VOICEPIPE_ZWINGLI_USER_PROMPT=
 # VOICEPIPE_ZWINGLI_SYSTEM_PROMPT=...
+VOICEPIPE_ERROR_REPORTING=1
 
 # Optional safety valve: refuse to output on zwingli-mode (exit 2; no LLM call):
 VOICEPIPE_COMMANDS_STRICT=1

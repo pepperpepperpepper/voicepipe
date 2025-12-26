@@ -9,6 +9,7 @@ def test_fast_send_transcribe_request_routes_command_prefix(
     tmp_path: Path, monkeypatch
 ) -> None:
     import voicepipe.fast as fast
+    import voicepipe.pipeline as pipeline
 
     sock = tmp_path / "transcriber.sock"
     sock.write_text("x", encoding="utf-8")
@@ -28,10 +29,11 @@ def test_fast_send_transcribe_request_routes_command_prefix(
         )
 
     monkeypatch.setattr(fast, "transcribe_audio_file_result", _fake_transcribe)
+
     monkeypatch.setattr(
-        fast,
-        "process_zwingli_prompt",
-        lambda prompt, **_k: f"LLM:{prompt}",
+        pipeline,
+        "process_zwingli_prompt_result",
+        lambda prompt, **_k: (f"LLM:{prompt}", {"backend": "test", "model": "test"}),
     )
 
     ok, text, payload = fast.send_transcribe_request(
@@ -49,6 +51,7 @@ def test_fast_send_transcribe_request_strict_mode_refuses_command_output(
     tmp_path: Path, monkeypatch
 ) -> None:
     import voicepipe.fast as fast
+    import voicepipe.pipeline as pipeline
 
     sock = tmp_path / "transcriber.sock"
     sock.write_text("x", encoding="utf-8")
@@ -73,9 +76,9 @@ def test_fast_send_transcribe_request_strict_mode_refuses_command_output(
 
     called: list[str] = []
     monkeypatch.setattr(
-        fast,
-        "process_zwingli_prompt",
-        lambda *_a, **_k: called.append("x") or "",
+        pipeline,
+        "process_zwingli_prompt_result",
+        lambda *_a, **_k: called.append("x") or ("", {}),
     )
 
     ok, text, payload = fast.send_transcribe_request("a.wav", source="fast-stop")
@@ -120,6 +123,7 @@ def test_fast_send_transcribe_request_routing_disabled_does_not_strip_prefix(
 
 def test_fast_send_transcribe_request_custom_wake_prefixes(tmp_path: Path, monkeypatch) -> None:
     import voicepipe.fast as fast
+    import voicepipe.pipeline as pipeline
 
     sock = tmp_path / "transcriber.sock"
     sock.write_text("x", encoding="utf-8")
@@ -143,9 +147,9 @@ def test_fast_send_transcribe_request_custom_wake_prefixes(tmp_path: Path, monke
         ),
     )
     monkeypatch.setattr(
-        fast,
-        "process_zwingli_prompt",
-        lambda prompt, **_k: f"LLM:{prompt}",
+        pipeline,
+        "process_zwingli_prompt_result",
+        lambda prompt, **_k: (f"LLM:{prompt}", {"backend": "test", "model": "test"}),
     )
 
     ok, text, payload = fast.send_transcribe_request("a.wav", source="fast-stop")
@@ -159,6 +163,7 @@ def test_fast_send_transcribe_request_zwingli_error_returns_payload(
     tmp_path: Path, monkeypatch
 ) -> None:
     import voicepipe.fast as fast
+    import voicepipe.pipeline as pipeline
 
     sock = tmp_path / "transcriber.sock"
     sock.write_text("x", encoding="utf-8")
@@ -182,7 +187,7 @@ def test_fast_send_transcribe_request_zwingli_error_returns_payload(
     def _boom(*_a, **_k):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(fast, "process_zwingli_prompt", _boom)
+    monkeypatch.setattr(pipeline, "process_zwingli_prompt_result", _boom)
 
     ok, text, payload = fast.send_transcribe_request("a.wav", source="fast-stop")
     assert ok is False
@@ -190,4 +195,4 @@ def test_fast_send_transcribe_request_zwingli_error_returns_payload(
     assert payload["stage"] == "zwingli"
     assert "boom" in payload["error"]
     assert payload["intent"]["mode"] == "command"
-    assert payload["output_text"] == ""
+    assert payload["output_text"] is None

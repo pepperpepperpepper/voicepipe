@@ -170,14 +170,67 @@ def test_zwingli_settings_from_config_file(tmp_path: Path, monkeypatch) -> None:
     settings_path = tmp_path / ".config" / "voicepipe" / "config.toml"
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     settings_path.write_text(
-        "[zwingli]\nmodel = \"gpt-test\"\ntemperature = 0.25\nuser_prompt = \"user\"\nsystem_prompt = \"test\"\n",
+        "[zwingli]\nbackend = \"openai\"\nmodel = \"gpt-test\"\ntemperature = 0.25\nuser_prompt = \"user\"\nsystem_prompt = \"test\"\n",
         encoding="utf-8",
     )
 
+    assert config.get_zwingli_backend() == "openai"
     assert config.get_zwingli_model() == "gpt-test"
     assert config.get_zwingli_temperature() == 0.25
     assert config.get_zwingli_user_prompt() == "user"
     assert config.get_zwingli_system_prompt() == "test"
+
+
+def test_get_zwingli_backend_defaults_groq(monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.delenv("VOICEPIPE_ZWINGLI_BACKEND", raising=False)
+    assert config.get_zwingli_backend(load_env=False) == "groq"
+
+
+def test_get_zwingli_backend_env_overrides_config_file(tmp_path: Path, monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    settings_path = tmp_path / ".config" / "voicepipe" / "config.toml"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text("[zwingli]\nbackend = \"openai\"\n", encoding="utf-8")
+
+    monkeypatch.setenv("VOICEPIPE_ZWINGLI_BACKEND", "groq")
+    assert config.get_zwingli_backend() == "groq"
+
+
+def test_get_zwingli_base_url_defaults_to_groq_endpoint(monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.delenv("VOICEPIPE_ZWINGLI_BACKEND", raising=False)
+    assert config.get_zwingli_base_url(load_env=False) == "https://api.groq.com/openai/v1"
+
+
+def test_get_zwingli_base_url_can_be_set_in_toml(tmp_path: Path, monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    settings_path = tmp_path / ".config" / "voicepipe" / "config.toml"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(
+        "[zwingli]\nbackend = \"groq\"\nbase_url = \"http://example.test/v1\"\n",
+        encoding="utf-8",
+    )
+
+    assert config.get_zwingli_base_url() == "http://example.test/v1"
+
+
+def test_get_groq_api_key_prefers_env_var(monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-test")
+    assert config.get_groq_api_key(load_env=False) == "gsk-test"
+
+
+def test_get_groq_api_key_raises_helpful_error(monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    with pytest.raises(config.VoicepipeConfigError) as exc:
+        config.get_groq_api_key(load_env=False)
+    assert "voicepipe.env" in str(exc.value)
 
 
 def test_error_reporting_settings_from_config_file(tmp_path: Path, monkeypatch) -> None:

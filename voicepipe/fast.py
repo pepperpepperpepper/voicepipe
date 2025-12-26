@@ -21,12 +21,11 @@ from voicepipe.config import (
     get_intent_wake_prefixes,
     get_transcribe_model,
 )
-from voicepipe.intent_router import IntentResult, route_intent
 from voicepipe.ipc import IpcError, IpcUnavailable, daemon_socket_path, send_request
+from voicepipe.pipeline import build_error_payload, postprocess_transcription
 from voicepipe.paths import preserved_audio_dir, runtime_app_dir, transcriber_socket_path
 from voicepipe.transcription import transcribe_audio_file_result
 from voicepipe.typing import get_active_window_id, type_text
-from voicepipe.zwingli import process_zwingli_prompt
 
 
 SOCKET_PATH = daemon_socket_path()
@@ -81,6 +80,13 @@ LOCK_FILE = str(TMP_DIR / "voicepipe-fast.lock")
 
 TRANSCRIBER_SOCKET = transcriber_socket_path()
 
+def _fast_json_enabled() -> bool:
+    return (os.environ.get("VOICEPIPE_FAST_JSON") or "").strip() == "1"
+
+
+def _print_fast_json(payload: dict) -> None:
+    print(json.dumps(payload, ensure_ascii=False))
+
 
 def send_cmd(cmd: str) -> dict:
     """Send command to daemon via Unix socket."""
@@ -125,66 +131,42 @@ def send_transcribe_request(
         return (
             False,
             "",
-            {
-                "error": msg,
-                "stage": "transcribe",
-                "audio_file": audio_file,
-                "recording_id": recording_id,
-                "source": source,
-                "model": model,
-            },
+            build_error_payload(
+                stage="transcribe",
+                error=msg,
+                audio_file=audio_file,
+                recording_id=recording_id,
+                source=source,
+                model=model,
+            ),
         )
 
     try:
         routing_enabled = get_intent_routing_enabled()
-        if routing_enabled:
-            intent = route_intent(result, wake_prefixes=get_intent_wake_prefixes())
-        else:
-            intent = IntentResult(
-                mode="dictation",
-                dictation_text=result.text,
-                reason="disabled",
-            )
+        wake_prefixes = get_intent_wake_prefixes() if routing_enabled else None
+        post = postprocess_transcription(
+            result,
+            intent_routing_enabled=routing_enabled,
+            wake_prefixes=wake_prefixes,
+        )
 
-        payload = result.to_dict()
-        payload["intent"] = intent.to_dict()
-
-        strict_commands = os.environ.get("VOICEPIPE_COMMANDS_STRICT") == "1"
-        if strict_commands and routing_enabled and intent.mode == "command":
-            payload["output_text"] = ""
-            return True, "", payload
-
-        if intent.mode == "command":
-            try:
-                output_text = process_zwingli_prompt(intent.command_text or "")
-            except Exception as e:
-                msg = str(e)
-                print(f"[ZWINGLI] Error: {msg}", file=sys.stderr)
-                payload["error"] = msg
-                payload["stage"] = "zwingli"
-                payload["output_text"] = ""
-                return False, "", payload
-        elif intent.mode == "dictation" and intent.dictation_text is not None:
-            output_text = intent.dictation_text
-        else:
-            output_text = result.text
-
-        payload["output_text"] = output_text
-        return True, output_text, payload
+        payload = post.to_payload()
+        ok_for_cleanup = bool(post.ok) or post.stage == "strict"
+        return ok_for_cleanup, (post.output_text or ""), payload
     except Exception as e:
         msg = str(e)
         print(f"[TRANSCRIBE] Error: {msg}", file=sys.stderr)
         return (
             False,
             "",
-            {
-                "error": msg,
-                "stage": "internal",
-                "audio_file": audio_file,
-                "recording_id": recording_id,
-                "source": source,
-                "model": model,
-            },
+            build_error_payload(
+                stage="internal",
+                error=msg,
+                audio_file=audio_file,
+                recording_id=recording_id,
+                source=source,
+                model=model,
+            ),
         )
 
 
@@ -427,7 +409,17 @@ def main(argv: Optional[list[str]] = None) -> None:
 
             result = send_cmd("start")
             if "error" in result:
-                print(f"Error: {result['error']}", file=sys.stderr)
+                msg = str(result["error"])
+                if _fast_json_enabled():
+                    _print_fast_json(
+                        build_error_payload(
+                            stage="start",
+                            error=msg,
+                            source="fast-start",
+                            model=get_transcribe_model(),
+                        )
+                    )
+                print(f"Error: {msg}", file=sys.stderr)
                 raise SystemExit(1)
 
         elif cmd == "stop":
@@ -449,8 +441,8 @@ def main(argv: Optional[list[str]] = None) -> None:
                         recording_id=recording_id,
                         source="fast-stop",
                     )
-                    if os.environ.get("VOICEPIPE_FAST_JSON") == "1" and payload:
-                        print(json.dumps(payload, ensure_ascii=False))
+                    if _fast_json_enabled() and payload:
+                        _print_fast_json(payload)
                     elif text:
                         print(text)
                     # Clean up
@@ -482,9 +474,28 @@ def main(argv: Optional[list[str]] = None) -> None:
                         raise SystemExit(2)
             else:
                 if "error" in result:
-                    print(f"Error: {result['error']}", file=sys.stderr)
+                    msg = str(result["error"])
+                    if _fast_json_enabled():
+                        _print_fast_json(
+                            build_error_payload(
+                                stage="stop",
+                                error=msg,
+                                source="fast-stop",
+                                model=get_transcribe_model(),
+                            )
+                        )
+                    print(f"Error: {msg}", file=sys.stderr)
 
     except IpcUnavailable:
+        if _fast_json_enabled():
+            _print_fast_json(
+                build_error_payload(
+                    stage="ipc",
+                    error="Cannot connect to voicepipe daemon. Is it running?",
+                    source=f"fast-{cmd}",
+                    model=get_transcribe_model(),
+                )
+            )
         print("Error: Cannot connect to voicepipe daemon. Is it running?", file=sys.stderr)
         print(
             "Start it with: systemctl --user start voicepipe.target",
@@ -493,11 +504,29 @@ def main(argv: Optional[list[str]] = None) -> None:
         print("Or: voicepipe service start", file=sys.stderr)
         raise SystemExit(1)
     except IpcError as e:
+        if _fast_json_enabled():
+            _print_fast_json(
+                build_error_payload(
+                    stage="ipc",
+                    error=str(e),
+                    source=f"fast-{cmd}",
+                    model=get_transcribe_model(),
+                )
+            )
         print(f"Error: {e}", file=sys.stderr)
         raise SystemExit(1)
     except KeyboardInterrupt:
         raise SystemExit(130)
     except Exception as e:
+        if _fast_json_enabled():
+            _print_fast_json(
+                build_error_payload(
+                    stage="internal",
+                    error=str(e),
+                    source=f"fast-{cmd}",
+                    model=get_transcribe_model(),
+                )
+            )
         print(f"Error: {e}", file=sys.stderr)
         raise SystemExit(1)
 def toggle_main(argv: Optional[list[str]] = None) -> None:

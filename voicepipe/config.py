@@ -41,7 +41,10 @@ DEFAULT_INTENT_ROUTING_ENABLED = True
 DEFAULT_INTENT_WAKE_PREFIXES: tuple[str, ...] = ("zwingli",)
 
 # Zwingli (LLM postprocessor) defaults.
-DEFAULT_ZWINGLI_MODEL = "gpt-4o-mini"
+DEFAULT_ZWINGLI_BACKEND = "groq"
+DEFAULT_ZWINGLI_GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+DEFAULT_ZWINGLI_MODEL_GROQ = "moonshotai/kimi-k2-instruct"
+DEFAULT_ZWINGLI_MODEL_OPENAI = "gpt-4o-mini"
 DEFAULT_ZWINGLI_TEMPERATURE = 0.0
 DEFAULT_ZWINGLI_USER_PROMPT = ""
 DEFAULT_ZWINGLI_SYSTEM_PROMPT = (
@@ -61,6 +64,7 @@ _SETTINGS: dict[str, Any] = {}
 
 DEFAULT_ENV_FILE_TEMPLATE = """# Voicepipe environment config (used by systemd services and the CLI)
 # OPENAI_API_KEY=sk-...
+# GROQ_API_KEY=gsk_...
 # ELEVENLABS_API_KEY=...
 # or: XI_API_KEY=...
 # VOICEPIPE_DEVICE=12
@@ -68,7 +72,8 @@ DEFAULT_ENV_FILE_TEMPLATE = """# Voicepipe environment config (used by systemd s
 # VOICEPIPE_TRANSCRIBE_MODEL=gpt-4o-transcribe
 # VOICEPIPE_INTENT_ROUTING=1
 # VOICEPIPE_INTENT_WAKE_PREFIXES=zwingli
-# VOICEPIPE_ZWINGLI_MODEL=gpt-4o-mini
+# VOICEPIPE_ZWINGLI_BACKEND=groq
+# VOICEPIPE_ZWINGLI_MODEL=moonshotai/kimi-k2-instruct
 # VOICEPIPE_ZWINGLI_TEMPERATURE=0.0
 # VOICEPIPE_ZWINGLI_USER_PROMPT=
 # VOICEPIPE_ZWINGLI_SYSTEM_PROMPT=Return only the text to type.
@@ -89,8 +94,15 @@ routing_enabled = true
 wake_prefixes = ["zwingli"]
 
 [zwingli]
+# Backend used when a transcript begins with a wake prefix.
+# Uses Groq's OpenAI-compatible API by default.
+backend = "groq"
+
+# Base URL for the backend (only used by OpenAI-compatible providers like Groq).
+base_url = "https://api.groq.com/openai/v1"
+
 # Model used when a transcript begins with a wake prefix.
-model = "gpt-4o-mini"
+model = "moonshotai/kimi-k2-instruct"
 
 # Temperature for the LLM (0.0 is deterministic).
 temperature = 0.0
@@ -360,13 +372,70 @@ def get_intent_wake_prefixes(
     return [p for p in parts if p]
 
 
-def get_zwingli_model(*, default: str = DEFAULT_ZWINGLI_MODEL, load_env: bool = True) -> str:
+def _normalize_zwingli_backend(value: str) -> str:
+    raw = (value or "").strip().lower()
+    if not raw:
+        return DEFAULT_ZWINGLI_BACKEND
+    aliases = {
+        "openai-compatible": "openai",
+        "oa": "openai",
+        "g": "groq",
+    }
+    return aliases.get(raw, raw)
+
+
+def get_zwingli_backend(*, default: str = DEFAULT_ZWINGLI_BACKEND, load_env: bool = True) -> str:
+    """Return the backend used for zwingli prompt processing.
+
+    Zwingli backend is intentionally independent from the transcription backend.
+
+    Precedence:
+    - VOICEPIPE_ZWINGLI_BACKEND env var
+    - ~/.config/voicepipe/config.toml [zwingli].backend
+    - DEFAULT_ZWINGLI_BACKEND
+    """
+    if load_env:
+        load_environment()
+
+    raw = (os.environ.get("VOICEPIPE_ZWINGLI_BACKEND") or "").strip()
+    if raw:
+        return _normalize_zwingli_backend(raw)
+
+    settings = _load_settings() if load_env else {}
+    from_file = _get_settings_value(settings, "zwingli.backend")
+    if from_file is not None:
+        value = str(from_file).strip()
+        if value:
+            return _normalize_zwingli_backend(value)
+
+    return _normalize_zwingli_backend(str(default))
+
+
+def get_zwingli_base_url(*, load_env: bool = True) -> str | None:
+    """Return the base URL used for zwingli processing (if applicable).
+
+    This is primarily used for OpenAI-compatible endpoints like Groq.
+    The base URL is stored in settings TOML (not an env var) to keep `voicepipe.env`
+    focused on secrets.
+    """
+    backend = get_zwingli_backend(load_env=load_env)
+    settings = _load_settings() if load_env else {}
+    from_file = _get_settings_value(settings, "zwingli.base_url")
+    if isinstance(from_file, str) and from_file.strip():
+        return from_file.strip()
+
+    if backend == "groq":
+        return DEFAULT_ZWINGLI_GROQ_BASE_URL
+    return None
+
+
+def get_zwingli_model(*, default: str | None = None, load_env: bool = True) -> str:
     """Return the model used for zwingli prompt processing.
 
     Precedence:
     - VOICEPIPE_ZWINGLI_MODEL env var
     - ~/.config/voicepipe/config.toml [zwingli].model
-    - DEFAULT_ZWINGLI_MODEL
+    - Backend-specific default
     """
     if load_env:
         load_environment()
@@ -382,7 +451,13 @@ def get_zwingli_model(*, default: str = DEFAULT_ZWINGLI_MODEL, load_env: bool = 
         if value:
             return value
 
-    return str(default)
+    if default is not None:
+        return str(default)
+
+    backend = get_zwingli_backend(load_env=False)
+    if backend == "openai":
+        return DEFAULT_ZWINGLI_MODEL_OPENAI
+    return DEFAULT_ZWINGLI_MODEL_GROQ
 
 
 def get_zwingli_temperature(
@@ -543,6 +618,45 @@ def detect_openai_api_key(*, load_env: bool = True) -> bool:
     """Return True if an API key is available (never returns the key)."""
     try:
         _ = get_openai_api_key(load_env=load_env)
+        return True
+    except Exception:
+        return False
+
+
+def get_groq_api_key(*, load_env: bool = True) -> str:
+    if load_env:
+        load_environment()
+
+    api_key = (os.environ.get("GROQ_API_KEY") or "").strip()
+    if api_key:
+        return api_key
+
+    cred_dir = os.environ.get("CREDENTIALS_DIRECTORY")
+    if cred_dir:
+        for name in ("groq_api_key", "GROQ_API_KEY"):
+            try:
+                cred_path = Path(cred_dir) / name
+                if cred_path.exists():
+                    api_key = cred_path.read_text(encoding="utf-8").strip()
+                    if api_key:
+                        return api_key
+            except Exception:
+                continue
+
+    raise VoicepipeConfigError(
+        "Groq API key not found.\n\n"
+        "Recommended (works for systemd services and CLI):\n"
+        f"  Save it in: {env_file_path()}\n"
+        "  Example line: GROQ_API_KEY=gsk_...\n\n"
+        "Alternatives:\n"
+        "  - Set GROQ_API_KEY in the current environment\n"
+    )
+
+
+def detect_groq_api_key(*, load_env: bool = True) -> bool:
+    """Return True if a Groq API key is available (never returns the key)."""
+    try:
+        _ = get_groq_api_key(load_env=load_env)
         return True
     except Exception:
         return False

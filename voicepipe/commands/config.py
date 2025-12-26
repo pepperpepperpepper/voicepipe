@@ -12,6 +12,7 @@ import click
 
 from voicepipe.config import (
     detect_elevenlabs_api_key,
+    detect_groq_api_key,
     detect_openai_api_key,
     ensure_env_file,
     ensure_settings_file,
@@ -22,6 +23,8 @@ from voicepipe.config import (
     get_error_reporting_enabled,
     get_transcribe_backend,
     get_transcribe_model,
+    get_zwingli_backend,
+    get_zwingli_base_url,
     get_zwingli_model,
     get_zwingli_user_prompt,
     get_zwingli_temperature,
@@ -118,6 +121,45 @@ def config_set_elevenlabs_key(api_key: str | None, from_stdin: bool) -> None:
     )
 
 
+@config_group.command("set-groq-key")
+@click.argument("api_key", required=False)
+@click.option(
+    "--from-stdin",
+    is_flag=True,
+    help="Read the API key from stdin (avoids shell history).",
+)
+def config_set_groq_key(api_key: str | None, from_stdin: bool) -> None:
+    """Store the Groq API key in ~/.config/voicepipe/voicepipe.env."""
+    if from_stdin:
+        if sys.stdin.isatty():
+            raise click.UsageError("--from-stdin requires piped stdin")
+        api_key = (sys.stdin.read() or "").strip()
+
+    if not api_key:
+        api_key = click.prompt(
+            "Groq API key",
+            hide_input=True,
+            confirmation_prompt=True,
+        ).strip()
+
+    if not api_key:
+        raise click.ClickException("API key is empty")
+
+    env_path = upsert_env_var("GROQ_API_KEY", api_key)
+    ok = env_file_permissions_ok(env_path)
+    click.echo(f"Wrote GROQ_API_KEY to: {env_path}")
+    if ok is False:
+        click.echo(
+            f"Warning: expected permissions 0600 but got different mode on: {env_path}",
+            err=True,
+        )
+    click.echo(
+        "If you're using the systemd services, restart Voicepipe to pick up changes:\n"
+        "  voicepipe service restart\n"
+        f"  # or: systemctl --user restart {TARGET_UNIT}"
+    )
+
+
 @config_group.command("show")
 def config_show() -> None:
     """Show which config sources are present (never prints secrets)."""
@@ -127,7 +169,9 @@ def config_show() -> None:
     settings_values = read_settings_file(settings_path)
 
     key_env = bool((os.environ.get("OPENAI_API_KEY") or "").strip())
+    groq_env = bool((os.environ.get("GROQ_API_KEY") or "").strip())
     key_env_file = bool((env_values.get("OPENAI_API_KEY") or "").strip())
+    groq_env_file = bool((env_values.get("GROQ_API_KEY") or "").strip())
     eleven_env = bool(
         (os.environ.get("ELEVENLABS_API_KEY") or "").strip()
         or (os.environ.get("XI_API_KEY") or "").strip()
@@ -139,10 +183,12 @@ def config_show() -> None:
     creds_dir = bool((os.environ.get("CREDENTIALS_DIRECTORY") or "").strip())
 
     click.echo(f"env var OPENAI_API_KEY set: {key_env}")
+    click.echo(f"env var GROQ_API_KEY set: {groq_env}")
     click.echo(f"env var ELEVENLABS_API_KEY/XI_API_KEY set: {eleven_env}")
     click.echo(f"env file exists: {env_path} {env_path.exists()}")
     click.echo(f"env file perms 0600: {env_file_permissions_ok(env_path)}")
     click.echo(f"env file has OPENAI_API_KEY: {key_env_file}")
+    click.echo(f"env file has GROQ_API_KEY: {groq_env_file}")
     click.echo(f"env file has ELEVENLABS_API_KEY/XI_API_KEY: {eleven_env_file}")
     click.echo(f"settings file exists: {settings_path} {settings_path.exists()}")
     click.echo(f"systemd credentials available: {creds_dir}")
@@ -153,6 +199,7 @@ def config_show() -> None:
         click.echo(f"legacy elevenlabs key file exists: {path} {path.exists()}")
 
     click.echo(f"api key resolvable: {detect_openai_api_key()}")
+    click.echo(f"groq api key resolvable: {detect_groq_api_key()}")
     click.echo(f"elevenlabs api key resolvable: {detect_elevenlabs_api_key()}")
     click.echo(f"transcribe backend resolved: {get_transcribe_backend()}")
     click.echo(f"transcribe model resolved: {get_transcribe_model()}")
@@ -166,6 +213,9 @@ def config_show() -> None:
         + (", ".join(prefixes) if prefixes else "(none)")
     )
     click.echo(f"error reporting enabled: {get_error_reporting_enabled()}")
+    click.echo(f"zwingli backend resolved: {get_zwingli_backend()}")
+    base_url = get_zwingli_base_url()
+    click.echo(f"zwingli base url resolved: {base_url if base_url else '(default)'}")
     click.echo(f"zwingli model resolved: {get_zwingli_model()}")
     click.echo(f"zwingli temperature resolved: {get_zwingli_temperature()}")
     click.echo(f"zwingli user prompt set: {bool(get_zwingli_user_prompt().strip())}")
@@ -181,6 +231,12 @@ def config_show() -> None:
                 or "(unset)"
             )
         )
+
+    zwingli_settings = settings_values.get("zwingli") if isinstance(settings_values, dict) else None
+    if isinstance(zwingli_settings, dict):
+        click.echo(f"settings zwingli.backend: {zwingli_settings.get('backend')}")
+        click.echo(f"settings zwingli.base_url: {zwingli_settings.get('base_url')}")
+        click.echo(f"settings zwingli.model: {zwingli_settings.get('model')}")
 
 
 @config_group.command("edit")

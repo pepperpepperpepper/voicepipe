@@ -20,7 +20,7 @@ from voicepipe.config import (
 )
 from voicepipe.logging_utils import configure_logging
 from voicepipe.paths import preserved_audio_dir
-from voicepipe.intent_router import IntentResult, route_intent
+from voicepipe.pipeline import build_error_payload, postprocess_transcription
 from voicepipe.recording_backend import (
     AutoRecorderBackend,
     RecordingError,
@@ -29,23 +29,8 @@ from voicepipe.recording_backend import (
 from voicepipe.session import RecordingSession
 from voicepipe.transcription import transcribe_audio_file_result
 from voicepipe.typing import type_text
-from voicepipe.zwingli import process_zwingli_prompt
 
 logger = logging.getLogger(__name__)
-
-def _route_intent(result) -> tuple[bool, IntentResult]:
-    routing_enabled = get_intent_routing_enabled()
-    if not routing_enabled:
-        intent = IntentResult(
-            mode="dictation",
-            dictation_text=result.text,
-            reason="disabled",
-        )
-        return routing_enabled, intent
-
-    intent = route_intent(result, wake_prefixes=get_intent_wake_prefixes())
-    return routing_enabled, intent
-
 
 def _transcribe_and_finalize(
     *,
@@ -61,63 +46,107 @@ def _transcribe_and_finalize(
     source: str,
     prefer_daemon: bool = True,
 ) -> None:
-    transcription_ok = False
+    cleanup_audio = False
     try:
         if not audio_file:
-            raise RuntimeError("No audio file produced")
-        result = transcribe_audio_file_result(
-            audio_file,
-            model=resolved_model,
-            language=language,
-            prompt=prompt,
-            temperature=float(temperature),
-            prefer_daemon=bool(prefer_daemon),
-            recording_id=recording_id,
-            source=source,
-        )
-        transcription_ok = True
-
-        routing_enabled, intent = _route_intent(result)
-
-        payload = result.to_dict()
-        payload["intent"] = intent.to_dict()
-
-        strict_commands = os.environ.get("VOICEPIPE_COMMANDS_STRICT") == "1"
-        if strict_commands and routing_enabled and intent.mode == "command":
-            payload["output_text"] = ""
+            msg = "No audio file produced"
             if json_output:
-                click.echo(json.dumps(payload, ensure_ascii=False))
-            click.echo(
-                "Zwingli-mode detected but VOICEPIPE_COMMANDS_STRICT=1; refusing to output.",
-                err=True,
-            )
-            if type_ and get_error_reporting_enabled():
-                type_text(
-                    "Error: Zwingli-mode detected but VOICEPIPE_COMMANDS_STRICT=1; refusing to output."
+                click.echo(
+                    json.dumps(
+                        build_error_payload(
+                            stage="record",
+                            error=msg,
+                            audio_file=None,
+                            recording_id=recording_id,
+                            source=source,
+                            model=resolved_model,
+                        ),
+                        ensure_ascii=False,
+                    )
                 )
-            raise SystemExit(2)
+            click.echo(f"Error: {msg}", err=True)
+            if type_ and get_error_reporting_enabled():
+                type_text(f"Error: {msg}")
+            raise SystemExit(1)
 
-        if intent.mode == "command":
-            output_text = process_zwingli_prompt(intent.command_text or "")
-        elif intent.mode == "dictation":
-            output_text = intent.dictation_text if intent.dictation_text is not None else result.text
-        else:
-            output_text = result.text
+        try:
+            result = transcribe_audio_file_result(
+                audio_file,
+                model=resolved_model,
+                language=language,
+                prompt=prompt,
+                temperature=float(temperature),
+                prefer_daemon=bool(prefer_daemon),
+                recording_id=recording_id,
+                source=source,
+            )
+        except Exception as e:
+            msg = str(e)
+            if json_output:
+                click.echo(
+                    json.dumps(
+                        build_error_payload(
+                            stage="transcribe",
+                            error=msg,
+                            audio_file=audio_file,
+                            recording_id=recording_id,
+                            source=source,
+                            model=resolved_model,
+                        ),
+                        ensure_ascii=False,
+                    )
+                )
+            click.echo(f"Error: {msg}", err=True)
+            if type_ and get_error_reporting_enabled():
+                type_text(f"Error: {msg}")
+            raise SystemExit(1)
 
-        payload["output_text"] = output_text
+        routing_enabled = get_intent_routing_enabled()
+        wake_prefixes = get_intent_wake_prefixes() if routing_enabled else None
+        post = postprocess_transcription(
+            result,
+            intent_routing_enabled=routing_enabled,
+            wake_prefixes=wake_prefixes,
+        )
+        payload = post.to_payload()
+        cleanup_audio = bool(post.ok) or post.stage == "strict"
+
         if json_output:
             click.echo(json.dumps(payload, ensure_ascii=False))
         else:
-            click.echo(output_text)
+            click.echo(post.output_text or "")
+
+        if not post.ok:
+            msg = str(post.error or "unknown error")
+            click.echo(f"Error: {msg}", err=True)
+            if type_ and get_error_reporting_enabled():
+                type_text(f"Error: {msg}")
+            if post.stage == "strict":
+                raise SystemExit(2)
+            raise SystemExit(1)
 
         if type_:
-            ok, err = type_text(output_text)
+            ok, err = type_text(post.output_text or "")
             if not ok:
                 click.echo(f"Error typing text: {err}", err=True)
     except SystemExit:
         raise
     except Exception as e:
         error_msg = str(e)
+        if json_output:
+            click.echo(
+                json.dumps(
+                    build_error_payload(
+                        stage="internal",
+                        error=error_msg,
+                        audio_file=audio_file,
+                        recording_id=recording_id,
+                        source=source,
+                        model=resolved_model,
+                    ),
+                    ensure_ascii=False,
+                )
+            )
         click.echo(f"Error: {error_msg}", err=True)
         if type_ and get_error_reporting_enabled():
             type_text(f"Error: {error_msg}")
@@ -130,7 +159,7 @@ def _transcribe_and_finalize(
                 pass
 
         if audio_file and os.path.exists(audio_file):
-            if transcription_ok:
+            if cleanup_audio:
                 try:
                     os.unlink(audio_file)
                 except Exception:
@@ -205,8 +234,8 @@ def stop(
     json_: bool,
 ) -> None:
     """Stop recording and transcribe the audio."""
+    resolved_model = (model or get_transcribe_model()).strip()
     try:
-        resolved_model = (model or get_transcribe_model()).strip()
         backend = AutoRecorderBackend()
         stop_result = backend.stop()
         _transcribe_and_finalize(
@@ -224,10 +253,40 @@ def stop(
         )
 
     except RecordingError as e:
-        click.echo(f"Error: {e}", err=True)
+        msg = str(e)
+        if json_:
+            click.echo(
+                json.dumps(
+                    build_error_payload(
+                        stage="stop",
+                        error=msg,
+                        audio_file=None,
+                        recording_id=None,
+                        source="stop",
+                        model=resolved_model,
+                    ),
+                    ensure_ascii=False,
+                )
+            )
+        click.echo(f"Error: {msg}", err=True)
         raise SystemExit(1)
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        msg = str(e)
+        if json_:
+            click.echo(
+                json.dumps(
+                    build_error_payload(
+                        stage="stop",
+                        error=msg,
+                        audio_file=None,
+                        recording_id=None,
+                        source="stop",
+                        model=resolved_model,
+                    ),
+                    ensure_ascii=False,
+                )
+            )
+        click.echo(f"Error: {msg}", err=True)
         raise SystemExit(1)
 
 
@@ -296,57 +355,84 @@ def transcribe_file(
     """Transcribe an audio file (no recording session required)."""
     try:
         resolved_model = (model or get_transcribe_model()).strip()
-        result = transcribe_audio_file_result(
-            audio_file,
-            model=resolved_model,
-            language=language,
-            prompt=prompt,
-            temperature=temperature,
-            prefer_daemon=True,
-            source="transcribe-file",
-        )
-        routing_enabled, intent = _route_intent(result)
-
-        payload = result.to_dict()
-        payload["intent"] = intent.to_dict()
-
-        strict_commands = os.environ.get("VOICEPIPE_COMMANDS_STRICT") == "1"
-        if strict_commands and routing_enabled and intent.mode == "command":
-            payload["output_text"] = ""
-            if json_:
-                click.echo(json.dumps(payload, ensure_ascii=False))
-            click.echo(
-                "Zwingli-mode detected but VOICEPIPE_COMMANDS_STRICT=1; refusing to output.",
-                err=True,
+        try:
+            result = transcribe_audio_file_result(
+                audio_file,
+                model=resolved_model,
+                language=language,
+                prompt=prompt,
+                temperature=temperature,
+                prefer_daemon=True,
+                source="transcribe-file",
             )
-            if type_ and get_error_reporting_enabled():
-                type_text(
-                    "Error: Zwingli-mode detected but VOICEPIPE_COMMANDS_STRICT=1; refusing to output."
+        except Exception as e:
+            msg = str(e)
+            if json_:
+                click.echo(
+                    json.dumps(
+                        build_error_payload(
+                            stage="transcribe",
+                            error=msg,
+                            audio_file=audio_file,
+                            recording_id=None,
+                            source="transcribe-file",
+                            model=resolved_model,
+                        ),
+                        ensure_ascii=False,
+                    )
                 )
-            raise SystemExit(2)
+            click.echo(f"Error: {msg}", err=True)
+            if type_ and get_error_reporting_enabled():
+                type_text(f"Error: {msg}")
+            raise SystemExit(1)
 
-        if intent.mode == "command":
-            output_text = process_zwingli_prompt(intent.command_text or "")
-        elif intent.mode == "dictation":
-            output_text = intent.dictation_text if intent.dictation_text is not None else result.text
-        else:
-            output_text = result.text
+        routing_enabled = get_intent_routing_enabled()
+        wake_prefixes = get_intent_wake_prefixes() if routing_enabled else None
+        post = postprocess_transcription(
+            result,
+            intent_routing_enabled=routing_enabled,
+            wake_prefixes=wake_prefixes,
+        )
+        payload = post.to_payload()
 
-        payload["output_text"] = output_text
         if json_:
             click.echo(json.dumps(payload, ensure_ascii=False))
         else:
-            click.echo(output_text)
+            click.echo(post.output_text or "")
+
+        if not post.ok:
+            msg = str(post.error or "unknown error")
+            click.echo(f"Error: {msg}", err=True)
+            if type_ and get_error_reporting_enabled():
+                type_text(f"Error: {msg}")
+            if post.stage == "strict":
+                raise SystemExit(2)
+            raise SystemExit(1)
 
         if type_:
-            ok, err = type_text(output_text)
+            ok, err = type_text(post.output_text or "")
             if not ok:
                 click.echo(f"Error typing text: {err}", err=True)
 
     except SystemExit:
         raise
     except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+        msg = str(e)
+        if json_:
+            click.echo(
+                json.dumps(
+                    build_error_payload(
+                        stage="internal",
+                        error=msg,
+                        audio_file=audio_file,
+                        recording_id=None,
+                        source="transcribe-file",
+                        model=resolved_model,
+                    ),
+                    ensure_ascii=False,
+                )
+            )
+        click.echo(f"Error: {msg}", err=True)
         raise SystemExit(1)
 
 
@@ -414,6 +500,7 @@ def dictate(
             raise click.ClickException("--seconds must be > 0")
 
     backend = AutoRecorderBackend() if prefer_daemon else SubprocessRecorderBackend()
+    resolved_model = (model or get_transcribe_model()).strip()
     started = False
     try:
         backend.start(device=device)
@@ -428,7 +515,6 @@ def dictate(
 
         stop_result = backend.stop()
         started = False
-        resolved_model = (model or get_transcribe_model()).strip()
         _transcribe_and_finalize(
             audio_file=stop_result.audio_file,
             session=stop_result.session,
@@ -455,7 +541,22 @@ def dictate(
                 backend.cancel()
             except Exception:
                 pass
-        click.echo(f"Error: {e}", err=True)
+        msg = str(e)
+        if json_:
+            click.echo(
+                json.dumps(
+                    build_error_payload(
+                        stage="record",
+                        error=msg,
+                        audio_file=None,
+                        recording_id=None,
+                        source="dictate",
+                        model=resolved_model,
+                    ),
+                    ensure_ascii=False,
+                )
+            )
+        click.echo(f"Error: {msg}", err=True)
         raise SystemExit(1)
     except SystemExit:
         raise
@@ -465,7 +566,22 @@ def dictate(
                 backend.cancel()
             except Exception:
                 pass
-        click.echo(f"Error: {e}", err=True)
+        msg = str(e)
+        if json_:
+            click.echo(
+                json.dumps(
+                    build_error_payload(
+                        stage="record",
+                        error=msg,
+                        audio_file=None,
+                        recording_id=None,
+                        source="dictate",
+                        model=resolved_model,
+                    ),
+                    ensure_ascii=False,
+                )
+            )
+        click.echo(f"Error: {msg}", err=True)
         raise SystemExit(1)
 
 

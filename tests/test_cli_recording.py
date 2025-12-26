@@ -220,6 +220,7 @@ def test_stop_command_mode_uses_zwingli_llm_output(
     tmp_path: Path, monkeypatch, isolated_home: Path
 ) -> None:
     import voicepipe.commands.recording as recording_cmd
+    import voicepipe.pipeline as pipeline
 
     audio = tmp_path / "audio.wav"
     audio.write_bytes(b"abc")
@@ -245,11 +246,11 @@ def test_stop_command_mode_uses_zwingli_llm_output(
 
     seen: dict[str, str] = {}
 
-    def _fake_zwingli(prompt: str, **_kwargs) -> str:
+    def _fake_zwingli(prompt: str, **_kwargs):
         seen["prompt"] = prompt
-        return "Formal hello."
+        return "Formal hello.", {"backend": "test", "model": "test"}
 
-    monkeypatch.setattr(recording_cmd, "process_zwingli_prompt", _fake_zwingli)
+    monkeypatch.setattr(pipeline, "process_zwingli_prompt_result", _fake_zwingli)
 
     runner = CliRunner()
     result = runner.invoke(main, ["stop"])
@@ -262,6 +263,7 @@ def test_stop_command_mode_strict_refuses_llm_call(
     tmp_path: Path, monkeypatch, isolated_home: Path
 ) -> None:
     import voicepipe.commands.recording as recording_cmd
+    import voicepipe.pipeline as pipeline
 
     audio = tmp_path / "audio.wav"
     audio.write_bytes(b"abc")
@@ -288,7 +290,7 @@ def test_stop_command_mode_strict_refuses_llm_call(
 
     called: list[str] = []
     monkeypatch.setattr(
-        recording_cmd, "process_zwingli_prompt", lambda *_a, **_k: called.append("x")
+        pipeline, "process_zwingli_prompt_result", lambda *_a, **_k: called.append("x") or ("", {})
     )
 
     runner = CliRunner()

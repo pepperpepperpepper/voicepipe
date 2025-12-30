@@ -55,6 +55,10 @@ DEFAULT_ZWINGLI_SYSTEM_PROMPT = (
 # Error reporting defaults.
 DEFAULT_ERROR_REPORTING_ENABLED = True
 
+# Recording/audio defaults.
+DEFAULT_AUDIO_SAMPLE_RATE = 16000
+DEFAULT_AUDIO_CHANNELS = 1
+
 # Backward-compatible name (historically OpenAI-only).
 DEFAULT_TRANSCRIBE_MODEL = DEFAULT_OPENAI_TRANSCRIBE_MODEL
 
@@ -68,6 +72,8 @@ DEFAULT_ENV_FILE_TEMPLATE = """# Voicepipe environment config (used by systemd s
 # ELEVENLABS_API_KEY=...
 # or: XI_API_KEY=...
 # VOICEPIPE_DEVICE=12
+# VOICEPIPE_AUDIO_SAMPLE_RATE=16000
+# VOICEPIPE_AUDIO_CHANNELS=1
 # VOICEPIPE_TRANSCRIBE_BACKEND=openai
 # VOICEPIPE_TRANSCRIBE_MODEL=gpt-4o-transcribe
 # VOICEPIPE_INTENT_ROUTING=1
@@ -117,6 +123,12 @@ temperature = 0.0
 # When enabled, Voicepipe will attempt to type error messages into the target window
 # (useful for hotkey workflows where stderr isn't visible).
 reporting_enabled = true
+
+[audio]
+# These are best-effort preferences; Voicepipe will fall back to a working
+# sample rate/channels if PortAudio rejects your settings.
+sample_rate = 16000
+channels = 1
 """
 
 
@@ -320,6 +332,59 @@ def get_transcribe_model(
     if backend == "elevenlabs":
         return DEFAULT_ELEVENLABS_TRANSCRIBE_MODEL
     return DEFAULT_OPENAI_TRANSCRIBE_MODEL
+
+
+def _as_positive_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            parsed = int(raw)
+        except Exception:
+            return None
+        return parsed if parsed > 0 else None
+    return None
+
+
+def get_audio_sample_rate(*, default: int = DEFAULT_AUDIO_SAMPLE_RATE, load_env: bool = True) -> int:
+    """Preferred recording sample rate (Hz).
+
+    Note: Voicepipe will still probe/fallback to a working rate at runtime if
+    PortAudio rejects the preferred value.
+    """
+    if load_env:
+        load_environment()
+    for name in ("VOICEPIPE_AUDIO_SAMPLE_RATE", "VOICEPIPE_SAMPLE_RATE"):
+        raw = os.environ.get(name)
+        parsed = _as_positive_int(raw)
+        if parsed is not None:
+            return parsed
+
+    settings = _load_settings() if load_env else {}
+    from_file = _as_positive_int(_get_settings_value(settings, "audio.sample_rate"))
+    return int(from_file) if from_file is not None else int(default)
+
+
+def get_audio_channels(*, default: int = DEFAULT_AUDIO_CHANNELS, load_env: bool = True) -> int:
+    """Preferred recording channels (1=mono, 2=stereo)."""
+    if load_env:
+        load_environment()
+    for name in ("VOICEPIPE_AUDIO_CHANNELS", "VOICEPIPE_CHANNELS"):
+        raw = os.environ.get(name)
+        parsed = _as_positive_int(raw)
+        if parsed is not None:
+            return parsed
+
+    settings = _load_settings() if load_env else {}
+    from_file = _as_positive_int(_get_settings_value(settings, "audio.channels"))
+    return int(from_file) if from_file is not None else int(default)
 
 
 def get_intent_routing_enabled(*, default: bool = DEFAULT_INTENT_ROUTING_ENABLED, load_env: bool = True) -> bool:

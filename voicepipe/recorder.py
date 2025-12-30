@@ -41,12 +41,16 @@ class AudioRecorder:
         self,
         device_index: int | None = None,
         *,
+        sample_rate: int = 16000,
+        channels: int = 1,
         use_mp3: bool = False,
         max_duration: int | float | None = 300,
         pre_open: bool = False,
         ffmpeg_async: bool = False,
     ):
         self.device_index = device_index
+        self.channels = int(channels)
+        self.rate = int(sample_rate)
         self.use_mp3 = bool(use_mp3)
         self.max_duration = max_duration
         self.pre_open = bool(pre_open)
@@ -57,8 +61,6 @@ class AudioRecorder:
         self.recording = False
 
         self.format = np.int16
-        self.channels = 1
-        self.rate = 16000
 
         self.ffmpeg_process: subprocess.Popen | None = None
         self._ffmpeg_start_thread: threading.Thread | None = None
@@ -263,7 +265,7 @@ class AudioRecorder:
         return b"".join(frames)
 
     def save_to_file(self, data: bytes, filepath: str) -> None:
-        """Save recorded raw PCM (int16, mono, 16kHz) to a WAV file."""
+        """Save recorded raw PCM (int16) to a WAV file."""
         with wave.open(filepath, "wb") as wf:
             wf.setnchannels(self.channels)
             wf.setsampwidth(2)
@@ -293,12 +295,16 @@ class FastAudioRecorder(AudioRecorder):
     def __init__(
         self,
         device_index: int | None = None,
+        sample_rate: int = 16000,
+        channels: int = 1,
         use_mp3: bool = False,
         max_duration: int | float | None = 300,
         pre_open: bool = True,
     ):
         super().__init__(
             device_index,
+            sample_rate=sample_rate,
+            channels=channels,
             use_mp3=use_mp3,
             max_duration=max_duration,
             pre_open=pre_open,

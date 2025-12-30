@@ -11,10 +11,6 @@ def test_fast_send_transcribe_request_routes_command_prefix(
     import voicepipe.fast as fast
     import voicepipe.pipeline as pipeline
 
-    sock = tmp_path / "transcriber.sock"
-    sock.write_text("x", encoding="utf-8")
-    monkeypatch.setattr(fast, "TRANSCRIBER_SOCKET", sock)
-
     monkeypatch.setattr(fast, "get_transcribe_model", lambda: "gpt-test")
 
     def _fake_transcribe(audio_file: str, **kwargs):
@@ -53,10 +49,6 @@ def test_fast_send_transcribe_request_strict_mode_refuses_command_output(
     import voicepipe.fast as fast
     import voicepipe.pipeline as pipeline
 
-    sock = tmp_path / "transcriber.sock"
-    sock.write_text("x", encoding="utf-8")
-    monkeypatch.setattr(fast, "TRANSCRIBER_SOCKET", sock)
-
     monkeypatch.setenv("VOICEPIPE_COMMANDS_STRICT", "1")
     monkeypatch.setattr(fast, "get_transcribe_model", lambda: "gpt-test")
 
@@ -93,10 +85,6 @@ def test_fast_send_transcribe_request_routing_disabled_does_not_strip_prefix(
 ) -> None:
     import voicepipe.fast as fast
 
-    sock = tmp_path / "transcriber.sock"
-    sock.write_text("x", encoding="utf-8")
-    monkeypatch.setattr(fast, "TRANSCRIBER_SOCKET", sock)
-
     monkeypatch.setenv("VOICEPIPE_INTENT_ROUTING", "0")
     monkeypatch.setattr(fast, "get_transcribe_model", lambda: "gpt-test")
 
@@ -124,10 +112,6 @@ def test_fast_send_transcribe_request_routing_disabled_does_not_strip_prefix(
 def test_fast_send_transcribe_request_custom_wake_prefixes(tmp_path: Path, monkeypatch) -> None:
     import voicepipe.fast as fast
     import voicepipe.pipeline as pipeline
-
-    sock = tmp_path / "transcriber.sock"
-    sock.write_text("x", encoding="utf-8")
-    monkeypatch.setattr(fast, "TRANSCRIBER_SOCKET", sock)
 
     monkeypatch.setenv("VOICEPIPE_INTENT_ROUTING", "1")
     monkeypatch.setenv("VOICEPIPE_INTENT_WAKE_PREFIXES", "zwingli")
@@ -164,10 +148,6 @@ def test_fast_send_transcribe_request_zwingli_error_returns_payload(
 ) -> None:
     import voicepipe.fast as fast
     import voicepipe.pipeline as pipeline
-
-    sock = tmp_path / "transcriber.sock"
-    sock.write_text("x", encoding="utf-8")
-    monkeypatch.setattr(fast, "TRANSCRIBER_SOCKET", sock)
 
     monkeypatch.setattr(fast, "get_transcribe_model", lambda: "gpt-test")
     monkeypatch.setattr(

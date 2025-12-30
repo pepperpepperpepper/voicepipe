@@ -13,6 +13,8 @@ def run_recording_subprocess() -> None:
     import sys
     import threading
 
+    from voicepipe.audio import select_audio_input
+    from voicepipe.config import get_audio_channels, get_audio_sample_rate
     from voicepipe.recorder import AudioRecorder
     from voicepipe.session import RecordingSession
 
@@ -80,7 +82,18 @@ def run_recording_subprocess() -> None:
         device = os.environ.get("VOICEPIPE_DEVICE")
         device_index = int(device) if device and device.isdigit() else None
 
-        recorder = AudioRecorder(device_index=device_index, max_duration=None)
+        selection = select_audio_input(
+            preferred_device_index=device_index,
+            preferred_samplerate=get_audio_sample_rate(),
+            preferred_channels=get_audio_channels(),
+            strict_device_index=bool(device_index is not None),
+        )
+        recorder = AudioRecorder(
+            device_index=selection.device_index,
+            sample_rate=selection.samplerate,
+            channels=selection.channels,
+            max_duration=None,
+        )
 
         print(f"Recording started (PID: {os.getpid()})...", file=sys.stderr)
         recorder.start_recording(output_file=session["audio_file"])
@@ -104,4 +117,3 @@ def run_recording_subprocess() -> None:
         if recorder:
             recorder.cleanup()
         raise SystemExit(1)
-

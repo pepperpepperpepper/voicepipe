@@ -67,8 +67,6 @@ Environment="HOME=%h"
 EnvironmentFile=-%h/.config/voicepipe/voicepipe.env
 # Import display environment dynamically
 PassEnvironment=DISPLAY XAUTHORITY WAYLAND_DISPLAY
-# Fallback if not set
-Environment="DISPLAY=:0"
 
 # Security hardening
 PrivateTmp=false

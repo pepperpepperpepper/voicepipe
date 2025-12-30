@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from voicepipe.config import get_transcribe_model
+from voicepipe.config import get_transcribe_model, load_environment
 from voicepipe.ipc import IpcError, IpcUnavailable, send_request
 from voicepipe.paths import (
     find_transcriber_socket_path,
@@ -23,7 +23,7 @@ from voicepipe.paths import (
     transcriber_socket_paths,
 )
 from voicepipe.transcription import transcribe_audio_file
-from voicepipe.typing import get_active_window_id, type_text
+from voicepipe.typing import get_active_window_id, resolve_typing_backend, type_text
 
 
 TMP_DIR = runtime_app_dir(create=True)
@@ -154,13 +154,16 @@ def execute_toggle() -> None:
         print(f"[TOGGLE] Status: {status}", file=sys.stderr)
 
         if status.get("status") == "recording":
+            typing_backend = resolve_typing_backend()
             # Capture the current active window early so we can type back into it
             # after transcription (hotkey invocations sometimes lose focus).
-            target_window = get_active_window_id()
-            if target_window:
-                print(f"[TOGGLE] Target window: {target_window}", file=sys.stderr)
-            else:
-                print("[TOGGLE] Target window: (unknown)", file=sys.stderr)
+            target_window = None
+            if typing_backend.supports_window_id:
+                target_window = get_active_window_id()
+                if target_window:
+                    print(f"[TOGGLE] Target window: {target_window}", file=sys.stderr)
+                else:
+                    print("[TOGGLE] Target window: (unknown)", file=sys.stderr)
 
             print("[TOGGLE] Recording active, stopping...", file=sys.stderr)
             # Stop and transcribe
@@ -183,7 +186,9 @@ def execute_toggle() -> None:
                     except Exception:
                         pass
                     typed_ok, type_err = type_text(
-                        cleaned_text, window_id=target_window
+                        cleaned_text,
+                        window_id=target_window,
+                        backend=typing_backend,
                     )
                     if not typed_ok:
                         print(
@@ -242,6 +247,10 @@ def execute_toggle() -> None:
 
 
 def main(argv: Optional[list[str]] = None) -> None:
+    # Ensure env-file config is visible (hotkey workflows don't load shell rc
+    # files). Avoid loading a random local `.env` from whatever cwd the WM uses.
+    load_environment(load_cwd_dotenv=False)
+
     args = list(sys.argv[1:] if argv is None else argv)
     if len(args) < 1:
         print("Usage: voicepipe-fast [start|stop|toggle]", file=sys.stderr)

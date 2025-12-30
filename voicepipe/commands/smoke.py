@@ -56,7 +56,12 @@ def _normalize(text: str) -> str:
     show_default="voicepipe/assets/test.expected.txt",
     help="Substring expected in the transcript (case/punctuation-insensitive).",
 )
-@click.option("--type", "type_", is_flag=True, help="Type the transcribed text using xdotool")
+@click.option(
+    "--type",
+    "type_",
+    is_flag=True,
+    help="Type the transcribed text using the configured backend (xdotool on X11, wtype on Wayland)",
+)
 @click.option("--language", help="Language code for transcription (e.g., en, es, fr)")
 @click.option(
     "--prompt",

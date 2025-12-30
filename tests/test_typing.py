@@ -4,7 +4,7 @@ import subprocess
 
 import pytest
 
-from voicepipe.typing import get_active_window_id, type_text
+from voicepipe.typing import get_active_window_id, resolve_typing_backend, type_text
 
 
 def test_type_text_accepts_empty() -> None:
@@ -14,7 +14,10 @@ def test_type_text_accepts_empty() -> None:
 
 
 def test_type_text_prefers_xdotool_on_x11(monkeypatch) -> None:
+    monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
     monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.delenv("VOICEPIPE_TYPE_BACKEND", raising=False)
 
     calls: list[list[str]] = []
 
@@ -51,7 +54,9 @@ def test_get_active_window_id_uses_xdotool(monkeypatch) -> None:
 
 
 def test_type_text_uses_wtype_on_wayland(monkeypatch) -> None:
+    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    monkeypatch.delenv("VOICEPIPE_TYPE_BACKEND", raising=False)
 
     def fake_which(name: str):
         if name == "wtype":
@@ -80,12 +85,90 @@ def test_type_text_uses_wtype_on_wayland(monkeypatch) -> None:
     assert calls[1] == ["/bin/wtype"]
 
 
+def test_resolve_typing_backend_prefers_wtype_when_both_display_and_wayland(monkeypatch) -> None:
+    monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    monkeypatch.delenv("VOICEPIPE_TYPE_BACKEND", raising=False)
+
+    def fake_which(name: str):
+        if name == "wtype":
+            return "/bin/wtype"
+        if name == "xdotool":
+            return "/bin/xdotool"
+        return None
+
+    monkeypatch.setattr("voicepipe.typing.shutil.which", fake_which)
+
+    backend = resolve_typing_backend()
+    assert backend.name == "wtype"
+    assert backend.supports_window_id is False
+
+
+def test_resolve_typing_backend_override_none(monkeypatch) -> None:
+    monkeypatch.setenv("VOICEPIPE_TYPE_BACKEND", "none")
+    backend = resolve_typing_backend()
+    assert backend.name == "none"
+    assert backend.error
+
+
+def test_resolve_typing_backend_override_wtype(monkeypatch) -> None:
+    monkeypatch.setenv("VOICEPIPE_TYPE_BACKEND", "wtype")
+
+    def fake_which(name: str):
+        return "/bin/wtype" if name == "wtype" else None
+
+    monkeypatch.setattr("voicepipe.typing.shutil.which", fake_which)
+
+    backend = resolve_typing_backend()
+    assert backend.name == "wtype"
+
+
+def test_resolve_typing_backend_override_xdotool(monkeypatch) -> None:
+    monkeypatch.setenv("VOICEPIPE_TYPE_BACKEND", "xdotool")
+
+    def fake_which(name: str):
+        return "/bin/xdotool" if name == "xdotool" else None
+
+    monkeypatch.setattr("voicepipe.typing.shutil.which", fake_which)
+
+    backend = resolve_typing_backend()
+    assert backend.name == "xdotool"
+    assert backend.supports_window_id is True
+
+
+def test_resolve_typing_backend_alias_wayland(monkeypatch) -> None:
+    monkeypatch.setenv("VOICEPIPE_TYPE_BACKEND", "wayland")
+
+    def fake_which(name: str):
+        return "/bin/wtype" if name == "wtype" else None
+
+    monkeypatch.setattr("voicepipe.typing.shutil.which", fake_which)
+
+    backend = resolve_typing_backend()
+    assert backend.name == "wtype"
+
+
+def test_resolve_typing_backend_alias_x11(monkeypatch) -> None:
+    monkeypatch.setenv("VOICEPIPE_TYPE_BACKEND", "x11")
+
+    def fake_which(name: str):
+        return "/bin/xdotool" if name == "xdotool" else None
+
+    monkeypatch.setattr("voicepipe.typing.shutil.which", fake_which)
+
+    backend = resolve_typing_backend()
+    assert backend.name == "xdotool"
+    assert backend.supports_window_id is True
+
+
 def test_type_text_returns_helpful_error_when_no_backend(monkeypatch) -> None:
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.delenv("XDG_SESSION_TYPE", raising=False)
+    monkeypatch.delenv("VOICEPIPE_TYPE_BACKEND", raising=False)
     monkeypatch.setattr("voicepipe.typing.shutil.which", lambda _name: None)
     ok, err = type_text("hello")
     assert ok is False
     assert err
-    assert "No typing backend available" in err
-
+    assert "No display session detected" in err

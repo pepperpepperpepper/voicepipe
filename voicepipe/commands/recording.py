@@ -144,7 +144,12 @@ def start(device: int | None) -> None:
 
 
 @click.command()
-@click.option("--type", "type_", is_flag=True, help="Type the transcribed text using xdotool")
+@click.option(
+    "--type",
+    "type_",
+    is_flag=True,
+    help="Type the transcribed text using the configured backend (xdotool on X11, wtype on Wayland)",
+)
 @click.option("--language", help="Language code for transcription (e.g., en, es, fr)")
 @click.option(
     "--prompt",
@@ -232,7 +237,12 @@ def status() -> None:
 
 @click.command("transcribe-file")
 @click.argument("audio_file", type=click.Path(exists=True, dir_okay=False, readable=True))
-@click.option("--type", "type_", is_flag=True, help="Type the transcribed text using xdotool")
+@click.option(
+    "--type",
+    "type_",
+    is_flag=True,
+    help="Type the transcribed text using the configured backend (xdotool on X11, wtype on Wayland)",
+)
 @click.option("--language", help="Language code for transcription (e.g., en, es, fr)")
 @click.option(
     "--prompt",
@@ -328,7 +338,12 @@ def transcribe_file(
     type=int,
     help="Audio device index to use",
 )
-@click.option("--type", "type_", is_flag=True, help="Type the transcribed text using xdotool")
+@click.option(
+    "--type",
+    "type_",
+    is_flag=True,
+    help="Type the transcribed text using the configured backend (xdotool on X11, wtype on Wayland)",
+)
 @click.option("--language", help="Language code for transcription (e.g., en, es, fr)")
 @click.option(
     "--prompt",

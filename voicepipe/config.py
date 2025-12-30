@@ -44,6 +44,7 @@ DEFAULT_ENV_FILE_TEMPLATE = """# Voicepipe environment config (used by systemd s
 # VOICEPIPE_AUDIO_CHANNELS=1
 # VOICEPIPE_TRANSCRIBE_BACKEND=openai
 # VOICEPIPE_TRANSCRIBE_MODEL=gpt-4o-transcribe
+# VOICEPIPE_TYPE_BACKEND=auto  # or: wayland|x11|wtype|xdotool|none
 """
 
 

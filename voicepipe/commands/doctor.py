@@ -39,6 +39,7 @@ from voicepipe.systemd import (
     systemctl_path,
     systemctl_show_properties,
 )
+from voicepipe.typing import resolve_typing_backend
 
 
 @click.group(name="doctor", invoke_without_command=True)
@@ -77,8 +78,31 @@ def doctor_env() -> None:
     click.echo(f"python: {sys.executable}")
     click.echo(f"cwd: {os.getcwd()}")
     click.echo(f"XDG_RUNTIME_DIR: {os.environ.get('XDG_RUNTIME_DIR', '')}")
+    click.echo(f"XDG_SESSION_TYPE: {os.environ.get('XDG_SESSION_TYPE', '')}")
+    click.echo(f"XDG_CURRENT_DESKTOP: {os.environ.get('XDG_CURRENT_DESKTOP', '')}")
     click.echo(f"DISPLAY: {os.environ.get('DISPLAY', '')}")
     click.echo(f"WAYLAND_DISPLAY: {os.environ.get('WAYLAND_DISPLAY', '')}")
+    click.echo(f"VOICEPIPE_TYPE_BACKEND: {os.environ.get('VOICEPIPE_TYPE_BACKEND', '')}")
+
+    env = dict(os.environ)
+    resolved = resolve_typing_backend(env=env)
+    auto_env = dict(env)
+    auto_env.pop("VOICEPIPE_TYPE_BACKEND", None)
+    auto = resolve_typing_backend(env=auto_env)
+    click.echo(
+        f"typing backend resolved: {resolved.name} "
+        f"(session={resolved.session_type}, supports_window_id={resolved.supports_window_id})"
+    )
+    click.echo(f"typing backend reason: {resolved.reason}")
+    if resolved.path:
+        click.echo(f"typing backend path: {resolved.path}")
+    if resolved.error:
+        click.echo(f"typing backend error: {resolved.error}")
+    click.echo(
+        f"typing backend auto would choose: {auto.name} "
+        f"(session={auto.session_type}, supports_window_id={auto.supports_window_id})"
+    )
+    click.echo(f"typing backend auto reason: {auto.reason}")
 
     click.echo(f"runtime dir: {runtime_path} exists: {runtime_path.exists()}")
     click.echo(f"daemon socket: {daemon_socket or '(not found)'}")
@@ -113,8 +137,10 @@ def doctor_env() -> None:
 
     ffmpeg_path = shutil.which("ffmpeg")
     xdotool_path = shutil.which("xdotool")
+    wtype_path = shutil.which("wtype")
     click.echo(f"ffmpeg found: {bool(ffmpeg_path)}")
     click.echo(f"xdotool found: {bool(xdotool_path)}")
+    click.echo(f"wtype found: {bool(wtype_path)}")
 
 
 @doctor_group.command("systemd")

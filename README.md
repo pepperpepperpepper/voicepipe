@@ -6,7 +6,7 @@ Voice recording and transcription daemon for Linux.
 
 - Simple voice recording with automatic device detection
 - High-quality transcription using OpenAI or ElevenLabs (configurable)
-- Optional automatic typing of transcribed text via xdotool
+- Optional automatic typing of transcribed text via xdotool (X11) or wtype (Wayland)
 - Robust daemon-based session management
 - Automatic cleanup of temporary files
 - Multi-language transcription support
@@ -49,16 +49,17 @@ The CLI automatically detects and uses the services if running, or falls back to
 - sounddevice (for recording; requires PortAudio)
 - OpenAI Python SDK (for the OpenAI backend)
 - Click (for CLI)
-- xdotool (optional, for --type functionality)
+- xdotool (optional, for `--type` on X11 / Xwayland)
+- wtype (optional, for `--type` on Wayland)
 
 On Arch Linux:
 ```bash
-sudo pacman -S portaudio xdotool
+sudo pacman -S portaudio xdotool wtype
 ```
 
 On Ubuntu/Debian:
 ```bash
-sudo apt-get install portaudio19-dev xdotool
+sudo apt-get install portaudio19-dev xdotool wtype
 ```
 
 ## Configuration
@@ -142,6 +143,21 @@ Set it up using one of these methods:
 ### Advanced: systemd credentials (optional)
 
 Voicepipe can also read the key from systemd credentials (via `$CREDENTIALS_DIRECTORY`) if you configure `LoadCredential=` for the transcriber service.
+
+### Typing (X11 vs Wayland)
+
+`--type` uses an external tool to type into the currently focused application:
+
+- X11 / Xwayland: `xdotool`
+- Wayland: `wtype` (the Wayland analogue of `xdotool`, using a virtual keyboard protocol)
+
+By default, Voicepipe auto-selects a backend. You can override it in `~/.config/voicepipe/voicepipe.env`:
+
+```bash
+VOICEPIPE_TYPE_BACKEND=auto  # or: wayland|x11|wtype|xdotool|none
+```
+
+Note: On Wayland, `wtype` cannot target a specific window ID the way `xdotool --window` can; typing is best-effort into the focused surface.
 
 ### Audio Device Configuration
 
@@ -322,7 +338,7 @@ Common issues:
 - **"Recording already in progress"**: A recording session is already active
 - **"OpenAI API key not found"**: Configure `OPENAI_API_KEY` (backend=`openai`)
 - **"ElevenLabs API key not found"**: Configure `ELEVENLABS_API_KEY` (backend=`elevenlabs`)
-- **"xdotool not found"**: Install xdotool for --type functionality
+- **Typing backend missing**: install `xdotool` (X11) or `wtype` (Wayland), or set `VOICEPIPE_TYPE_BACKEND=none` to disable typing.
 
 Diagnostics:
 - `voicepipe doctor env`

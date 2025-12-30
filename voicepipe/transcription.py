@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from voicepipe.config import get_transcribe_backend
-from voicepipe.paths import transcriber_socket_path
+from voicepipe.paths import transcriber_socket_paths
 from voicepipe.transcription_result import TranscriptionResult
 
 
@@ -57,67 +57,83 @@ def _transcribe_via_daemon(
     connect_timeout: float = 2.0,
     read_timeout: float = 60.0,
 ) -> str:
-    sock_path = socket_path or transcriber_socket_path()
-    if not sock_path.exists():
-        raise TranscriberDaemonUnavailable(f"Transcriber socket not found: {sock_path}")
-
-    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    client.settimeout(connect_timeout)
-    try:
+    sock_paths = [socket_path] if socket_path is not None else transcriber_socket_paths()
+    existing_paths: list[Path] = []
+    for p in sock_paths:
         try:
-            client.connect(str(sock_path))
-        except OSError as e:
-            raise TranscriberDaemonUnavailable(
-                f"Could not connect to transcriber daemon at {sock_path}: {e}"
-            ) from e
-
-        request = {"audio_file": audio_file, "model": model, "temperature": temperature}
-        if language:
-            request["language"] = language
-        if prompt:
-            request["prompt"] = prompt
-
-        client.sendall((json.dumps(request) + "\n").encode("utf-8"))
-
-        client.settimeout(read_timeout)
-
-        buffer = ""
-        full_text = ""
-        while True:
-            try:
-                chunk = client.recv(4096).decode("utf-8", errors="replace")
-            except socket.timeout as e:
-                raise TranscriptionError(
-                    f"Timed out waiting for transcriber daemon response ({sock_path})"
-                ) from e
-            if not chunk:
-                break
-            buffer += chunk
-            while "\n" in buffer:
-                line, buffer = buffer.split("\n", 1)
-                if not line.strip():
-                    continue
-                try:
-                    response = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
-                kind = response.get("type")
-                if kind == "transcription":
-                    text = response.get("text", "")
-                    if text:
-                        full_text += str(text)
-                elif kind == "complete":
-                    return full_text
-                elif kind == "error":
-                    raise TranscriptionError(str(response.get("message") or "unknown error"))
-
-        return full_text
-    finally:
-        try:
-            client.close()
+            if p.exists():
+                existing_paths.append(p)
         except Exception:
-            pass
+            continue
+    if not existing_paths:
+        tried = ", ".join(str(p) for p in sock_paths)
+        raise TranscriberDaemonUnavailable(f"Transcriber socket not found (tried: {tried})")
+
+    last_error: Exception | None = None
+    for sock_path in existing_paths:
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.settimeout(connect_timeout)
+        try:
+            try:
+                client.connect(str(sock_path))
+            except OSError as e:
+                last_error = e
+                continue
+
+            request = {"audio_file": audio_file, "model": model, "temperature": temperature}
+            if language:
+                request["language"] = language
+            if prompt:
+                request["prompt"] = prompt
+
+            client.sendall((json.dumps(request) + "\n").encode("utf-8"))
+
+            client.settimeout(read_timeout)
+
+            buffer = ""
+            full_text = ""
+            while True:
+                try:
+                    chunk = client.recv(4096).decode("utf-8", errors="replace")
+                except socket.timeout as e:
+                    raise TranscriptionError(
+                        f"Timed out waiting for transcriber daemon response ({sock_path})"
+                    ) from e
+                if not chunk:
+                    break
+                buffer += chunk
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    if not line.strip():
+                        continue
+                    try:
+                        response = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    kind = response.get("type")
+                    if kind == "transcription":
+                        text = response.get("text", "")
+                        if text:
+                            full_text += str(text)
+                    elif kind == "complete":
+                        return full_text
+                    elif kind == "error":
+                        raise TranscriptionError(
+                            str(response.get("message") or "unknown error")
+                        )
+
+            return full_text
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+    msg = f"Could not connect to transcriber daemon (tried: {', '.join(str(p) for p in existing_paths)})"
+    if last_error is not None:
+        msg = f"{msg}: {last_error}"
+    raise TranscriberDaemonUnavailable(msg)
 
 
 def transcribe_audio_file(

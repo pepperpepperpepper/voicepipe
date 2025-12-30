@@ -15,13 +15,16 @@ from pathlib import Path
 from typing import Optional
 
 from voicepipe.config import get_transcribe_model
-from voicepipe.ipc import IpcError, IpcUnavailable, daemon_socket_path, send_request
-from voicepipe.paths import preserved_audio_dir, runtime_app_dir, transcriber_socket_path
+from voicepipe.ipc import IpcError, IpcUnavailable, send_request
+from voicepipe.paths import (
+    find_transcriber_socket_path,
+    preserved_audio_dir,
+    runtime_app_dir,
+    transcriber_socket_paths,
+)
 from voicepipe.transcription import transcribe_audio_file
 from voicepipe.typing import get_active_window_id, type_text
 
-
-SOCKET_PATH = daemon_socket_path()
 
 TMP_DIR = runtime_app_dir(create=True)
 LOG_FILE = TMP_DIR / "voicepipe-fast.log"
@@ -55,15 +58,12 @@ DEBOUNCE_FILE = str(TMP_DIR / "voicepipe-fast.time")
 DEBOUNCE_MS = 500  # milliseconds
 LOCK_FILE = str(TMP_DIR / "voicepipe-fast.lock")
 
-TRANSCRIBER_SOCKET = transcriber_socket_path()
-
 
 def send_cmd(cmd: str) -> dict:
     """Send command to daemon via Unix socket."""
     read_timeout = 2.0 if cmd == "status" else 5.0
     return send_request(
         cmd,
-        socket_path=SOCKET_PATH,
         connect_timeout=2.0,
         read_timeout=read_timeout,
     )
@@ -71,11 +71,10 @@ def send_cmd(cmd: str) -> dict:
 
 def send_transcribe_request(audio_file: str) -> str:
     """Transcribe audio using daemon when available."""
-    if not TRANSCRIBER_SOCKET.exists():
-        print(
-            f"[TRANSCRIBE] Transcriber socket not found: {TRANSCRIBER_SOCKET}",
-            file=sys.stderr,
-        )
+    transcriber_socket = find_transcriber_socket_path()
+    if transcriber_socket is None:
+        tried = ", ".join(str(p) for p in transcriber_socket_paths())
+        print(f"[TRANSCRIBE] Transcriber socket not found (tried: {tried})", file=sys.stderr)
         print(
             "[TRANSCRIBE] Start it with: systemctl --user start voicepipe.target",
             file=sys.stderr,
@@ -245,10 +244,18 @@ def execute_toggle() -> None:
 def main(argv: Optional[list[str]] = None) -> None:
     args = list(sys.argv[1:] if argv is None else argv)
     if len(args) < 1:
-        print("Usage: voicepipe-fast [start|stop|toggle]")
+        print("Usage: voicepipe-fast [start|stop|toggle]", file=sys.stderr)
         raise SystemExit(1)
 
+    if args[0] in ("-h", "--help", "help"):
+        print("Usage: voicepipe-fast [start|stop|toggle]")
+        raise SystemExit(0)
+
     cmd = args[0]
+    if cmd not in ("start", "stop", "toggle"):
+        print(f"Error: unknown command: {cmd}", file=sys.stderr)
+        print("Usage: voicepipe-fast [start|stop|toggle]", file=sys.stderr)
+        raise SystemExit(2)
 
     # For toggle command, use file locking to prevent concurrent execution
     if cmd == "toggle":
@@ -328,6 +335,8 @@ def main(argv: Optional[list[str]] = None) -> None:
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         raise SystemExit(1)
+
+
 def toggle_main(argv: Optional[list[str]] = None) -> None:
     """Entry point for a dedicated one-key hotkey command.
 

@@ -21,8 +21,16 @@ from voicepipe.config import (
     legacy_elevenlabs_key_paths,
     read_env_file,
 )
-from voicepipe.ipc import IpcError, daemon_socket_path, send_request, try_send_request
-from voicepipe.paths import doctor_artifacts_dir, preserved_audio_dir, runtime_app_dir
+from voicepipe.ipc import IpcError, send_request, try_send_request
+from voicepipe.paths import (
+    daemon_socket_paths,
+    doctor_artifacts_dir,
+    find_daemon_socket_path,
+    find_transcriber_socket_path,
+    preserved_audio_dir,
+    runtime_app_dir,
+    transcriber_socket_paths,
+)
 from voicepipe.systemd import (
     RECORDER_UNIT,
     TARGET_UNIT,
@@ -62,7 +70,8 @@ def _preserve_doctor_audio_file(path: Path) -> Path:
 @doctor_group.command("env")
 def doctor_env() -> None:
     """Check environment, paths, and basic dependencies."""
-    socket_path = daemon_socket_path()
+    daemon_socket = find_daemon_socket_path()
+    transcriber_socket = find_transcriber_socket_path()
     runtime_path = runtime_app_dir()
 
     click.echo(f"python: {sys.executable}")
@@ -72,7 +81,12 @@ def doctor_env() -> None:
     click.echo(f"WAYLAND_DISPLAY: {os.environ.get('WAYLAND_DISPLAY', '')}")
 
     click.echo(f"runtime dir: {runtime_path} exists: {runtime_path.exists()}")
-    click.echo(f"daemon socket exists: {socket_path} {socket_path.exists()}")
+    click.echo(f"daemon socket: {daemon_socket or '(not found)'}")
+    click.echo(f"daemon socket candidates: {', '.join(str(p) for p in daemon_socket_paths())}")
+    click.echo(f"transcriber socket: {transcriber_socket or '(not found)'}")
+    click.echo(
+        f"transcriber socket candidates: {', '.join(str(p) for p in transcriber_socket_paths())}"
+    )
 
     click.echo(
         f"doctor artifacts dir: {doctor_artifacts_dir()} exists: {doctor_artifacts_dir().exists()}"
@@ -222,13 +236,14 @@ def _doctor_daemon(
     cleanup: bool,
 ) -> None:
     """Check daemon socket/health and (optionally) perform record/transcribe tests."""
-    socket_path = daemon_socket_path()
+    socket_path = find_daemon_socket_path()
     runtime_path = runtime_app_dir()
     click.echo(f"runtime dir: {runtime_path} exists: {runtime_path.exists()}")
-    click.echo(f"daemon socket exists: {socket_path} {socket_path.exists()}")
+    click.echo(f"daemon socket: {socket_path or '(not found)'}")
+    click.echo(f"daemon socket candidates: {', '.join(str(p) for p in daemon_socket_paths())}")
 
     # Daemon ping (avoid falling back to subprocess mode)
-    if socket_path.exists():
+    if socket_path is not None and socket_path.exists():
         t0 = time.time()
         try:
             resp = send_request("status", socket_path=socket_path)
@@ -242,7 +257,7 @@ def _doctor_daemon(
 
     recorded_file: str | None = None
     if record_test:
-        if not socket_path.exists():
+        if socket_path is None or not socket_path.exists():
             click.echo("record-test: skipped (daemon socket missing)", err=True)
         else:
             try:
@@ -432,17 +447,36 @@ def _doctor_audio(seconds: float) -> None:
     try:
         import numpy as np
         import sounddevice as sd
+        from voicepipe.audio import select_audio_input
+        from voicepipe.config import get_audio_channels, get_audio_sample_rate
     except Exception as e:
         click.echo(f"audio-test error: {e}", err=True)
         return
 
     try:
-        fs = 16000
+        env_device = os.environ.get("VOICEPIPE_DEVICE")
+        preferred_device = int(env_device) if (env_device or "").isdigit() else None
+        selection = select_audio_input(
+            preferred_device_index=preferred_device,
+            preferred_samplerate=get_audio_sample_rate(),
+            preferred_channels=get_audio_channels(),
+            strict_device_index=bool(preferred_device is not None),
+        )
+        fs = int(selection.samplerate)
         frames = int(max(0.01, float(seconds)) * fs)
-        data = sd.rec(frames, samplerate=fs, channels=1, dtype="int16")
+        data = sd.rec(
+            frames,
+            samplerate=fs,
+            channels=int(selection.channels),
+            dtype="int16",
+            device=int(selection.device_index),
+        )
         sd.wait()
         max_amp = int(np.max(np.abs(data))) if data.size else 0
-        click.echo(f"audio-test max_amp: {max_amp}")
+        click.echo(
+            f"audio-test device={selection.device_index} samplerate={fs} "
+            f"channels={selection.channels} max_amp={max_amp}"
+        )
     except Exception as e:
         click.echo(f"audio-test error: {e}", err=True)
 

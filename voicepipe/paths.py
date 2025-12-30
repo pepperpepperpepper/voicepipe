@@ -19,6 +19,11 @@ from pathlib import Path
 APP_NAME = "voicepipe"
 
 _PRIVATE_DIR_MODE = 0o700
+_SOCKET_ENV_VARS_DAEMON: tuple[str, ...] = ("VOICEPIPE_DAEMON_SOCKET", "VOICEPIPE_SOCKET_PATH")
+_SOCKET_ENV_VARS_TRANSCRIBER: tuple[str, ...] = (
+    "VOICEPIPE_TRANSCRIBER_SOCKET",
+    "VOICEPIPE_TRANSCRIBER_SOCKET_PATH",
+)
 
 
 def _ensure_private_dir(path: Path) -> None:
@@ -82,6 +87,96 @@ def daemon_socket_path(*, create_dir: bool = False) -> Path:
 
 def transcriber_socket_path(*, create_dir: bool = False) -> Path:
     return runtime_app_dir(create=create_dir) / "voicepipe_transcriber.sock"
+
+
+def _env_socket_path(var_names: tuple[str, ...]) -> Path | None:
+    for var in var_names:
+        raw = (os.environ.get(var) or "").strip()
+        if not raw:
+            continue
+        try:
+            return Path(raw).expanduser()
+        except Exception:
+            continue
+    return None
+
+
+def daemon_socket_paths(*, include_legacy: bool = True) -> list[Path]:
+    """Candidate socket paths for the recorder daemon.
+
+    Order is important:
+    - Explicit env override first (if set)
+    - Canonical per-app runtime dir (current default)
+    - Legacy historical locations (best-effort)
+    """
+    paths: list[Path] = []
+    env_override = _env_socket_path(_SOCKET_ENV_VARS_DAEMON)
+    if env_override is not None:
+        paths.append(env_override)
+
+    paths.append(daemon_socket_path())
+
+    if include_legacy:
+        # Legacy: socket directly under runtime dir (no per-app subdir).
+        paths.append(runtime_dir() / "voicepipe.sock")
+        # Older /tmp layouts.
+        tmp = Path(tempfile.gettempdir())
+        paths.append(tmp / "voicepipe.sock")
+        paths.append(tmp / APP_NAME / "voicepipe.sock")
+
+    # Deduplicate while preserving order.
+    seen: set[Path] = set()
+    ordered: list[Path] = []
+    for p in paths:
+        if p in seen:
+            continue
+        seen.add(p)
+        ordered.append(p)
+    return ordered
+
+
+def transcriber_socket_paths(*, include_legacy: bool = True) -> list[Path]:
+    """Candidate socket paths for the transcriber daemon."""
+    paths: list[Path] = []
+    env_override = _env_socket_path(_SOCKET_ENV_VARS_TRANSCRIBER)
+    if env_override is not None:
+        paths.append(env_override)
+
+    paths.append(transcriber_socket_path())
+
+    if include_legacy:
+        paths.append(runtime_dir() / "voicepipe_transcriber.sock")
+        tmp = Path(tempfile.gettempdir())
+        paths.append(tmp / "voicepipe_transcriber.sock")
+        # Historical shared /tmp/voicepipe directory.
+        paths.append(tmp / APP_NAME / "voicepipe_transcriber.sock")
+
+    seen: set[Path] = set()
+    ordered: list[Path] = []
+    for p in paths:
+        if p in seen:
+            continue
+        seen.add(p)
+        ordered.append(p)
+    return ordered
+
+
+def find_existing_socket(paths: list[Path]) -> Path | None:
+    for path in paths:
+        try:
+            if path.exists():
+                return path
+        except Exception:
+            continue
+    return None
+
+
+def find_daemon_socket_path() -> Path | None:
+    return find_existing_socket(daemon_socket_paths())
+
+
+def find_transcriber_socket_path() -> Path | None:
+    return find_existing_socket(transcriber_socket_paths())
 
 
 def audio_tmp_dir(*, create: bool = False) -> Path:

@@ -7,7 +7,7 @@ import socket
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .paths import daemon_socket_path
+from .paths import daemon_socket_paths
 
 
 class IpcError(RuntimeError):
@@ -61,41 +61,59 @@ def send_request(
     if not command:
         raise ValueError("command must be non-empty")
 
-    sock_path = socket_path or daemon_socket_path()
-    if not sock_path.exists():
-        raise IpcUnavailable(f"Daemon socket not found: {sock_path}")
+    sock_paths = [socket_path] if socket_path is not None else daemon_socket_paths()
+    existing_paths: list[Path] = []
+    for p in sock_paths:
+        try:
+            if p.exists():
+                existing_paths.append(p)
+        except Exception:
+            continue
+    if not existing_paths:
+        tried = ", ".join(str(p) for p in sock_paths)
+        raise IpcUnavailable(f"Daemon socket not found (tried: {tried})")
 
     if read_timeout is None:
         read_timeout = 0.5 if command == "status" else 5.0
 
     request = {"command": command, **kwargs}
-    client: Optional[socket.socket] = None
-    try:
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client.settimeout(connect_timeout)
-        try:
-            client.connect(str(sock_path))
-        except OSError as e:
-            raise IpcUnavailable(f"Could not connect to daemon at {sock_path}: {e}") from e
 
-        payload = (json.dumps(request) + "\n").encode()
+    last_error: Exception | None = None
+    for sock_path in existing_paths:
+        client: Optional[socket.socket] = None
         try:
-            client.sendall(payload)
-        except OSError as e:
-            raise IpcUnavailable(f"Failed sending request to daemon: {e}") from e
-
-        client.settimeout(read_timeout)
-        response_bytes = _read_json_message(client, max_bytes=max_response_bytes)
-        try:
-            return json.loads(response_bytes.decode())
-        except json.JSONDecodeError as e:
-            raise IpcProtocolError(f"Invalid JSON response from daemon: {e}") from e
-    finally:
-        if client is not None:
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.settimeout(connect_timeout)
             try:
-                client.close()
-            except Exception:
-                pass
+                client.connect(str(sock_path))
+            except OSError as e:
+                last_error = e
+                continue
+
+            payload = (json.dumps(request) + "\n").encode()
+            try:
+                client.sendall(payload)
+            except OSError as e:
+                last_error = e
+                continue
+
+            client.settimeout(read_timeout)
+            response_bytes = _read_json_message(client, max_bytes=max_response_bytes)
+            try:
+                return json.loads(response_bytes.decode())
+            except json.JSONDecodeError as e:
+                raise IpcProtocolError(f"Invalid JSON response from daemon: {e}") from e
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+
+    msg = f"Could not connect to daemon (tried: {', '.join(str(p) for p in existing_paths)})"
+    if last_error is not None:
+        msg = f"{msg}: {last_error}"
+    raise IpcUnavailable(msg)
 
 
 def try_send_request(
@@ -113,13 +131,10 @@ def try_send_request(
       - dict: daemon response (or {"error": "..."} on protocol/timeouts)
       - None: daemon unavailable (socket missing / cannot connect), caller may fall back
     """
-    sock_path = socket_path or daemon_socket_path()
-    if not sock_path.exists():
-        return None
     try:
         return send_request(
             command,
-            socket_path=sock_path,
+            socket_path=socket_path,
             connect_timeout=connect_timeout,
             read_timeout=read_timeout,
             max_response_bytes=max_response_bytes,

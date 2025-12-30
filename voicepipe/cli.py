@@ -12,17 +12,83 @@ from pathlib import Path
 
 import click
 
+from .audio import select_audio_input
 from .recorder import AudioRecorder, RecordingSession
 from .transcriber import WhisperTranscriber
 from .daemon import RecordingDaemon
 
 
+def _runtime_dir() -> Path:
+    xdg_runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg_runtime_dir:
+        return Path(xdg_runtime_dir)
+    run_user_dir = Path("/run/user") / str(os.getuid())
+    if run_user_dir.exists():
+        return run_user_dir
+    return Path("/tmp")
+
+
+def _get_preferred_sample_rate() -> int:
+    for name in ("VOICEPIPE_AUDIO_SAMPLE_RATE", "VOICEPIPE_SAMPLE_RATE"):
+        raw = os.environ.get(name)
+        if not raw:
+            continue
+        try:
+            value = int(str(raw).strip())
+        except Exception:
+            continue
+        if value > 0:
+            return value
+    return 16000
+
+
+def _get_preferred_channels() -> int:
+    for name in ("VOICEPIPE_AUDIO_CHANNELS", "VOICEPIPE_CHANNELS"):
+        raw = os.environ.get(name)
+        if not raw:
+            continue
+        try:
+            value = int(str(raw).strip())
+        except Exception:
+            continue
+        if value > 0:
+            return value
+    return 1
+
+
+def _find_existing_socket(paths: list[Path]) -> Path | None:
+    for path in paths:
+        try:
+            if path.exists():
+                return path
+        except Exception:
+            continue
+    return None
+
+
+def _daemon_socket_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    for name in ("VOICEPIPE_DAEMON_SOCKET", "VOICEPIPE_SOCKET_PATH"):
+        raw = (os.environ.get(name) or "").strip()
+        if raw:
+            try:
+                candidates.append(Path(raw).expanduser())
+            except Exception:
+                pass
+    # Legacy default (this branch) and newer per-app runtime dir layout.
+    candidates.append(_runtime_dir() / "voicepipe.sock")
+    candidates.append(_runtime_dir() / "voicepipe" / "voicepipe.sock")
+    # Extra legacy locations seen in the wild.
+    candidates.append(Path("/tmp") / "voicepipe.sock")
+    return candidates
+
+
 def daemon_request(command, **kwargs):
     """Send a request to the daemon service."""
-    socket_path = RecordingDaemon.SOCKET_PATH
+    socket_path = _find_existing_socket(_daemon_socket_candidates())
     
     # Check if daemon is running
-    if not socket_path.exists():
+    if not socket_path:
         # Try the subprocess method as fallback
         return None
         
@@ -94,7 +160,17 @@ def run_recording_subprocess():
         device = os.environ.get('VOICEPIPE_DEVICE')
         device_index = int(device) if device and device.isdigit() else None
         
-        recorder = AudioRecorder(device_index=device_index)
+        selection = select_audio_input(
+            preferred_device_index=device_index,
+            preferred_samplerate=_get_preferred_sample_rate(),
+            preferred_channels=_get_preferred_channels(),
+            strict_device_index=bool(device_index is not None),
+        )
+        recorder = AudioRecorder(
+            device_index=selection.device_index,
+            sample_rate=selection.samplerate,
+            channels=selection.channels,
+        )
         
         print(f"Recording started (PID: {os.getpid()})...", file=sys.stderr)
         recorder.start_recording(output_file=session['audio_file'])
@@ -481,12 +557,30 @@ def doctor(audio_test, record_test, transcribe_test, record_seconds, play):
             import numpy as np
             import sounddevice as sd
 
-            fs = 16000
+            env_device = os.environ.get("VOICEPIPE_DEVICE")
+            preferred_device = int(env_device) if (env_device or "").isdigit() else None
+            selection = select_audio_input(
+                preferred_device_index=preferred_device,
+                preferred_samplerate=_get_preferred_sample_rate(),
+                preferred_channels=_get_preferred_channels(),
+                strict_device_index=bool(preferred_device is not None),
+            )
+
+            fs = int(selection.samplerate)
             frames = int(0.5 * fs)
-            data = sd.rec(frames, samplerate=fs, channels=1, dtype="int16")
+            data = sd.rec(
+                frames,
+                samplerate=fs,
+                channels=int(selection.channels),
+                dtype="int16",
+                device=int(selection.device_index),
+            )
             sd.wait()
             max_amp = int(np.max(np.abs(data))) if data.size else 0
-            print(f"audio-test max_amp: {max_amp}")
+            print(
+                f"audio-test device={selection.device_index} samplerate={fs} "
+                f"channels={selection.channels} max_amp={max_amp}"
+            )
         except Exception as e:
             print(f"audio-test error: {e}", file=sys.stderr)
 

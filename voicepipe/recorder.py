@@ -22,14 +22,22 @@ from .systray import get_systray
 class FastAudioRecorder:
     """Optimized audio recorder using sounddevice."""
     
-    def __init__(self, device_index=None, use_mp3=True, max_duration=300, pre_open=True):
+    def __init__(
+        self,
+        device_index=None,
+        sample_rate=16000,
+        channels=1,
+        use_mp3=True,
+        max_duration=300,
+        pre_open=True,
+    ):
         self.device_index = device_index
         self.stream = None
         self.audio_queue = queue.Queue()
         self.recording = False
         self.format = np.int16
-        self.channels = 1
-        self.rate = 16000
+        self.channels = int(channels)
+        self.rate = int(sample_rate)
         self.use_mp3 = use_mp3
         self.ffmpeg_process = None
         self.mp3_file = None
@@ -219,14 +227,21 @@ class FastAudioRecorder:
 class AudioRecorder(FastAudioRecorder):
     """Handles audio recording to temporary MP3 files."""
     
-    def __init__(self, device_index=None, use_mp3=True, max_duration=300):
+    def __init__(
+        self,
+        device_index=None,
+        sample_rate=16000,
+        channels=1,
+        use_mp3=True,
+        max_duration=300,
+    ):
         self.device_index = device_index
         self.stream = None
         self.audio_queue = queue.Queue()
         self.recording = False
         self.format = np.int16
-        self.channels = 1
-        self.rate = 16000  # 16kHz is good for speech
+        self.channels = int(channels)
+        self.rate = int(sample_rate)
         self.use_mp3 = use_mp3
         self.ffmpeg_process = None
         self.mp3_file = None

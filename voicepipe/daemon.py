@@ -12,6 +12,7 @@ from pathlib import Path
 
 import sounddevice as sd
 
+from .audio import select_audio_input
 from .recorder import FastAudioRecorder
 from .systray import get_systray
 
@@ -38,94 +39,96 @@ class RecordingDaemon:
         self.running = True
         self.timeout_timer = None
         self.default_device = None
+        self.default_samplerate = None
+        self.default_channels = None
         self._timeout_triggered = False
         self._initialize_audio()
     
-    def _find_working_audio_device(self):
-        """Find an input device that can open at 16kHz.
+    def _get_preferred_sample_rate(self) -> int:
+        for name in ("VOICEPIPE_AUDIO_SAMPLE_RATE", "VOICEPIPE_SAMPLE_RATE"):
+            raw = os.environ.get(name)
+            if not raw:
+                continue
+            try:
+                value = int(str(raw).strip())
+            except Exception:
+                continue
+            if value > 0:
+                return value
+        return 16000
 
-        Prefer the system's default input (and common virtual devices like
-        PipeWire/Pulse) before trying everything else.
-        """
+    def _get_preferred_channels(self) -> int:
+        for name in ("VOICEPIPE_AUDIO_CHANNELS", "VOICEPIPE_CHANNELS"):
+            raw = os.environ.get(name)
+            if not raw:
+                continue
+            try:
+                value = int(str(raw).strip())
+            except Exception:
+                continue
+            if value > 0:
+                return value
+        return 1
+
+    def _parse_device_index(self, device_index):
+        if device_index is None or device_index == "":
+            return None, None
+        if isinstance(device_index, bool):
+            return None, "device must be an integer"
+        if isinstance(device_index, int):
+            return device_index, None
+        if isinstance(device_index, str):
+            raw = device_index.strip()
+            if not raw:
+                return None, None
+            if raw.isdigit():
+                return int(raw), None
+            return None, "device must be an integer"
+        return None, "device must be an integer"
+
+    def _find_working_audio_device(self):
+        """Find a working audio input configuration (device + samplerate + channels)."""
         print("Selecting audio input device...", file=sys.stderr)
 
-        candidates = []
-
-        # Prefer explicit VOICEPIPE_DEVICE if set (works for systemd too).
         env_device = os.environ.get("VOICEPIPE_DEVICE")
-        if env_device and env_device.isdigit():
-            candidates.append(int(env_device))
+        preferred_device = int(env_device) if (env_device or "").isdigit() else None
 
-        # Prefer sounddevice's default input.
+        selection = select_audio_input(
+            preferred_device_index=preferred_device,
+            preferred_samplerate=self._get_preferred_sample_rate(),
+            preferred_channels=self._get_preferred_channels(),
+        )
         try:
-            default_in = sd.default.device[0]
-            if default_in is not None and int(default_in) >= 0:
-                candidates.append(int(default_in))
+            name = sd.query_devices(selection.device_index, "input")["name"]
         except Exception:
-            pass
-
-        devices = sd.query_devices()
-        preferred_tokens = (" default", "pulse", "pipewire")
-
-        # Then prefer names like "default", "pulse", "pipewire".
-        for device_index, device in enumerate(devices):
-            if device.get("max_input_channels", 0) <= 0:
-                continue
-            name = str(device.get("name", "")).lower()
-            if any(tok.strip() in name for tok in preferred_tokens):
-                candidates.append(device_index)
-
-        # Finally, try everything else with input channels.
-        for device_index, device in enumerate(devices):
-            if device.get("max_input_channels", 0) <= 0:
-                continue
-            candidates.append(device_index)
-
-        # Deduplicate while preserving order.
-        seen = set()
-        ordered = []
-        for idx in candidates:
-            if idx in seen:
-                continue
-            seen.add(idx)
-            ordered.append(idx)
-
-        for device_index in ordered:
-            try:
-                name = sd.query_devices(device_index, "input")["name"]
-            except Exception:
-                name = str(device_index)
-
-            try:
-                print(f"Testing device {device_index}: {name}", file=sys.stderr)
-                with sd.InputStream(
-                    device=device_index,
-                    channels=1,
-                    samplerate=16000,
-                    dtype="int16",
-                    blocksize=1024,
-                ) as stream:
-                    stream.read(1024)
-
-                print(f"✓ Using device {device_index}: {name}", file=sys.stderr)
-                return device_index
-            except Exception as e:
-                print(f"✗ Device {device_index} failed: {e}", file=sys.stderr)
-                continue
-
-        print("No working input device found, falling back to device 0", file=sys.stderr)
-        return 0
+            name = str(selection.device_index)
+        print(
+            f"✓ Using device {selection.device_index}: {name} "
+            f"(samplerate={selection.samplerate}, channels={selection.channels})",
+            file=sys.stderr,
+        )
+        return selection
 
     def _initialize_audio(self):
         """Pre-initialize audio and recorder to reduce startup delay."""
         try:
-            # Find a working audio device automatically
-            self.default_device = self._find_working_audio_device()
-            device_info = sd.query_devices(self.default_device, 'input')
-            print(f"Audio initialized. Selected device {self.default_device}: {device_info['name']}", file=sys.stderr)
+            selection = self._find_working_audio_device()
+            self.default_device = selection.device_index
+            self.default_samplerate = selection.samplerate
+            self.default_channels = selection.channels
+            device_info = sd.query_devices(self.default_device, "input")
+            print(
+                f"Audio initialized. Selected device {self.default_device}: {device_info['name']} "
+                f"(samplerate={self.default_samplerate}, channels={self.default_channels})",
+                file=sys.stderr,
+            )
             
             # Pre-create recorder instance to avoid initialization delay
-            self.recorder = FastAudioRecorder(device_index=self.default_device)
+            self.recorder = FastAudioRecorder(
+                device_index=self.default_device,
+                sample_rate=int(self.default_samplerate or 16000),
+                channels=int(self.default_channels or 1),
+            )
             print("Recorder pre-initialized for fast startup", file=sys.stderr)
         except Exception as e:
             print(f"Warning: Could not pre-initialize audio: {e}", file=sys.stderr)
@@ -221,6 +224,10 @@ class RecordingDaemon:
             return {'error': 'Recording already in progress'}
             
         try:
+            device_index, device_err = self._parse_device_index(device_index)
+            if device_err:
+                return {"error": device_err}
+
             # Ensure temp directory exists
             Path('/tmp/voicepipe').mkdir(parents=True, exist_ok=True)
 
@@ -229,15 +236,36 @@ class RecordingDaemon:
             os.close(fd)
             
             # Use pre-initialized recorder if device matches, otherwise create new one
-            if device_index and device_index != self.default_device:
+            if device_index is not None and device_index != self.default_device:
                 # Different device requested, create new recorder
                 if self.recorder:
                     self.recorder.cleanup()
-                self.recorder = FastAudioRecorder(device_index=device_index)
+                selection = select_audio_input(
+                    preferred_device_index=device_index,
+                    preferred_samplerate=self._get_preferred_sample_rate(),
+                    preferred_channels=self._get_preferred_channels(),
+                    strict_device_index=True,
+                )
+                self.recorder = FastAudioRecorder(
+                    device_index=selection.device_index,
+                    sample_rate=selection.samplerate,
+                    channels=selection.channels,
+                )
             elif not self.recorder:
                 # No pre-initialized recorder, create one
+                if self.default_device is None or self.default_samplerate is None or self.default_channels is None:
+                    selection = select_audio_input(
+                        preferred_device_index=device_index,
+                        preferred_samplerate=self._get_preferred_sample_rate(),
+                        preferred_channels=self._get_preferred_channels(),
+                    )
+                    self.default_device = selection.device_index
+                    self.default_samplerate = selection.samplerate
+                    self.default_channels = selection.channels
                 self.recorder = FastAudioRecorder(
-                    device_index=device_index or self.default_device
+                    device_index=device_index if device_index is not None else self.default_device,
+                    sample_rate=int(self.default_samplerate or 16000),
+                    channels=int(self.default_channels or 1),
                 )
             
             # Start recording with existing recorder

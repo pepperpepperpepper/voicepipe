@@ -19,7 +19,32 @@ def runtime_dir() -> Path:
         return run_user_dir
     return Path("/tmp")
 
-SOCKET_PATH = runtime_dir() / "voicepipe.sock"
+def _find_existing_socket(paths: list[Path]) -> Path | None:
+    for path in paths:
+        try:
+            if path.exists():
+                return path
+        except Exception:
+            continue
+    return None
+
+
+def daemon_socket_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    for name in ("VOICEPIPE_DAEMON_SOCKET", "VOICEPIPE_SOCKET_PATH"):
+        raw = (os.environ.get(name) or "").strip()
+        if raw:
+            try:
+                candidates.append(Path(raw).expanduser())
+            except Exception:
+                pass
+    candidates.append(runtime_dir() / "voicepipe.sock")
+    candidates.append(runtime_dir() / "voicepipe" / "voicepipe.sock")
+    candidates.append(Path("/tmp") / "voicepipe.sock")
+    return candidates
+
+
+SOCKET_PATH = _find_existing_socket(daemon_socket_candidates()) or (runtime_dir() / "voicepipe.sock")
 
 TMP_DIR = Path('/tmp/voicepipe')
 TMP_DIR.mkdir(parents=True, exist_ok=True)
@@ -54,6 +79,21 @@ DEBOUNCE_MS = 500  # milliseconds
 LOCK_FILE = str(TMP_DIR / 'voicepipe-fast.lock')
 
 TRANSCRIBER_SOCKET = TMP_DIR / 'voicepipe_transcriber.sock'
+
+def transcriber_socket_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    for name in ("VOICEPIPE_TRANSCRIBER_SOCKET", "VOICEPIPE_TRANSCRIBER_SOCKET_PATH"):
+        raw = (os.environ.get(name) or "").strip()
+        if raw:
+            try:
+                candidates.append(Path(raw).expanduser())
+            except Exception:
+                pass
+    # Legacy and current defaults.
+    candidates.append(TMP_DIR / "voicepipe_transcriber.sock")
+    candidates.append(runtime_dir() / "voicepipe_transcriber.sock")
+    candidates.append(runtime_dir() / "voicepipe" / "voicepipe_transcriber.sock")
+    return candidates
 
 def get_active_window_id():
     """Best-effort capture of the active window for later typing."""
@@ -118,13 +158,20 @@ def type_with_xdotool(text, window_id=None):
 
 def send_cmd(cmd):
     """Send command to daemon via Unix socket"""
+    sock_path = _find_existing_socket(daemon_socket_candidates())
+    if not sock_path:
+        raise FileNotFoundError(
+            "voicepipe daemon socket not found (tried: "
+            + ", ".join(str(p) for p in daemon_socket_candidates())
+            + ")"
+        )
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     # Keep this low-ish for hotkey responsiveness, but high enough to avoid
     # spurious timeouts under load.
     client.settimeout(2.0)
     
     try:
-        client.connect(str(SOCKET_PATH))
+        client.connect(str(sock_path))
         client.sendall(json.dumps({"command": cmd}).encode())
         
         # Read response efficiently
@@ -189,9 +236,12 @@ def send_transcribe_request(audio_file):
             print(f"[TRANSCRIBE] Fallback error: {e}", file=sys.stderr)
             return ""
 
-    if not TRANSCRIBER_SOCKET.exists():
+    sock_path = _find_existing_socket(transcriber_socket_candidates())
+    if not sock_path:
         print(
-            f"[TRANSCRIBE] Transcriber socket not found: {TRANSCRIBER_SOCKET}",
+            "[TRANSCRIBE] Transcriber socket not found (tried: "
+            + ", ".join(str(p) for p in transcriber_socket_candidates())
+            + ")",
             file=sys.stderr,
         )
         print(
@@ -203,7 +253,7 @@ def send_transcribe_request(audio_file):
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     client.settimeout(60.0)  # Increased timeout
     try:
-        client.connect(str(TRANSCRIBER_SOCKET))
+        client.connect(str(sock_path))
         client.send((json.dumps({"audio_file": audio_file}) + '\n').encode())
         
         buffer = ""
@@ -237,7 +287,7 @@ def send_transcribe_request(audio_file):
         return full_text
     except Exception as e:
         print(
-            f"[TRANSCRIBE] Error connecting to {TRANSCRIBER_SOCKET}: {e}",
+            f"[TRANSCRIBE] Error connecting to {sock_path}: {e}",
             file=sys.stderr,
         )
         return fallback_transcribe()
@@ -366,6 +416,15 @@ def main():
         sys.exit(1)
     
     cmd = sys.argv[1]
+
+    if cmd in ("-h", "--help", "help"):
+        print("Usage: voicepipe-fast [start|stop|toggle]")
+        sys.exit(0)
+
+    if cmd not in ("start", "stop", "toggle"):
+        print(f"Error: unknown command: {cmd}", file=sys.stderr)
+        print("Usage: voicepipe-fast [start|stop|toggle]", file=sys.stderr)
+        sys.exit(2)
     
     # For toggle command, use file locking to prevent concurrent execution
     if cmd == "toggle":

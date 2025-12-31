@@ -17,6 +17,17 @@ class SystrayManager:
     
     def _check_availability(self):
         """Check if systray is available on this platform."""
+        # On Linux, a systray requires a graphical session. Importing pystray can
+        # raise exceptions (e.g. DisplayNameError) when no display is available,
+        # so check environment first.
+        if sys.platform.startswith("linux"):
+            display = os.environ.get("DISPLAY")
+            wayland_display = os.environ.get("WAYLAND_DISPLAY")
+            if not display and not wayland_display:
+                logger.debug("Systray not available (no DISPLAY/WAYLAND_DISPLAY)")
+                self.available = False
+                return
+
         try:
             import pystray
             from PIL import Image
@@ -27,11 +38,17 @@ class SystrayManager:
             logger.debug("Systray not available (pystray/PIL not installed)")
             self.available = False
             return
+        except Exception as e:
+            logger.debug("Systray not available (pystray import failed): %s", e)
+            self.available = False
+            return
         
-        # Check for display on Linux
-        if sys.platform.startswith('linux'):
-            if not os.environ.get('DISPLAY'):
-                logger.debug("Systray not available (no DISPLAY)")
+        # Double-check display on Linux (defensive; env can change in tests).
+        if sys.platform.startswith("linux"):
+            display = os.environ.get("DISPLAY")
+            wayland_display = os.environ.get("WAYLAND_DISPLAY")
+            if not display and not wayland_display:
+                logger.debug("Systray not available (no DISPLAY/WAYLAND_DISPLAY)")
                 self.available = False
                 return
     

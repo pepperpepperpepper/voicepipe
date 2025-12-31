@@ -217,6 +217,7 @@ class RecordingDaemon:
         if self.recording:
             return {'error': 'Recording already in progress'}
 
+        recorder_started = False
         try:
             if sd is None:
                 return {
@@ -280,21 +281,25 @@ class RecordingDaemon:
             
             # Start recording with existing recorder
             self.recorder.start_recording(output_file=self.audio_file)
-            self.recording = True
+            recorder_started = True
             self.recording_id = uuid.uuid4().hex
+            self.recording = True
             
             # Set up timeout (5 minutes)
             self.timeout_timer = threading.Timer(300, self._timeout_callback)
             self.timeout_timer.start()
             
             # Show systray icon if available
-            systray = get_systray()
-            # Use icon from project assets
-            icon_path = Path(__file__).parent / "assets" / "recording_icon.tiff"
-            if icon_path.exists():
-                systray.show(str(icon_path))
-            else:
-                systray.show()  # Use default red recording icon
+            try:
+                systray = get_systray()
+                # Use icon from project assets
+                icon_path = Path(__file__).parent / "assets" / "recording_icon.tiff"
+                if icon_path.exists():
+                    systray.show(str(icon_path))
+                else:
+                    systray.show()  # Use default red recording icon
+            except Exception as e:
+                logger.debug("Systray init failed: %s", e)
             
             return {
                 'status': 'recording',
@@ -304,8 +309,41 @@ class RecordingDaemon:
             }
             
         except Exception as e:
+            try:
+                if self.timeout_timer:
+                    self.timeout_timer.cancel()
+                    self.timeout_timer = None
+            except Exception:
+                pass
+
+            if recorder_started and self.recorder:
+                try:
+                    self.recorder.stop_recording()
+                except Exception:
+                    pass
+                try:
+                    self.recorder.cleanup()
+                except Exception:
+                    pass
+            elif self.recorder:
+                try:
+                    self.recorder.cleanup()
+                except Exception:
+                    pass
+
+            self.recording = False
+            self.recorder = None
+            self.recording_id = None
+            self._timeout_triggered = False
+
+            try:
+                get_systray().hide()
+            except Exception:
+                pass
+
             if self.audio_file and os.path.exists(self.audio_file):
                 os.unlink(self.audio_file)
+            self.audio_file = None
             return {'error': str(e)}
     
     def _timeout_callback(self):
@@ -342,7 +380,10 @@ class RecordingDaemon:
             self.recorder.cleanup()
             
             # Hide systray icon
-            get_systray().hide()
+            try:
+                get_systray().hide()
+            except Exception:
+                pass
             
             response = {
                 'status': 'stopped',
@@ -399,7 +440,10 @@ class RecordingDaemon:
             self._timeout_triggered = False
             
             # Hide systray icon
-            get_systray().hide()
+            try:
+                get_systray().hide()
+            except Exception:
+                pass
             
             return {'status': 'cancelled', 'recording_id': recording_id}
             
@@ -430,7 +474,10 @@ class RecordingDaemon:
                     logger.exception("Error cleaning up recorder: %s", e)
             
             # Hide systray icon
-            get_systray().hide()
+            try:
+                get_systray().hide()
+            except Exception:
+                pass
             
             # Reset state but preserve audio file
             self.recording = False

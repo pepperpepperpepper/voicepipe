@@ -10,6 +10,11 @@ def test_get_systray_is_safe_without_display(monkeypatch) -> None:
     systray_mod._systray = None
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    # Ensure we don't hydrate DISPLAY from systemd or filesystem heuristics in
+    # this unit test; we want the pure "no display" behavior.
+    monkeypatch.setattr(systray_mod, "_load_gui_env_from_systemd", lambda *a, **k: None)
+    monkeypatch.setattr(systray_mod, "_infer_display_from_x11_socket", lambda: None)
+    monkeypatch.setattr(systray_mod, "_infer_wayland_display", lambda: None)
     systray = get_systray()
     assert systray.available is False
 

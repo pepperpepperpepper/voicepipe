@@ -25,6 +25,16 @@ def run_recording_subprocess() -> None:
     session = None
     timeout_timer = None
     try:
+        def _safe_stderr(message: str) -> None:
+            err = getattr(sys, "stderr", None)
+            if err is None:
+                return
+            try:
+                err.write(message + "\n")
+                err.flush()
+            except Exception:
+                pass
+
         session = RecordingSession.create_session()
         audio_file = str(session.get("audio_file") or "")
         control_path = str(session.get("control_path") or "")
@@ -81,7 +91,7 @@ def run_recording_subprocess() -> None:
             max_duration=None,
         )
 
-        print(f"Recording started (PID: {os.getpid()})...", file=sys.stderr)
+        _safe_stderr(f"Recording started (PID: {os.getpid()})...")
         recorder.start_recording(output_file=audio_file)
 
         def _timeout_stop() -> None:
@@ -159,7 +169,7 @@ def run_recording_subprocess() -> None:
                 if audio_data:
                     recorder.save_to_file(audio_data, audio_file)
             except Exception as e:
-                print(f"Error saving audio: {e}", file=sys.stderr)
+                _safe_stderr(f"Error saving audio: {e}")
         if recorder:
             recorder.cleanup()
 
@@ -179,7 +189,10 @@ def run_recording_subprocess() -> None:
     except SystemExit:
         raise
     except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
+        try:
+            _safe_stderr(f"Error: {e}")
+        except Exception:
+            pass
         if recorder:
             recorder.cleanup()
         raise SystemExit(1)

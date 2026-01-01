@@ -454,6 +454,10 @@ def _osascript_type_text(
     osascript_path: str,
     text: str,
 ) -> tuple[bool, Optional[str]]:
+    # Avoid hanging when invoked from non-interactive remote sessions.
+    if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY") or os.environ.get("SSH_CLIENT"):
+        return False, "osascript typing requires an interactive macOS desktop session (SSH detected)"
+
     # AppleScript's `paragraphs` splits on carriage returns, so normalize and
     # convert to `\r` before passing as an argv item to `osascript`.
     apple_text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r")

@@ -230,6 +230,9 @@ def test_type_text_uses_osascript_backend(monkeypatch) -> None:
     import voicepipe.platform as platform_mod
 
     monkeypatch.setattr(platform_mod.sys, "platform", "darwin")
+    monkeypatch.delenv("SSH_CONNECTION", raising=False)
+    monkeypatch.delenv("SSH_TTY", raising=False)
+    monkeypatch.delenv("SSH_CLIENT", raising=False)
 
     def fake_which(name: str):
         return "/usr/bin/osascript" if name == "osascript" else None

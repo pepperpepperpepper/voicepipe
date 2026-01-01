@@ -12,7 +12,8 @@ import socket
 from pathlib import Path
 from typing import Optional
 
-from voicepipe.config import get_transcribe_backend
+from voicepipe.config import get_daemon_mode, get_transcribe_backend
+from voicepipe.platform import is_windows
 from voicepipe.paths import transcriber_socket_paths
 from voicepipe.transcription_result import TranscriptionResult
 
@@ -71,7 +72,12 @@ def _transcribe_via_daemon(
 
     last_error: Exception | None = None
     for sock_path in existing_paths:
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        except OSError as e:
+            raise TranscriberDaemonUnavailable(
+                f"Unix sockets are unavailable on this platform: {e}"
+            ) from e
         client.settimeout(connect_timeout)
         try:
             try:
@@ -148,7 +154,16 @@ def transcribe_audio_file(
     """Transcribe an on-disk audio file."""
     backend, resolved_model, model_for_daemon = _resolve_backend_and_model(model)
 
-    if prefer_daemon:
+    daemon_mode = get_daemon_mode(load_env=True)
+    effective_prefer_daemon = bool(prefer_daemon)
+    if daemon_mode == "never":
+        effective_prefer_daemon = False
+    elif daemon_mode == "auto" and is_windows():
+        effective_prefer_daemon = False
+    elif daemon_mode == "always":
+        effective_prefer_daemon = True
+
+    if effective_prefer_daemon:
         try:
             return _transcribe_via_daemon(
                 audio_file,
@@ -157,7 +172,9 @@ def transcribe_audio_file(
                 prompt=prompt,
                 temperature=float(temperature),
             )
-        except TranscriberDaemonUnavailable:
+        except TranscriberDaemonUnavailable as e:
+            if daemon_mode == "always":
+                raise TranscriptionError(str(e)) from e
             pass
 
     if backend == "openai":

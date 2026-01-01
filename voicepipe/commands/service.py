@@ -8,6 +8,7 @@ import subprocess
 import click
 
 from voicepipe.config import ensure_env_file, read_env_file
+from voicepipe.platform import is_windows
 from voicepipe.systemd import (
     RECORDER_UNIT,
     TARGET_UNIT,
@@ -25,6 +26,11 @@ from voicepipe.systemd import (
 @click.group(name="service")
 def service_group() -> None:
     """Manage Voicepipe systemd user services."""
+    if is_windows():
+        raise click.ClickException(
+            "systemd is not available on Windows.\n\n"
+            "Use Task Scheduler or the Startup folder to run Voicepipe at login."
+        )
 
 
 def _service_units(recorder: bool, transcriber: bool) -> list[str]:

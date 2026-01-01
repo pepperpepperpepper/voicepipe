@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,13 +17,23 @@ def test_config_home_ignores_xdg_config_home(tmp_path: Path, monkeypatch) -> Non
     config = _reload_config()
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
-    assert config.config_home() == tmp_path / ".config"
+    if sys.platform == "win32":
+        monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+        assert config.config_home() == tmp_path / "appdata"
+    else:
+        assert config.config_home() == tmp_path / ".config"
 
 
 def test_env_file_path_uses_dot_config_home(tmp_path: Path, monkeypatch) -> None:
     config = _reload_config()
     monkeypatch.setenv("HOME", str(tmp_path))
-    assert config.env_file_path() == tmp_path / ".config" / "voicepipe" / "voicepipe.env"
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+    if sys.platform == "win32":
+        assert config.env_file_path() == tmp_path / "appdata" / "voicepipe" / "voicepipe.env"
+    else:
+        assert config.env_file_path() == tmp_path / ".config" / "voicepipe" / "voicepipe.env"
 
 
 def test_get_openai_api_key_prefers_env_var(monkeypatch) -> None:
@@ -35,7 +46,9 @@ def test_get_openai_api_key_reads_legacy_file(tmp_path: Path, monkeypatch) -> No
     config = _reload_config()
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
-    legacy_path = tmp_path / ".config" / "voicepipe" / "api_key"
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+    legacy_path = config.config_dir() / "api_key"
     legacy_path.parent.mkdir(parents=True, exist_ok=True)
     legacy_path.write_text("from-legacy\n", encoding="utf-8")
     assert config.get_openai_api_key() == "from-legacy"
@@ -52,8 +65,10 @@ def test_get_openai_api_key_raises_helpful_error(monkeypatch) -> None:
 def test_upsert_env_var_writes_env_file(tmp_path: Path, monkeypatch) -> None:
     config = _reload_config()
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
     out_path = config.upsert_env_var("OPENAI_API_KEY", "sk-test")
-    assert out_path == tmp_path / ".config" / "voicepipe" / "voicepipe.env"
+    assert out_path == config.env_file_path()
     text = out_path.read_text(encoding="utf-8")
     assert "OPENAI_API_KEY=sk-test" in text
 
@@ -61,6 +76,8 @@ def test_upsert_env_var_writes_env_file(tmp_path: Path, monkeypatch) -> None:
 def test_read_env_file_parses_basic_dotenv(tmp_path: Path, monkeypatch) -> None:
     config = _reload_config()
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
     env_path = config.env_file_path()
     env_path.parent.mkdir(parents=True, exist_ok=True)
     env_path.write_text(
@@ -75,15 +92,22 @@ def test_read_env_file_parses_basic_dotenv(tmp_path: Path, monkeypatch) -> None:
 def test_ensure_env_file_creates_template(tmp_path: Path, monkeypatch) -> None:
     config = _reload_config()
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
     env_path = config.ensure_env_file()
     assert env_path.exists()
     assert "Voicepipe environment config" in env_path.read_text(encoding="utf-8")
-    assert config.env_file_permissions_ok(env_path) is True
+    if sys.platform == "win32":
+        assert config.env_file_permissions_ok(env_path) is None
+    else:
+        assert config.env_file_permissions_ok(env_path) is True
 
 
 def test_ensure_env_file_does_not_overwrite(tmp_path: Path, monkeypatch) -> None:
     config = _reload_config()
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
     env_path = config.env_file_path()
     env_path.parent.mkdir(parents=True, exist_ok=True)
     env_path.write_text("OPENAI_API_KEY=existing\n", encoding="utf-8")

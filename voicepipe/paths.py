@@ -15,6 +15,8 @@ import os
 import tempfile
 from pathlib import Path
 
+from voicepipe.platform import is_windows, getenv_path
+
 
 APP_NAME = "voicepipe"
 
@@ -36,6 +38,9 @@ def _ensure_private_dir(path: Path) -> None:
 
 def runtime_dir() -> Path:
     """Return the best-available per-user runtime base directory."""
+    if is_windows():
+        return Path(tempfile.gettempdir())
+
     xdg_runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
     if xdg_runtime_dir:
         candidate = Path(xdg_runtime_dir)
@@ -62,8 +67,12 @@ def runtime_app_dir(*, create: bool = False) -> Path:
                 base = tmp_dir
         except Exception:
             base = tmp_dir
+
     if base == tmp_dir:
-        path = tmp_dir / f"{APP_NAME}-{os.getuid()}"
+        if is_windows():
+            path = tmp_dir / APP_NAME
+        else:
+            path = tmp_dir / f"{APP_NAME}-{os.getuid()}"
     else:
         path = base / APP_NAME
 
@@ -72,11 +81,20 @@ def runtime_app_dir(*, create: bool = False) -> Path:
             path.mkdir(parents=True, exist_ok=True, mode=_PRIVATE_DIR_MODE)
             _ensure_private_dir(path)
         except Exception:
-            # If XDG_RUNTIME_DIR is misconfigured/unwritable, fall back to /tmp.
-            fallback = tmp_dir / f"{APP_NAME}-{os.getuid()}"
-            fallback.mkdir(parents=True, exist_ok=True, mode=_PRIVATE_DIR_MODE)
-            _ensure_private_dir(fallback)
-            path = fallback
+            if is_windows():
+                # If %TEMP% is misconfigured/unwritable, fall back to LOCALAPPDATA.
+                local_appdata = getenv_path("LOCALAPPDATA")
+                if local_appdata:
+                    fallback = Path(local_appdata) / APP_NAME / "run"
+                    fallback.mkdir(parents=True, exist_ok=True, mode=_PRIVATE_DIR_MODE)
+                    _ensure_private_dir(fallback)
+                    path = fallback
+            else:
+                # If XDG_RUNTIME_DIR is misconfigured/unwritable, fall back to /tmp.
+                fallback = tmp_dir / f"{APP_NAME}-{os.getuid()}"
+                fallback.mkdir(parents=True, exist_ok=True, mode=_PRIVATE_DIR_MODE)
+                _ensure_private_dir(fallback)
+                path = fallback
 
     return path
 
@@ -189,9 +207,44 @@ def session_state_dir(*, create: bool = False) -> Path:
 
 def state_dir(*, create: bool = False) -> Path:
     """Return a persistent per-user state directory (XDG_STATE_HOME)."""
+    if is_windows():
+        local_appdata = getenv_path("LOCALAPPDATA")
+        if local_appdata:
+            base = Path(local_appdata) / APP_NAME / "state"
+        else:
+            # Fallback: best-effort under the home directory.
+            try:
+                base = Path.home() / "AppData" / "Local" / APP_NAME / "state"
+            except Exception:
+                base = Path(tempfile.gettempdir()) / APP_NAME / "state"
+        if create:
+            base.mkdir(parents=True, exist_ok=True, mode=_PRIVATE_DIR_MODE)
+            _ensure_private_dir(base)
+        return base
+
     xdg_state_home = os.environ.get("XDG_STATE_HOME")
     base = Path(xdg_state_home) if xdg_state_home else (Path.home() / ".local" / "state")
     path = base / APP_NAME
+    if create:
+        path.mkdir(parents=True, exist_ok=True, mode=_PRIVATE_DIR_MODE)
+        _ensure_private_dir(path)
+    return path
+
+
+def logs_dir(*, create: bool = False) -> Path:
+    """Return a persistent per-user logs directory."""
+    if is_windows():
+        local_appdata = getenv_path("LOCALAPPDATA")
+        if local_appdata:
+            path = Path(local_appdata) / APP_NAME / "logs"
+        else:
+            try:
+                path = Path.home() / "AppData" / "Local" / APP_NAME / "logs"
+            except Exception:
+                path = Path(tempfile.gettempdir()) / APP_NAME / "logs"
+    else:
+        path = state_dir(create=False) / "logs"
+
     if create:
         path.mkdir(parents=True, exist_ok=True, mode=_PRIVATE_DIR_MODE)
         _ensure_private_dir(path)

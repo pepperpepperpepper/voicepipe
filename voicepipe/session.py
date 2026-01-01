@@ -16,46 +16,51 @@ from pathlib import Path
 from typing import Any
 
 from voicepipe.paths import audio_tmp_dir, session_state_dir
+from voicepipe.platform import pid_is_running
 
 
 class RecordingSession:
     """Manages recording sessions with PID tracking."""
 
-    STATE_DIR = session_state_dir()
     STATE_PREFIX = "voicepipe-"
+
+    @classmethod
+    def state_dir(cls, *, create: bool = False) -> Path:
+        return session_state_dir(create=create)
 
     @classmethod
     def get_state_file(cls, pid: int | None = None) -> Path:
         """Get the state file path for a given PID."""
         if pid is None:
             pid = os.getpid()
-        return cls.STATE_DIR / f"{cls.STATE_PREFIX}{pid}.json"
+        return cls.state_dir(create=False) / f"{cls.STATE_PREFIX}{pid}.json"
 
     @classmethod
     def find_active_sessions(cls) -> list[dict[str, Any]]:
         """Find all active recording sessions."""
+        state_dir = cls.state_dir(create=False)
+        if not state_dir.exists():
+            return []
+
         sessions: list[dict[str, Any]] = []
-        for file in cls.STATE_DIR.glob(f"{cls.STATE_PREFIX}*.json"):
+        for file in state_dir.glob(f"{cls.STATE_PREFIX}*.json"):
             try:
                 with open(file, "r", encoding="utf-8") as f:
                     data: dict[str, Any] = json.load(f)
                 pid = data.get("pid")
-                if isinstance(pid, int) and cls._is_process_running(pid):
+                if isinstance(pid, int) and pid_is_running(pid):
                     sessions.append(data)
                 else:
+                    try:
+                        control_path = data.get("control_path")
+                        if isinstance(control_path, str) and control_path:
+                            Path(control_path).unlink(missing_ok=True)
+                    except Exception:
+                        pass
                     file.unlink(missing_ok=True)
             except Exception:
                 file.unlink(missing_ok=True)
         return sessions
-
-    @classmethod
-    def _is_process_running(cls, pid: int) -> bool:
-        """Check if a process with given PID is running."""
-        try:
-            os.kill(pid, 0)
-            return True
-        except ProcessLookupError:
-            return False
 
     @classmethod
     def create_session(cls) -> dict[str, Any]:
@@ -64,9 +69,9 @@ class RecordingSession:
         if active:
             raise RuntimeError(f"Recording already in progress (PID: {active[0]['pid']})")
 
-        cls.STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+        state_dir = cls.state_dir(create=True)
         try:
-            os.chmod(cls.STATE_DIR, 0o700)
+            os.chmod(state_dir, 0o700)
         except Exception:
             pass
 
@@ -78,9 +83,17 @@ class RecordingSession:
         )
         os.close(fd)
 
+        pid = os.getpid()
+        control_path = state_dir / f"{cls.STATE_PREFIX}{pid}.control"
+        try:
+            control_path.write_text("", encoding="utf-8")
+        except Exception:
+            pass
+
         session: dict[str, Any] = {
-            "pid": os.getpid(),
+            "pid": pid,
             "audio_file": audio_file,
+            "control_path": str(control_path),
             "recording_id": uuid.uuid4().hex,
             "started_at": datetime.now().isoformat(),
         }
@@ -110,3 +123,9 @@ class RecordingSession:
         if isinstance(pid, int):
             state_file = cls.get_state_file(pid)
             state_file.unlink(missing_ok=True)
+        try:
+            control_path = session.get("control_path")
+            if isinstance(control_path, str) and control_path:
+                Path(control_path).unlink(missing_ok=True)
+        except Exception:
+            pass

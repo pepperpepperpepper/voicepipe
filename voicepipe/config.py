@@ -4,21 +4,28 @@ Voicepipe is used both interactively (from a shell) and as a systemd user
 service. systemd user services generally do not load shell init files like
 `.bashrc`/`.zshrc`, so configuration must come from a source systemd can read.
 
-The canonical Voicepipe config file is:
-  ~/.config/voicepipe/voicepipe.env
+The canonical Voicepipe config file is OS-dependent:
+  - Linux: ~/.config/voicepipe/voicepipe.env
+  - Windows: %APPDATA%\\voicepipe\\voicepipe.env
+
+You can override it everywhere with `VOICEPIPE_ENV_FILE`.
 """
 
 from __future__ import annotations
 
 import os
 import stat
+import sys
+import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 try:
     from dotenv import load_dotenv
 except Exception:  # pragma: no cover
     load_dotenv = None
+
+from voicepipe.platform import getenv_path, is_windows
 
 
 APP_NAME = "voicepipe"
@@ -44,8 +51,11 @@ DEFAULT_ENV_FILE_TEMPLATE = """# Voicepipe environment config (used by systemd s
 # VOICEPIPE_AUDIO_CHANNELS=1
 # VOICEPIPE_TRANSCRIBE_BACKEND=openai
 # VOICEPIPE_TRANSCRIBE_MODEL=gpt-4o-transcribe
-# VOICEPIPE_TYPE_BACKEND=auto  # or: wayland|x11|wtype|xdotool|none
+# VOICEPIPE_TYPE_BACKEND=auto  # Linux: wtype|xdotool, Windows: sendinput, or: none
+# VOICEPIPE_DAEMON_MODE=auto  # auto|never|always
 """
+
+DaemonMode = Literal["auto", "never", "always"]
 
 
 class VoicepipeConfigError(RuntimeError):
@@ -56,6 +66,15 @@ def config_home() -> Path:
     # Prefer a stable, systemd-friendly location that does not depend on
     # shell-initialized environment variables (systemd user services do not
     # load `.bashrc`/`.zshrc`).
+    if is_windows():
+        # Prefer Roaming AppData for user config on Windows.
+        base = getenv_path("APPDATA") or getenv_path("LOCALAPPDATA")
+        if base:
+            return Path(base)
+        try:
+            return Path.home() / "AppData" / "Roaming"
+        except Exception:
+            return Path(tempfile.gettempdir())
     return Path.home() / ".config"
 
 
@@ -67,6 +86,18 @@ def config_dir(*, create: bool = False) -> Path:
 
 
 def env_file_path() -> Path:
+    override = getenv_path("VOICEPIPE_ENV_FILE")
+    if override:
+        try:
+            path = Path(override).expanduser()
+        except Exception:
+            path = Path(override)
+        if not path.is_absolute():
+            try:
+                path = (Path.cwd() / path).resolve()
+            except Exception:
+                pass
+        return path
     return config_dir() / f"{APP_NAME}.env"
 
 
@@ -82,7 +113,7 @@ def load_environment(*, load_cwd_dotenv: bool = True) -> None:
 
     Precedence:
     - Existing process env always wins.
-    - Then `~/.config/voicepipe/voicepipe.env` (if present).
+    - Then `voicepipe.env` (see `VOICEPIPE_ENV_FILE` / OS default) if present.
     - Then a local `.env` (optional) for developer convenience.
     """
 
@@ -381,7 +412,27 @@ def read_env_file(path: Optional[Path] = None) -> dict[str, str]:
 def _atomic_write(path: Path, content: str) -> None:
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(content, encoding="utf-8")
-    os.replace(tmp_path, path)
+    try:
+        os.replace(tmp_path, path)
+        return
+    except Exception as e:
+        # On Windows, `os.replace()` can fail when the destination file is open in an editor.
+        try:
+            path.write_text(content, encoding="utf-8")
+            err = getattr(sys, "stderr", None)
+            if err is not None:
+                try:
+                    print(
+                        f"Warning: failed to atomically replace {path} ({e}); wrote in-place instead.",
+                        file=err,
+                    )
+                except Exception:
+                    pass
+        finally:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 def ensure_private_path(path: Path, mode: int) -> None:
@@ -460,6 +511,8 @@ def upsert_env_var(
 
 
 def env_file_permissions_ok(path: Optional[Path] = None) -> Optional[bool]:
+    if is_windows():
+        return None
     env_path = env_file_path() if path is None else Path(path)
     try:
         st = env_path.stat()
@@ -467,3 +520,17 @@ def env_file_permissions_ok(path: Optional[Path] = None) -> Optional[bool]:
         return None
     mode = stat.S_IMODE(st.st_mode)
     return mode == 0o600
+
+
+def get_daemon_mode(*, default: DaemonMode = "auto", load_env: bool = True) -> DaemonMode:
+    if load_env:
+        load_environment()
+    raw = (os.environ.get("VOICEPIPE_DAEMON_MODE") or "").strip().lower()
+    mode = raw or str(default)
+    if mode not in ("auto", "never", "always"):
+        raise VoicepipeConfigError(
+            "Invalid VOICEPIPE_DAEMON_MODE.\n\n"
+            "Expected one of: auto, never, always\n"
+            f"Got: {raw!r}"
+        )
+    return mode  # type: ignore[return-value]

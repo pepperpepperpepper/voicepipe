@@ -24,6 +24,8 @@ from voicepipe.config import (
     upsert_env_var,
 )
 from voicepipe.systemd import TARGET_UNIT
+from voicepipe.platform import is_windows
+from voicepipe.commands._hints import print_restart_hint
 
 
 @click.group(name="config")
@@ -39,7 +41,7 @@ def config_group() -> None:
     help="Read the API key from stdin (avoids shell history).",
 )
 def config_set_openai_key(api_key: str | None, from_stdin: bool) -> None:
-    """Store the OpenAI API key in ~/.config/voicepipe/voicepipe.env."""
+    """Store the OpenAI API key in the Voicepipe env file."""
     if from_stdin:
         if sys.stdin.isatty():
             raise click.UsageError("--from-stdin requires piped stdin")
@@ -63,11 +65,7 @@ def config_set_openai_key(api_key: str | None, from_stdin: bool) -> None:
             f"Warning: expected permissions 0600 but got different mode on: {env_path}",
             err=True,
         )
-    click.echo(
-        "If you're using the systemd services, restart Voicepipe to pick up changes:\n"
-        "  voicepipe service restart\n"
-        f"  # or: systemctl --user restart {TARGET_UNIT}"
-    )
+    print_restart_hint()
 
 
 @config_group.command("set-elevenlabs-key")
@@ -78,7 +76,7 @@ def config_set_openai_key(api_key: str | None, from_stdin: bool) -> None:
     help="Read the API key from stdin (avoids shell history).",
 )
 def config_set_elevenlabs_key(api_key: str | None, from_stdin: bool) -> None:
-    """Store the ElevenLabs API key in ~/.config/voicepipe/voicepipe.env."""
+    """Store the ElevenLabs API key in the Voicepipe env file."""
     if from_stdin:
         if sys.stdin.isatty():
             raise click.UsageError("--from-stdin requires piped stdin")
@@ -102,11 +100,7 @@ def config_set_elevenlabs_key(api_key: str | None, from_stdin: bool) -> None:
             f"Warning: expected permissions 0600 but got different mode on: {env_path}",
             err=True,
         )
-    click.echo(
-        "If you're using the systemd services, restart Voicepipe to pick up changes:\n"
-        "  voicepipe service restart\n"
-        f"  # or: systemctl --user restart {TARGET_UNIT}"
-    )
+    print_restart_hint()
 
 
 @config_group.command("show")
@@ -156,25 +150,34 @@ def config_edit() -> None:
 
     editor = (os.environ.get("EDITOR") or "").strip()
     if not editor:
-        for candidate in ("nano", "vim", "vi"):
-            path = shutil.which(candidate)
-            if path:
-                editor = path
-                break
+        if is_windows():
+            editor = "notepad"
+        else:
+            for candidate in ("nano", "vim", "vi"):
+                path = shutil.which(candidate)
+                if path:
+                    editor = path
+                    break
 
     if not editor:
         raise click.ClickException("No editor found (set $EDITOR)")
 
     cmd = [*shlex.split(editor), str(env_path)]
-    rc = subprocess.run(cmd, check=False).returncode
+    try:
+        rc = subprocess.run(cmd, check=False).returncode
+    except FileNotFoundError:
+        # Windows fallback: let Explorer choose an editor.
+        if is_windows():
+            try:
+                os.startfile(env_path)  # type: ignore[attr-defined]
+                return
+            except Exception as e:
+                raise click.ClickException(f"Failed to open env file: {e}") from e
+        raise
     if rc != 0:
         raise SystemExit(rc)
 
-    click.echo(
-        "If you're using the systemd services, restart Voicepipe to pick up changes:\n"
-        "  voicepipe service restart\n"
-        f"  # or: systemctl --user restart {TARGET_UNIT}"
-    )
+    print_restart_hint()
 
 
 @config_group.command("migrate")
@@ -217,8 +220,4 @@ def config_migrate(delete_legacy: bool) -> None:
 
     upsert_env_var("OPENAI_API_KEY", key)
     click.echo(f"Migrated OPENAI_API_KEY from {source} to: {env_path}")
-    click.echo(
-        "If you're using the systemd services, restart Voicepipe to pick up changes:\n"
-        "  voicepipe service restart\n"
-        f"  # or: systemctl --user restart {TARGET_UNIT}"
-    )
+    print_restart_hint()

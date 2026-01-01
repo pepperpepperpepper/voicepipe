@@ -19,6 +19,7 @@ from typing import Optional
 from voicepipe.config import get_transcribe_backend, get_transcribe_model, load_environment
 from voicepipe.logging_utils import configure_logging
 from voicepipe.paths import runtime_app_dir, transcriber_socket_path
+from voicepipe.platform import is_windows
 from voicepipe.elevenlabs_transcriber import ElevenLabsTranscriber
 from voicepipe.transcriber import WhisperTranscriber
 
@@ -264,6 +265,14 @@ def serve(
 def main(argv: Optional[list[str]] = None) -> None:
     # Keep it simple: configuration via env vars.
     del argv
+    if is_windows():
+        raise SystemExit(
+            "Transcriber daemon mode is not supported on Windows yet.\n\n"
+            "Voicepipe is daemonless by default on Windows; use:\n"
+            "  voicepipe transcribe-file\n"
+            "  voicepipe stop\n"
+            "or set VOICEPIPE_DAEMON_MODE=never."
+        )
     configure_logging(default_level=logging.INFO)
     load_environment()
     backend = get_transcribe_backend()

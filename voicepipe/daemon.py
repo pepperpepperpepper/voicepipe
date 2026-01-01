@@ -14,8 +14,8 @@ from pathlib import Path
 
 try:
     import sounddevice as sd
-except ImportError:  # pragma: no cover
-    sd = None
+except Exception:  # pragma: no cover
+    sd = None  # type: ignore[assignment]
 
 from .audio import select_audio_input
 from .config import get_audio_channels, get_audio_sample_rate
@@ -29,11 +29,10 @@ logger = logging.getLogger(__name__)
 
 class RecordingDaemon:
     """Background daemon that handles recording requests."""
-    
-    SOCKET_PATH = daemon_socket_path()
-    
+
     def __init__(self):
         self._state_lock = threading.Lock()
+        self.socket_path = daemon_socket_path()
         self.socket = None
         self.recorder = None
         self.recording = False
@@ -104,19 +103,19 @@ class RecordingDaemon:
         """Start the daemon service."""
         # Ensure parent dir exists for the socket path.
         try:
-            self.SOCKET_PATH.parent.mkdir(parents=True, exist_ok=True)
+            self.socket_path.parent.mkdir(parents=True, exist_ok=True)
         except Exception:
             pass
 
         # Clean up any existing socket
-        if self.SOCKET_PATH.exists():
-            self.SOCKET_PATH.unlink()
+        if self.socket_path.exists():
+            self.socket_path.unlink()
             
         # Create Unix domain socket
         self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.socket.bind(str(self.SOCKET_PATH))
+        self.socket.bind(str(self.socket_path))
         try:
-            os.chmod(self.SOCKET_PATH, 0o600)
+            os.chmod(self.socket_path, 0o600)
         except Exception:
             pass
         self.socket.listen(1)
@@ -125,7 +124,7 @@ class RecordingDaemon:
         signal.signal(signal.SIGTERM, self._signal_handler)
         signal.signal(signal.SIGINT, self._signal_handler)
         
-        logger.info("Voicepipe daemon started. Socket: %s", self.SOCKET_PATH)
+        logger.info("Voicepipe daemon started. Socket: %s", self.socket_path)
         
         # Main loop
         while self.running:
@@ -156,8 +155,8 @@ class RecordingDaemon:
                 self.recorder = None
         if self.socket:
             self.socket.close()
-        if self.SOCKET_PATH.exists():
-            self.SOCKET_PATH.unlink()
+        if self.socket_path.exists():
+            self.socket_path.unlink()
         
         logger.info("Daemon shutdown complete.")
         sys.exit(0)

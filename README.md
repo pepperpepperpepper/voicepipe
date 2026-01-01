@@ -1,12 +1,12 @@
 # Voicepipe
 
-Voice recording and transcription daemon for Linux.
+Voice recording and transcription CLI for Linux (systemd optional) and Windows 10/11 (daemonless).
 
 ## Features
 
 - Simple voice recording with automatic device detection
 - High-quality transcription using OpenAI or ElevenLabs (configurable)
-- Optional automatic typing of transcribed text via xdotool (X11) or wtype (Wayland)
+- Optional automatic typing of transcribed text (Linux: xdotool/wtype; Windows: SendInput)
 - Robust daemon-based session management
 - Automatic cleanup of temporary files
 - Multi-language transcription support
@@ -43,14 +43,42 @@ The systemd user services provide:
 
 The CLI automatically detects and uses the services if running, or falls back to subprocess mode.
 
+## Windows (Win10/11, no WSL)
+
+Windows uses the subprocess recording path by default (no systemd, no recorder/transcriber daemons yet). The recommended hotkey target is `voicepipe-fast toggle` (records on first press, stops/transcribes on second press).
+
+- Config file default: `%APPDATA%\\voicepipe\\voicepipe.env` (override with `VOICEPIPE_ENV_FILE`; run `voicepipe config show` to see the resolved path)
+- Logs: `%LOCALAPPDATA%\\voicepipe\\logs\\voicepipe-fast.log` (override with `VOICEPIPE_FAST_LOG_FILE` or `VOICEPIPE_LOG_FILE`)
+- Typing: `--type` defaults to `sendinput` and requires an interactive desktop session; typing into elevated apps usually requires running Voicepipe elevated too
+- Daemon policy: `VOICEPIPE_DAEMON_MODE=auto|never|always` (on Windows, `auto` behaves like `never`)
+
+### AutoHotkey example (hotkey → `voicepipe-fast toggle`)
+
+```ahk
+; Win+Shift+V toggles Voicepipe (runs hidden to avoid console flicker)
+# + v::
+    Run, voicepipe-fast toggle, , Hide
+return
+```
+
+See `hotkey-examples/voicepipe.ahk` for a copy-pasteable file.
+
+If `voicepipe-fast` is not on PATH, use `python -m voicepipe.fast toggle` instead (and ensure `python` is on PATH).
+
+### Run at login
+
+- **Startup folder**: put your `.ahk` script (or a shortcut to it) in `%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup`
+- **Task Scheduler**: create a task triggered “At log on” that runs your `.ahk` script; for typing to work, set it to run only when the user is logged on
+- Smoke test checklist: `WINDOWS_SMOKE_TEST.md`
+
 ## Dependencies
 
 - Python 3.9+
 - sounddevice (for recording; requires PortAudio)
 - OpenAI Python SDK (for the OpenAI backend)
 - Click (for CLI)
-- xdotool (optional, for `--type` on X11 / Xwayland)
-- wtype (optional, for `--type` on Wayland)
+- xdotool (optional, for `--type` on X11 / Xwayland; Linux only)
+- wtype (optional, for `--type` on Wayland; Linux only)
 
 On Arch Linux:
 ```bash
@@ -71,11 +99,13 @@ Voicepipe supports multiple transcription backends:
 - `openai` (default): models like `gpt-4o-transcribe`, `whisper-1`
 - `elevenlabs`: models like `scribe_v1`
 
-Configure in `~/.config/voicepipe/voicepipe.env`:
+Configure in your `voicepipe.env` file:
 ```bash
 VOICEPIPE_TRANSCRIBE_BACKEND=openai
 VOICEPIPE_TRANSCRIBE_MODEL=gpt-4o-transcribe
 ```
+
+Note: the default `voicepipe.env` location is OS-dependent (Linux: `~/.config/voicepipe/voicepipe.env`; Windows: `%APPDATA%\\voicepipe\\voicepipe.env`). Run `voicepipe config show` to see the resolved path.
 
 You can also override per command by prefixing the model:
 ```bash
@@ -100,6 +130,7 @@ Set it up using one of these methods:
    ```
 
 1. **Env file (recommended; works for systemd services + CLI)**:
+   On Linux/macOS:
    ```bash
    mkdir -p ~/.config/voicepipe
    chmod 700 ~/.config/voicepipe
@@ -108,6 +139,7 @@ Set it up using one of these methods:
    echo 'OPENAI_API_KEY=your-api-key-here' >> ~/.config/voicepipe/voicepipe.env
    chmod 600 ~/.config/voicepipe/voicepipe.env
    ```
+   On Windows, edit `%APPDATA%\\voicepipe\\voicepipe.env` (or run `voicepipe config show` to find it).
    Or use the CLI (avoids shell history):
    ```bash
    echo 'your-api-key-here' | voicepipe config set-openai-key --from-stdin
@@ -150,11 +182,12 @@ Voicepipe can also read the key from systemd credentials (via `$CREDENTIALS_DIRE
 
 - X11 / Xwayland: `xdotool`
 - Wayland: `wtype` (the Wayland analogue of `xdotool`, using a virtual keyboard protocol)
+- Windows: `sendinput` (built-in; no external binary)
 
-By default, Voicepipe auto-selects a backend. You can override it in `~/.config/voicepipe/voicepipe.env`:
+By default, Voicepipe auto-selects a backend. You can override it in your `voicepipe.env` file:
 
 ```bash
-VOICEPIPE_TYPE_BACKEND=auto  # or: wayland|x11|wtype|xdotool|none
+VOICEPIPE_TYPE_BACKEND=auto  # or: wayland|x11|wtype|xdotool|sendinput|none
 ```
 
 Note: On Wayland, `wtype` cannot target a specific window ID the way `xdotool --window` can; typing is best-effort into the focused surface.

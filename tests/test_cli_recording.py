@@ -8,6 +8,7 @@ from typing import Any
 from click.testing import CliRunner
 
 from voicepipe.cli import main
+from voicepipe.paths import preserved_audio_dir
 from voicepipe.transcription_result import TranscriptionResult
 
 
@@ -83,7 +84,7 @@ def test_stop_preserves_audio_file_on_transcription_error(
     assert "Error: boom" in result.stderr
     assert "Preserved audio file:" in result.stderr
 
-    preserved_dir = Path(os.environ["XDG_STATE_HOME"]) / "voicepipe" / "audio"
+    preserved_dir = preserved_audio_dir()
     preserved = preserved_dir / audio.name
     assert preserved.exists()
     assert not audio.exists()

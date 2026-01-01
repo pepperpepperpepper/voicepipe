@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import io
+import json
 import signal
 from pathlib import Path
 
@@ -34,7 +35,7 @@ def test_daemon_backend_raises_recording_error_on_error_payload(monkeypatch) -> 
     assert "boom" in str(exc.value)
 
 
-def test_subprocess_backend_start_sets_device_env(monkeypatch) -> None:
+def test_subprocess_backend_start_sets_device_env(tmp_path: Path, monkeypatch) -> None:
     _session, rb = _reload_backend()
 
     monkeypatch.setattr(rb.RecordingSession, "find_active_sessions", lambda: [])
@@ -57,6 +58,21 @@ def test_subprocess_backend_start_sets_device_env(monkeypatch) -> None:
         return _FakeProc()
 
     monkeypatch.setattr(rb.subprocess, "Popen", fake_popen)
+
+    state_file = tmp_path / "voicepipe-123.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "pid": 123,
+                "audio_file": str(tmp_path / "a.wav"),
+                "control_path": str(tmp_path / "ctl"),
+                "recording_id": "rid",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(rb.RecordingSession, "get_state_file", lambda _pid=None: state_file)
+    monkeypatch.setattr(rb.RecordingSession, "get_current_session", lambda: json.loads(state_file.read_text(encoding="utf-8")))
 
     backend = rb.SubprocessRecorderBackend()
     out = backend.start(device=12)
@@ -96,21 +112,22 @@ def test_subprocess_backend_stop_sends_sigterm(monkeypatch) -> None:
     monkeypatch.setattr(
         rb.RecordingSession,
         "get_current_session",
-        lambda: {"pid": 777, "audio_file": "/tmp/a.wav"},
+        lambda: {"pid": 777, "audio_file": "/tmp/a.wav", "control_path": "/tmp/ctl"},
     )
 
-    calls: list[tuple[int, int]] = []
+    calls: list[tuple[str, str]] = []
 
-    def fake_kill(pid: int, sig: int) -> None:
-        calls.append((pid, sig))
+    monkeypatch.setattr(rb, "pid_is_running", lambda _pid: False)
 
-    monkeypatch.setattr(rb.os, "kill", fake_kill)
+    def fake_write_control(control_path: str, command: str) -> None:
+        calls.append((control_path, command))
 
     backend = rb.SubprocessRecorderBackend()
+    monkeypatch.setattr(backend, "_write_control", fake_write_control)
     out = backend.stop()
     assert out.mode == "subprocess"
     assert out.audio_file == "/tmp/a.wav"
-    assert calls == [(777, signal.SIGTERM)]
+    assert calls == [("/tmp/ctl", "stop")]
 
 
 def test_subprocess_backend_cancel_cleans_up_audio_file(tmp_path: Path, monkeypatch) -> None:
@@ -119,19 +136,26 @@ def test_subprocess_backend_cancel_cleans_up_audio_file(tmp_path: Path, monkeypa
     audio = tmp_path / "a.wav"
     audio.write_bytes(b"123")
 
-    session_dict = {"pid": 111, "audio_file": str(audio)}
+    session_dict = {"pid": 111, "audio_file": str(audio), "control_path": str(tmp_path / "ctl")}
     monkeypatch.setattr(rb.RecordingSession, "get_current_session", lambda: session_dict)
 
     cleaned: list[dict] = []
 
     monkeypatch.setattr(rb.RecordingSession, "cleanup_session", lambda s: cleaned.append(s))
-    monkeypatch.setattr(rb.os, "kill", lambda *_a, **_k: None)
+    monkeypatch.setattr(rb, "pid_is_running", lambda _pid: False)
+
+    calls: list[tuple[str, str]] = []
+
+    def fake_write_control(control_path: str, command: str) -> None:
+        calls.append((control_path, command))
 
     backend = rb.SubprocessRecorderBackend()
+    monkeypatch.setattr(backend, "_write_control", fake_write_control)
     out = backend.cancel()
     assert out.mode == "subprocess"
     assert not audio.exists()
     assert cleaned == [session_dict]
+    assert calls == [(str(tmp_path / "ctl"), "cancel")]
 
 
 def test_subprocess_backend_status_idle_when_no_session(monkeypatch) -> None:

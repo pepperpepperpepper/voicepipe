@@ -6,8 +6,12 @@ import threading
 from pathlib import Path
 
 import pytest
+import sys
 
 from voicepipe.ipc import IpcProtocolError, IpcUnavailable, send_request, try_send_request
+
+if sys.platform == "win32":  # pragma: no cover
+    pytest.skip("AF_UNIX integration tests are skipped on Windows CI", allow_module_level=True)
 
 
 def _start_ipc_server(socket_path: Path, handler) -> threading.Thread:
@@ -85,4 +89,3 @@ def test_try_send_request_returns_none_when_socket_missing(tmp_path: Path) -> No
 def test_send_request_raises_when_socket_missing(tmp_path: Path) -> None:
     with pytest.raises(IpcUnavailable):
         send_request("status", socket_path=tmp_path / "missing.sock")
-

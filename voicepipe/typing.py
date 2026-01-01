@@ -8,9 +8,27 @@ import subprocess
 from dataclasses import dataclass
 from typing import Callable, Literal, Mapping, Optional, Tuple
 
+from voicepipe.platform import is_windows
+
 
 def get_active_window_id() -> Optional[str]:
-    """Best-effort capture of the active window for later typing (X11 only)."""
+    """Best-effort capture of the active window for later typing."""
+    if is_windows():
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.WinDLL("user32", use_last_error=True)
+            user32.GetForegroundWindow.argtypes = []
+            user32.GetForegroundWindow.restype = wintypes.HWND
+            hwnd = user32.GetForegroundWindow()
+            if not hwnd:
+                return None
+            return str(int(hwnd))
+        except Exception:
+            return None
+
+    # X11 best-effort.
     xdotool_path = shutil.which("xdotool")
     if not xdotool_path:
         return None
@@ -30,8 +48,8 @@ def get_active_window_id() -> Optional[str]:
         return None
 
 
-TypingBackendName = Literal["wtype", "xdotool", "none", "unavailable"]
-SessionType = Literal["wayland", "x11", "unknown"]
+TypingBackendName = Literal["wtype", "xdotool", "sendinput", "none", "unavailable"]
+SessionType = Literal["wayland", "x11", "windows", "unknown"]
 
 
 @dataclass(frozen=True)
@@ -50,6 +68,8 @@ def _detect_session_type(env: Mapping[str, str]) -> Tuple[SessionType, str]:
     We avoid spawning subprocesses (e.g. loginctl) because this runs in hotkey
     paths where latency matters.
     """
+    if is_windows():
+        return "windows", "win32"
 
     session_type = (env.get("XDG_SESSION_TYPE") or "").strip().lower()
     if session_type in ("wayland", "x11"):
@@ -151,6 +171,28 @@ def resolve_typing_backend(
             error="Typing disabled (VOICEPIPE_TYPE_BACKEND=none)",
             session_type=_detect_session_type(env)[0],
             reason="explicit override: none",
+        )
+
+    if is_windows():
+        if override in ("auto", "sendinput"):
+            return TypingBackend(
+                name="sendinput",
+                supports_window_id=True,
+                path=None,
+                error=None,
+                session_type="windows",
+                reason=f"{'explicit' if override != 'auto' else 'auto'}: sendinput",
+            )
+        return TypingBackend(
+            name="unavailable",
+            supports_window_id=False,
+            path=None,
+            error=(
+                f"Unknown VOICEPIPE_TYPE_BACKEND={override_raw!r} "
+                "(expected: auto|sendinput|none)"
+            ),
+            session_type="windows",
+            reason="invalid override",
         )
 
     if override in ("wtype", "xdotool"):
@@ -266,6 +308,107 @@ def resolve_typing_backend(
     )
 
 
+def _sendinput_focus_window(window_id: str) -> None:
+    if not window_id:
+        return
+    try:
+        hwnd = int(str(window_id).strip(), 0)
+    except Exception:
+        return
+    if hwnd <= 0:
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+        user32.SetForegroundWindow.restype = wintypes.BOOL
+        user32.SetForegroundWindow(wintypes.HWND(hwnd))
+    except Exception:
+        pass
+
+
+def _sendinput_type_text(text: str, *, window_id: Optional[str]) -> tuple[bool, Optional[str]]:
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+        # Basic interactive-session check.
+        user32.GetForegroundWindow.argtypes = []
+        user32.GetForegroundWindow.restype = wintypes.HWND
+        if not user32.GetForegroundWindow():
+            return False, "No interactive desktop session available (no foreground window)"
+
+        if window_id:
+            _sendinput_focus_window(window_id)
+
+        INPUT_KEYBOARD = 1
+        KEYEVENTF_KEYUP = 0x0002
+        KEYEVENTF_UNICODE = 0x0004
+        VK_RETURN = 0x0D
+
+        class KEYBDINPUT(ctypes.Structure):
+            _fields_ = [
+                ("wVk", wintypes.WORD),
+                ("wScan", wintypes.WORD),
+                ("dwFlags", wintypes.DWORD),
+                ("time", wintypes.DWORD),
+                ("dwExtraInfo", wintypes.ULONG_PTR),
+            ]
+
+        class _INPUT_UNION(ctypes.Union):
+            _fields_ = [("ki", KEYBDINPUT)]
+
+        class INPUT(ctypes.Structure):
+            _fields_ = [("type", wintypes.DWORD), ("union", _INPUT_UNION)]
+
+        user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
+        user32.SendInput.restype = wintypes.UINT
+
+        def _send_inputs(inputs: list[INPUT]) -> bool:
+            if not inputs:
+                return True
+            arr = (INPUT * len(inputs))(*inputs)
+            sent = int(user32.SendInput(len(arr), arr, ctypes.sizeof(INPUT)))
+            return sent == len(arr)
+
+        # Convert to UTF-16 code units so we can handle surrogate pairs.
+        units = text.replace("\r\n", "\n").encode("utf-16-le", errors="surrogatepass")
+        code_units = [int.from_bytes(units[i : i + 2], "little") for i in range(0, len(units), 2)]
+
+        batch: list[INPUT] = []
+
+        def _flush() -> bool:
+            nonlocal batch
+            ok = _send_inputs(batch)
+            batch = []
+            return ok
+
+        for cu in code_units:
+            if cu == 0x000A:  # \n
+                # Prefer a VK_RETURN for predictable newlines.
+                batch.append(INPUT(type=INPUT_KEYBOARD, union=_INPUT_UNION(ki=KEYBDINPUT(wVk=VK_RETURN, wScan=0, dwFlags=0, time=0, dwExtraInfo=0))))
+                batch.append(INPUT(type=INPUT_KEYBOARD, union=_INPUT_UNION(ki=KEYBDINPUT(wVk=VK_RETURN, wScan=0, dwFlags=KEYEVENTF_KEYUP, time=0, dwExtraInfo=0))))
+            else:
+                batch.append(INPUT(type=INPUT_KEYBOARD, union=_INPUT_UNION(ki=KEYBDINPUT(wVk=0, wScan=cu, dwFlags=KEYEVENTF_UNICODE, time=0, dwExtraInfo=0))))
+                batch.append(INPUT(type=INPUT_KEYBOARD, union=_INPUT_UNION(ki=KEYBDINPUT(wVk=0, wScan=cu, dwFlags=KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, time=0, dwExtraInfo=0))))
+
+            # Flush periodically to avoid huge SendInput calls.
+            if len(batch) >= 64:
+                if not _flush():
+                    return False, "SendInput failed (are you in an interactive desktop session?)"
+
+        if not _flush():
+            return False, "SendInput failed (are you in an interactive desktop session?)"
+
+        return True, None
+    except Exception as e:
+        return False, f"sendinput error: {e}"
+
+
 def type_text(
     text: str,
     *,
@@ -283,6 +426,9 @@ def type_text(
     backend = _resolve_typing_backend_cached() if backend is None else backend
     if backend.name in ("none", "unavailable"):
         return False, backend.error or "Typing unavailable"
+
+    if backend.name == "sendinput":
+        return _sendinput_type_text(text, window_id=window_id)
 
     if backend.name == "xdotool":
         cmd = [backend.path or "xdotool", "type", "--clearmodifiers"]

@@ -30,6 +30,8 @@ from voicepipe.paths import (
     preserved_audio_dir,
     runtime_app_dir,
     transcriber_socket_paths,
+    logs_dir,
+    state_dir,
 )
 from voicepipe.systemd import (
     RECORDER_UNIT,
@@ -40,6 +42,7 @@ from voicepipe.systemd import (
     systemctl_show_properties,
 )
 from voicepipe.typing import resolve_typing_backend
+from voicepipe.platform import is_windows
 
 
 @click.group(name="doctor", invoke_without_command=True)
@@ -77,12 +80,22 @@ def doctor_env() -> None:
 
     click.echo(f"python: {sys.executable}")
     click.echo(f"cwd: {os.getcwd()}")
+    click.echo(f"platform: {sys.platform}")
+
+    if is_windows():
+        click.echo(f"USERPROFILE: {os.environ.get('USERPROFILE', '')}")
+        click.echo(f"APPDATA: {os.environ.get('APPDATA', '')}")
+        click.echo(f"LOCALAPPDATA: {os.environ.get('LOCALAPPDATA', '')}")
+        click.echo(f"TEMP: {os.environ.get('TEMP', '')}")
+        click.echo(f"TMP: {os.environ.get('TMP', '')}")
+
     click.echo(f"XDG_RUNTIME_DIR: {os.environ.get('XDG_RUNTIME_DIR', '')}")
     click.echo(f"XDG_SESSION_TYPE: {os.environ.get('XDG_SESSION_TYPE', '')}")
     click.echo(f"XDG_CURRENT_DESKTOP: {os.environ.get('XDG_CURRENT_DESKTOP', '')}")
     click.echo(f"DISPLAY: {os.environ.get('DISPLAY', '')}")
     click.echo(f"WAYLAND_DISPLAY: {os.environ.get('WAYLAND_DISPLAY', '')}")
     click.echo(f"VOICEPIPE_TYPE_BACKEND: {os.environ.get('VOICEPIPE_TYPE_BACKEND', '')}")
+    click.echo(f"VOICEPIPE_DAEMON_MODE: {os.environ.get('VOICEPIPE_DAEMON_MODE', '')}")
 
     env = dict(os.environ)
     resolved = resolve_typing_backend(env=env)
@@ -104,6 +117,9 @@ def doctor_env() -> None:
     )
     click.echo(f"typing backend auto reason: {auto.reason}")
 
+    click.echo(f"env file path: {env_file_path()}")
+    click.echo(f"state dir: {state_dir()} exists: {state_dir().exists()}")
+    click.echo(f"logs dir: {logs_dir()} exists: {logs_dir().exists()}")
     click.echo(f"runtime dir: {runtime_path} exists: {runtime_path.exists()}")
     click.echo(f"daemon socket: {daemon_socket or '(not found)'}")
     click.echo(f"daemon socket candidates: {', '.join(str(p) for p in daemon_socket_paths())}")
@@ -358,15 +374,25 @@ def _doctor_daemon(
                         "error",
                         recorded_file,
                     ],
-                    start_new_session=True,
+                    **(
+                        {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+                        if is_windows()
+                        else {"start_new_session": True}
+                    ),
                 )
                 try:
                     proc.wait(timeout=play_timeout)
                 except subprocess.TimeoutExpired:
                     click.echo("play: ffplay timed out, terminating...", err=True)
-                    try:
-                        os.killpg(proc.pid, signal.SIGTERM)
-                    except Exception:
+                    if not is_windows():
+                        try:
+                            os.killpg(proc.pid, signal.SIGTERM)
+                        except Exception:
+                            try:
+                                proc.terminate()
+                            except Exception:
+                                pass
+                    else:
                         try:
                             proc.terminate()
                         except Exception:
@@ -374,9 +400,15 @@ def _doctor_daemon(
                     try:
                         proc.wait(timeout=1.0)
                     except subprocess.TimeoutExpired:
-                        try:
-                            os.killpg(proc.pid, signal.SIGKILL)
-                        except Exception:
+                        if not is_windows():
+                            try:
+                                os.killpg(proc.pid, signal.SIGKILL)
+                            except Exception:
+                                try:
+                                    proc.kill()
+                                except Exception:
+                                    pass
+                        else:
                             try:
                                 proc.kill()
                             except Exception:
@@ -387,9 +419,15 @@ def _doctor_daemon(
                             pass
                 except KeyboardInterrupt:
                     click.echo("play: interrupted, terminating ffplay...", err=True)
-                    try:
-                        os.killpg(proc.pid, signal.SIGTERM)
-                    except Exception:
+                    if not is_windows():
+                        try:
+                            os.killpg(proc.pid, signal.SIGTERM)
+                        except Exception:
+                            try:
+                                proc.terminate()
+                            except Exception:
+                                pass
+                    else:
                         try:
                             proc.terminate()
                         except Exception:

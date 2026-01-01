@@ -60,7 +60,7 @@ def _normalize(text: str) -> str:
     "--type",
     "type_",
     is_flag=True,
-    help="Type the transcribed text using the configured backend (xdotool on X11, wtype on Wayland)",
+    help="Type the transcribed text using the configured typing backend (see VOICEPIPE_TYPE_BACKEND)",
 )
 @click.option("--language", help="Language code for transcription (e.g., en, es, fr)")
 @click.option(

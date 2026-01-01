@@ -10,8 +10,8 @@ import wave
 
 try:
     import sounddevice as sd
-except ImportError:  # pragma: no cover
-    sd = None
+except Exception:  # pragma: no cover
+    sd = None  # type: ignore[assignment]
 
 import numpy as np
 

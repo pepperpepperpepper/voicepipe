@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from voicepipe.cli import main
+from voicepipe.config import env_file_path
 from voicepipe.systemd import TARGET_UNIT
 
 
@@ -18,13 +21,15 @@ def _read_calls(log_path: Path) -> list[list[str]]:
 def test_setup_writes_env_file_installs_units_and_enables_target(
     isolated_home: Path, fake_systemd: Path
 ) -> None:
+    if sys.platform == "win32":
+        pytest.skip("systemd setup is not supported on Windows")
     fake_systemd.write_text("", encoding="utf-8")
 
     runner = CliRunner()
     result = runner.invoke(main, ["setup", "--api-key", "sk-test"])
     assert result.exit_code == 0, result.output
 
-    env_path = isolated_home / ".config" / "voicepipe" / "voicepipe.env"
+    env_path = env_file_path()
     assert env_path.exists()
     assert "OPENAI_API_KEY=sk-test" in env_path.read_text(encoding="utf-8")
 
@@ -44,7 +49,7 @@ def test_setup_from_stdin_works(isolated_home: Path, fake_systemd: Path) -> None
     )
     assert result.exit_code == 0, result.output
 
-    env_path = isolated_home / ".config" / "voicepipe" / "voicepipe.env"
+    env_path = env_file_path()
     assert "OPENAI_API_KEY=sk-stdin" in env_path.read_text(encoding="utf-8")
 
 
@@ -54,3 +59,12 @@ def test_setup_skip_key_cannot_be_combined_with_api_key(fake_systemd: Path) -> N
     assert result.exit_code != 0
     assert "--skip-key cannot be combined" in result.output
 
+
+def test_setup_skips_systemd_on_windows(isolated_home: Path) -> None:
+    if sys.platform != "win32":
+        pytest.skip("Windows-only behavior")
+    runner = CliRunner()
+    result = runner.invoke(main, ["setup", "--api-key", "sk-test"])
+    assert result.exit_code == 0, result.output
+    assert "skipping systemd setup" in (result.output + (result.stderr or ""))
+    assert env_file_path().exists()

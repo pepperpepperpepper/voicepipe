@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from voicepipe.cli import main
@@ -23,6 +25,8 @@ def _read_json_lines(path: Path) -> list[list[str]]:
 def test_service_install_writes_units_and_calls_daemon_reload(
     isolated_home: Path, fake_systemd: Path
 ) -> None:
+    if sys.platform == "win32":
+        pytest.skip("systemd is not supported on Windows")
     runner = CliRunner()
     result = runner.invoke(main, ["service", "install"])
     assert result.exit_code == 0, result.output
@@ -39,6 +43,8 @@ def test_service_install_writes_units_and_calls_daemon_reload(
 def test_service_start_defaults_to_target_when_installed(
     isolated_home: Path, fake_systemd: Path
 ) -> None:
+    if sys.platform == "win32":
+        pytest.skip("systemd is not supported on Windows")
     runner = CliRunner()
     assert runner.invoke(main, ["service", "install"]).exit_code == 0
 
@@ -53,6 +59,8 @@ def test_service_start_defaults_to_target_when_installed(
 def test_service_uninstall_removes_unit_files(
     isolated_home: Path, fake_systemd: Path
 ) -> None:
+    if sys.platform == "win32":
+        pytest.skip("systemd is not supported on Windows")
     runner = CliRunner()
     assert runner.invoke(main, ["service", "install"]).exit_code == 0
 
@@ -66,6 +74,8 @@ def test_service_uninstall_removes_unit_files(
 
 
 def test_service_logs_uses_journalctl(fake_systemd: Path, monkeypatch) -> None:
+    if sys.platform == "win32":
+        pytest.skip("systemd is not supported on Windows")
     runner = CliRunner()
     journal_log = fake_systemd.parent / "journalctl.log"
     monkeypatch.setenv("VOICEPIPE_TEST_JOURNALCTL_LOG", str(journal_log))
@@ -74,3 +84,11 @@ def test_service_logs_uses_journalctl(fake_systemd: Path, monkeypatch) -> None:
     assert result.exit_code == 0, result.output
     assert journal_log.exists()
 
+
+def test_service_commands_fail_on_windows(isolated_home: Path) -> None:
+    if sys.platform != "win32":
+        pytest.skip("Windows-only behavior")
+    runner = CliRunner()
+    result = runner.invoke(main, ["service", "install"])
+    assert result.exit_code != 0
+    assert "systemd is not available" in (result.output + (result.stderr or "")).lower()

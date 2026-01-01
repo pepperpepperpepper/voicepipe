@@ -62,6 +62,7 @@ target-version = ['py39']
 pythonpath = ["."]
 markers = [
     "live: opt-in integration tests requiring mic/network/API keys (enable via VOICEPIPE_LIVE_TESTS=1)",
+    "desktop: interactive desktop required (typing/focus tests)",
 ]
 
 [tool.mypy]

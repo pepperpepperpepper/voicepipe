@@ -82,7 +82,10 @@ def send_request(
     for sock_path in existing_paths:
         client: Optional[socket.socket] = None
         try:
-            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            except OSError as e:
+                raise IpcUnavailable(f"Unix sockets are unavailable on this platform: {e}") from e
             client.settimeout(connect_timeout)
             try:
                 client.connect(str(sock_path))

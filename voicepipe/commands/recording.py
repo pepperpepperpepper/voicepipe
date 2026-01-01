@@ -24,6 +24,7 @@ from voicepipe.recording_backend import (
 from voicepipe.session import RecordingSession
 from voicepipe.transcription import transcribe_audio_file_result
 from voicepipe.typing import type_text
+from voicepipe.platform import is_windows
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +149,7 @@ def start(device: int | None) -> None:
     "--type",
     "type_",
     is_flag=True,
-    help="Type the transcribed text using the configured backend (xdotool on X11, wtype on Wayland)",
+    help="Type the transcribed text using the configured typing backend (see VOICEPIPE_TYPE_BACKEND)",
 )
 @click.option("--language", help="Language code for transcription (e.g., en, es, fr)")
 @click.option(
@@ -241,7 +242,7 @@ def status() -> None:
     "--type",
     "type_",
     is_flag=True,
-    help="Type the transcribed text using the configured backend (xdotool on X11, wtype on Wayland)",
+    help="Type the transcribed text using the configured typing backend (see VOICEPIPE_TYPE_BACKEND)",
 )
 @click.option("--language", help="Language code for transcription (e.g., en, es, fr)")
 @click.option(
@@ -342,7 +343,7 @@ def transcribe_file(
     "--type",
     "type_",
     is_flag=True,
-    help="Type the transcribed text using the configured backend (xdotool on X11, wtype on Wayland)",
+    help="Type the transcribed text using the configured typing backend (see VOICEPIPE_TYPE_BACKEND)",
 )
 @click.option("--language", help="Language code for transcription (e.g., en, es, fr)")
 @click.option(
@@ -470,6 +471,13 @@ def cancel() -> None:
 def daemon(ctx: click.Context) -> None:
     """Run the voicepipe daemon service."""
     try:
+        if is_windows():
+            raise click.ClickException(
+                "Recorder daemon mode is not supported on Windows yet.\n\n"
+                "Use:\n"
+                "  voicepipe start|stop|cancel|status\n"
+                "  voicepipe-fast toggle"
+            )
         debug = bool((ctx.obj or {}).get("debug"))
         configure_logging(debug=debug, default_level=logging.INFO)
 

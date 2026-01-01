@@ -14,6 +14,11 @@ from voicepipe.transcription import (
     transcribe_audio_file,
 )
 
+import sys
+
+if sys.platform == "win32":  # pragma: no cover
+    pytest.skip("AF_UNIX integration tests are skipped on Windows CI", allow_module_level=True)
+
 
 def _start_unix_server(socket_path: Path, handler) -> threading.Thread:
     socket_path.parent.mkdir(parents=True, exist_ok=True)

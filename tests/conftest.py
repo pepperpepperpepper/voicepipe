@@ -13,6 +13,20 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"
     home.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+    # Windows-style per-user dirs (safe to set on Unix; ignored there).
+    appdata = tmp_path / "appdata"
+    localappdata = tmp_path / "localappdata"
+    appdata.mkdir(parents=True, exist_ok=True)
+    localappdata.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("APPDATA", str(appdata))
+    monkeypatch.setenv("LOCALAPPDATA", str(localappdata))
+
+    temp = tmp_path / "temp"
+    temp.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("TEMP", str(temp))
+    monkeypatch.setenv("TMP", str(temp))
 
     runtime = tmp_path / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
@@ -157,5 +171,5 @@ sys.exit(0)
     )
     os.chmod(journalctl_path, stat.S_IRWXU)
 
-    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
     return log_path

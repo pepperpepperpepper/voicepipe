@@ -1,7 +1,9 @@
 """Optional systray integration for voicepipe."""
 
-import sys
+from __future__ import annotations
+
 import os
+import sys
 import shutil
 import subprocess
 import threading

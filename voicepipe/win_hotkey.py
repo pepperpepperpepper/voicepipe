@@ -76,14 +76,20 @@ def main() -> None:
     user32.UnregisterHotKey.argtypes = [wintypes.HWND, wintypes.INT]
     user32.UnregisterHotKey.restype = wintypes.BOOL
 
-    modifiers, vk = _parse_hotkey()
+    try:
+        modifiers, vk = _parse_hotkey()
+    except SystemExit as e:
+        _log(str(e))
+        raise
     hotkey_id = _hotkey_id()
     if not user32.RegisterHotKey(None, hotkey_id, modifiers, vk):
         err = ctypes.get_last_error()
-        raise SystemExit(
+        message = (
             f"Failed to register hotkey (Alt+F5). Error={err}. "
             "Is something else already using this hotkey?"
         )
+        _log(message)
+        raise SystemExit(message)
 
     _log("registered Alt+F5")
 
@@ -108,4 +114,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

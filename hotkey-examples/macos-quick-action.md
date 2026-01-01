@@ -23,10 +23,19 @@ Goal: run `voicepipe-fast toggle` from a global keyboard shortcut without third-
    voicepipe-fast toggle
    ```
 
-   If `voicepipe-fast` is not found, use its full path (find it with `which voicepipe-fast`) or run:
+   If `voicepipe-fast` is not found, either:
+
+   - Run it via Python (often easiest under Automator/Shortcuts):
 
    ```sh
    python3 -m voicepipe.fast toggle
+   ```
+
+   - Or add your user scripts directory to `PATH` (pip `--user` installs here):
+
+   ```sh
+   export PATH="$HOME/Library/Python/3.9/bin:$PATH"
+   voicepipe-fast toggle
    ```
 
 6. Save as: `Voicepipe Toggle`.
@@ -42,4 +51,3 @@ Logs (for debugging):
 2. Add action: **Run Shell Script** (or **Run AppleScript**, if you prefer).
 3. Command: `voicepipe-fast toggle` (or `python3 -m voicepipe.fast toggle`).
 4. Assign a keyboard shortcut in the shortcut details panel.
-

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import click
 
-from voicepipe.platform import is_windows
+from voicepipe.platform import is_macos, is_windows
 from voicepipe.systemd import TARGET_UNIT, systemctl_path
 
 
@@ -10,6 +10,12 @@ def print_restart_hint() -> None:
     if is_windows():
         click.echo(
             "Restart Voicepipe to pick up changes (re-run your hotkey app / restart your Task Scheduler task)."
+        )
+        return
+
+    if is_macos():
+        click.echo(
+            "Restart Voicepipe to pick up changes (re-run your Shortcuts/Automator workflow or restart your LaunchAgent)."
         )
         return
 
@@ -22,4 +28,3 @@ def print_restart_hint() -> None:
         return
 
     click.echo("Restart Voicepipe to pick up changes.")
-

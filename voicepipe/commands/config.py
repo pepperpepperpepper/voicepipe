@@ -188,7 +188,7 @@ def config_edit() -> None:
     help="Delete legacy key files after migrating (dangerous).",
 )
 def config_migrate(delete_legacy: bool) -> None:
-    """Migrate legacy key locations into ~/.config/voicepipe/voicepipe.env."""
+    """Migrate legacy key locations into the canonical Voicepipe env file."""
     env_path = env_file_path()
     env_values = read_env_file(env_path)
     if (env_values.get("OPENAI_API_KEY") or "").strip():

@@ -8,7 +8,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Callable, Literal, Mapping, Optional, Tuple
 
-from voicepipe.platform import is_windows
+from voicepipe.platform import is_macos, is_windows
 
 
 def get_active_window_id() -> Optional[str]:
@@ -48,8 +48,8 @@ def get_active_window_id() -> Optional[str]:
         return None
 
 
-TypingBackendName = Literal["wtype", "xdotool", "sendinput", "none", "unavailable"]
-SessionType = Literal["wayland", "x11", "windows", "unknown"]
+TypingBackendName = Literal["wtype", "xdotool", "sendinput", "osascript", "none", "unavailable"]
+SessionType = Literal["wayland", "x11", "windows", "macos", "unknown"]
 
 
 @dataclass(frozen=True)
@@ -70,6 +70,9 @@ def _detect_session_type(env: Mapping[str, str]) -> Tuple[SessionType, str]:
     """
     if is_windows():
         return "windows", "win32"
+
+    if is_macos():
+        return "macos", "darwin"
 
     session_type = (env.get("XDG_SESSION_TYPE") or "").strip().lower()
     if session_type in ("wayland", "x11"):
@@ -121,7 +124,7 @@ def resolve_typing_backend(
     """Resolve the typing backend once based on env + available binaries.
 
     Config:
-      VOICEPIPE_TYPE_BACKEND=auto|wayland|x11|wtype|xdotool|none
+      VOICEPIPE_TYPE_BACKEND=auto|wayland|x11|wtype|xdotool|osascript|sendinput|none
     """
 
     if env is None:
@@ -138,6 +141,10 @@ def resolve_typing_backend(
         "wl": "wtype",
         "x11": "xdotool",
         "x": "xdotool",
+        "macos": "osascript",
+        "mac": "osascript",
+        "osx": "osascript",
+        "darwin": "osascript",
         "disable": "none",
         "disabled": "none",
         "off": "none",
@@ -192,6 +199,41 @@ def resolve_typing_backend(
                 "(expected: auto|sendinput|none)"
             ),
             session_type="windows",
+            reason="invalid override",
+        )
+
+    if is_macos():
+        if override in ("auto", "osascript"):
+            path = which("osascript")
+            if not path:
+                return TypingBackend(
+                    name="unavailable",
+                    supports_window_id=False,
+                    path=None,
+                    error="osascript not found (expected on macOS at /usr/bin/osascript)",
+                    session_type="macos",
+                    reason=(
+                        f"{'explicit' if override != 'auto' else 'auto'}: osascript "
+                        "(missing binary)"
+                    ),
+                )
+            return TypingBackend(
+                name="osascript",
+                supports_window_id=False,
+                path=path,
+                error=None,
+                session_type="macos",
+                reason=f"{'explicit' if override != 'auto' else 'auto'}: osascript",
+            )
+        return TypingBackend(
+            name="unavailable",
+            supports_window_id=False,
+            path=None,
+            error=(
+                f"Unknown VOICEPIPE_TYPE_BACKEND={override_raw!r} "
+                "(expected: auto|osascript|none)"
+            ),
+            session_type="macos",
             reason="invalid override",
         )
 
@@ -408,6 +450,49 @@ def _sendinput_type_text(text: str, *, window_id: Optional[str]) -> tuple[bool, 
     except Exception as e:
         return False, f"sendinput error: {e}"
 
+def _osascript_type_text(
+    osascript_path: str,
+    text: str,
+) -> tuple[bool, Optional[str]]:
+    # AppleScript's `paragraphs` splits on carriage returns, so normalize and
+    # convert to `\r` before passing as an argv item to `osascript`.
+    apple_text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\r")
+    script = """on run argv
+    if (count of argv) is 0 then return
+    set t to item 1 of argv
+    set n to count of paragraphs of t
+    tell application "System Events"
+        repeat with i from 1 to n
+            set lineText to paragraph i of t
+            keystroke lineText
+            if i is not n then
+                key code 36
+            end if
+        end repeat
+    end tell
+end run
+"""
+    try:
+        timeout_s = max(2.0, min(30.0, len(text) / 20.0))
+        result = subprocess.run(
+            [osascript_path, "-", apple_text],
+            input=script,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            check=False,
+        )
+        if result.returncode == 0:
+            return True, None
+        err = (result.stderr or "").strip()
+        out = (result.stdout or "").strip()
+        detail = err or out
+        return False, detail or f"osascript failed (rc={result.returncode})"
+    except subprocess.TimeoutExpired:
+        return False, "osascript timed out"
+    except Exception as e:
+        return False, f"osascript error: {e}"
+
 
 def type_text(
     text: str,
@@ -429,6 +514,9 @@ def type_text(
 
     if backend.name == "sendinput":
         return _sendinput_type_text(text, window_id=window_id)
+
+    if backend.name == "osascript":
+        return _osascript_type_text(backend.path or "osascript", text)
 
     if backend.name == "xdotool":
         cmd = [backend.path or "xdotool", "type", "--clearmodifiers"]

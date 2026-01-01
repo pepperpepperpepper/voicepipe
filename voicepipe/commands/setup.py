@@ -16,7 +16,7 @@ from voicepipe.config import (
     read_env_file,
     upsert_env_var,
 )
-from voicepipe.platform import is_windows
+from voicepipe.platform import is_macos, is_windows
 from voicepipe.systemd import TARGET_UNIT, install_user_units, run_systemctl, systemctl_path
 
 
@@ -180,15 +180,24 @@ def setup(
         click.echo(f"env file has OPENAI_API_KEY: {has_key_in_file}")
 
     if systemd:
+        if is_windows():
+            click.echo(
+                "systemd is not available on Windows; skipping systemd setup.\n"
+                "Use Task Scheduler or the Startup folder to run Voicepipe at login.",
+                err=True,
+            )
+            return
+
+        if is_macos():
+            click.echo(
+                "systemd is not available on macOS; skipping systemd setup.\n"
+                "Use launchd LaunchAgents (or a Shortcuts/Automator workflow) to run Voicepipe at login.",
+                err=True,
+            )
+            return
+
         if not systemctl_path():
-            if is_windows():
-                click.echo(
-                    "systemd is not available on Windows; skipping systemd setup.\n"
-                    "Use Task Scheduler or the Startup folder to run Voicepipe at login.",
-                    err=True,
-                )
-            else:
-                click.echo("systemctl not found; skipping systemd setup", err=True)
+            click.echo("systemctl not found; skipping systemd setup", err=True)
             return
 
         install_user_units()

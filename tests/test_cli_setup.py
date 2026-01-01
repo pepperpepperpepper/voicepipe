@@ -21,8 +21,8 @@ def _read_calls(log_path: Path) -> list[list[str]]:
 def test_setup_writes_env_file_installs_units_and_enables_target(
     isolated_home: Path, fake_systemd: Path
 ) -> None:
-    if sys.platform == "win32":
-        pytest.skip("systemd setup is not supported on Windows")
+    if sys.platform in ("win32", "darwin"):
+        pytest.skip("systemd setup is not supported on Windows/macOS")
     fake_systemd.write_text("", encoding="utf-8")
 
     runner = CliRunner()
@@ -63,6 +63,16 @@ def test_setup_skip_key_cannot_be_combined_with_api_key(fake_systemd: Path) -> N
 def test_setup_skips_systemd_on_windows(isolated_home: Path) -> None:
     if sys.platform != "win32":
         pytest.skip("Windows-only behavior")
+    runner = CliRunner()
+    result = runner.invoke(main, ["setup", "--api-key", "sk-test"])
+    assert result.exit_code == 0, result.output
+    assert "skipping systemd setup" in (result.output + (result.stderr or ""))
+    assert env_file_path().exists()
+
+
+def test_setup_skips_systemd_on_macos(isolated_home: Path) -> None:
+    if sys.platform != "darwin":
+        pytest.skip("macOS-only behavior")
     runner = CliRunner()
     result = runner.invoke(main, ["setup", "--api-key", "sk-test"])
     assert result.exit_code == 0, result.output

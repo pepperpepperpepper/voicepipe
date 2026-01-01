@@ -52,6 +52,21 @@ def test_state_dirs_use_xdg_state_home(tmp_path: Path, monkeypatch) -> None:
         assert paths.state_dir() == tmp_path / "voicepipe" / "state"
         assert paths.preserved_audio_dir() == tmp_path / "voicepipe" / "state" / "audio"
         assert paths.doctor_artifacts_dir() == tmp_path / "voicepipe" / "state" / "doctor"
+    elif sys.platform == "darwin":
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+        assert (
+            paths.state_dir()
+            == tmp_path / "Library" / "Application Support" / "voicepipe" / "state"
+        )
+        assert (
+            paths.preserved_audio_dir()
+            == tmp_path / "Library" / "Application Support" / "voicepipe" / "state" / "audio"
+        )
+        assert (
+            paths.doctor_artifacts_dir()
+            == tmp_path / "Library" / "Application Support" / "voicepipe" / "state" / "doctor"
+        )
     else:
         monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
         assert paths.state_dir() == tmp_path / "voicepipe"
@@ -64,6 +79,7 @@ def test_preserved_audio_dir_creates_dirs(tmp_path: Path, monkeypatch) -> None:
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
         monkeypatch.delenv("XDG_STATE_HOME", raising=False)
     else:
+        monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     out = paths.preserved_audio_dir(create=True)
     assert out.exists()
@@ -74,6 +90,7 @@ def test_doctor_artifacts_dir_creates_dirs(tmp_path: Path, monkeypatch) -> None:
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
         monkeypatch.delenv("XDG_STATE_HOME", raising=False)
     else:
+        monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     out = paths.doctor_artifacts_dir(create=True)
     assert out.exists()

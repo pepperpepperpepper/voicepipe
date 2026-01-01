@@ -8,7 +8,7 @@ import subprocess
 import click
 
 from voicepipe.config import ensure_env_file, read_env_file
-from voicepipe.platform import is_windows
+from voicepipe.platform import is_macos, is_windows
 from voicepipe.systemd import (
     RECORDER_UNIT,
     TARGET_UNIT,
@@ -30,6 +30,11 @@ def service_group() -> None:
         raise click.ClickException(
             "systemd is not available on Windows.\n\n"
             "Use Task Scheduler or the Startup folder to run Voicepipe at login."
+        )
+    if is_macos():
+        raise click.ClickException(
+            "systemd is not available on macOS.\n\n"
+            "Use launchd LaunchAgents (or a Shortcuts/Automator workflow) to run Voicepipe at login."
         )
 
 

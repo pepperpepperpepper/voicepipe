@@ -15,7 +15,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from voicepipe.platform import is_windows, getenv_path
+from voicepipe.platform import getenv_path, is_macos, is_windows
 
 
 APP_NAME = "voicepipe"
@@ -222,6 +222,16 @@ def state_dir(*, create: bool = False) -> Path:
             _ensure_private_dir(base)
         return base
 
+    if is_macos():
+        try:
+            base = Path.home() / "Library" / "Application Support" / APP_NAME / "state"
+        except Exception:
+            base = Path(tempfile.gettempdir()) / APP_NAME / "state"
+        if create:
+            base.mkdir(parents=True, exist_ok=True, mode=_PRIVATE_DIR_MODE)
+            _ensure_private_dir(base)
+        return base
+
     xdg_state_home = os.environ.get("XDG_STATE_HOME")
     base = Path(xdg_state_home) if xdg_state_home else (Path.home() / ".local" / "state")
     path = base / APP_NAME
@@ -242,6 +252,11 @@ def logs_dir(*, create: bool = False) -> Path:
                 path = Path.home() / "AppData" / "Local" / APP_NAME / "logs"
             except Exception:
                 path = Path(tempfile.gettempdir()) / APP_NAME / "logs"
+    elif is_macos():
+        try:
+            path = Path.home() / "Library" / "Logs" / APP_NAME
+        except Exception:
+            path = Path(tempfile.gettempdir()) / APP_NAME / "logs"
     else:
         path = state_dir(create=False) / "logs"
 

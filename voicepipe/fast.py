@@ -16,7 +16,7 @@ from typing import Optional
 from voicepipe.config import get_transcribe_model, load_environment
 from voicepipe.locks import LockHeld, PidFileLock
 from voicepipe.paths import logs_dir, preserved_audio_dir, runtime_app_dir
-from voicepipe.platform import is_linux, is_windows
+from voicepipe.platform import is_linux, is_macos, is_windows
 from voicepipe.recording_backend import AutoRecorderBackend, RecordingError
 
 
@@ -48,6 +48,9 @@ def _fast_log_path(*, create_dir: bool) -> Path:
             return Path(override)
 
     if is_windows():
+        return logs_dir(create=create_dir) / "voicepipe-fast.log"
+
+    if is_macos():
         return logs_dir(create=create_dir) / "voicepipe-fast.log"
 
     # Keep the Unix default in the runtime dir to avoid unexpected I/O on hotkey invocations.

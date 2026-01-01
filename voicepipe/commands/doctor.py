@@ -42,7 +42,7 @@ from voicepipe.systemd import (
     systemctl_show_properties,
 )
 from voicepipe.typing import resolve_typing_backend
-from voicepipe.platform import is_windows
+from voicepipe.platform import is_macos, is_windows
 
 
 @click.group(name="doctor", invoke_without_command=True)
@@ -88,6 +88,9 @@ def doctor_env() -> None:
         click.echo(f"LOCALAPPDATA: {os.environ.get('LOCALAPPDATA', '')}")
         click.echo(f"TEMP: {os.environ.get('TEMP', '')}")
         click.echo(f"TMP: {os.environ.get('TMP', '')}")
+    elif is_macos():
+        click.echo(f"HOME: {os.environ.get('HOME', '')}")
+        click.echo(f"TMPDIR: {os.environ.get('TMPDIR', '')}")
 
     click.echo(f"XDG_RUNTIME_DIR: {os.environ.get('XDG_RUNTIME_DIR', '')}")
     click.echo(f"XDG_SESSION_TYPE: {os.environ.get('XDG_SESSION_TYPE', '')}")

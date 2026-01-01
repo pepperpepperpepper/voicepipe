@@ -7,6 +7,7 @@ service. systemd user services generally do not load shell init files like
 The canonical Voicepipe config file is OS-dependent:
   - Linux: ~/.config/voicepipe/voicepipe.env
   - Windows: %APPDATA%\\voicepipe\\voicepipe.env
+  - macOS: ~/Library/Application Support/voicepipe/voicepipe.env
 
 You can override it everywhere with `VOICEPIPE_ENV_FILE`.
 """
@@ -26,6 +27,7 @@ except Exception:  # pragma: no cover
     load_dotenv = None
 
 from voicepipe.platform import getenv_path, is_windows
+from voicepipe.platform import is_macos
 
 
 APP_NAME = "voicepipe"
@@ -51,7 +53,7 @@ DEFAULT_ENV_FILE_TEMPLATE = """# Voicepipe environment config (used by systemd s
 # VOICEPIPE_AUDIO_CHANNELS=1
 # VOICEPIPE_TRANSCRIBE_BACKEND=openai
 # VOICEPIPE_TRANSCRIBE_MODEL=gpt-4o-transcribe
-# VOICEPIPE_TYPE_BACKEND=auto  # Linux: wtype|xdotool, Windows: sendinput, or: none
+# VOICEPIPE_TYPE_BACKEND=auto  # Linux: wtype|xdotool, macOS: osascript, Windows: sendinput, or: none
 # VOICEPIPE_DAEMON_MODE=auto  # auto|never|always
 """
 
@@ -73,6 +75,11 @@ def config_home() -> Path:
             return Path(base)
         try:
             return Path.home() / "AppData" / "Roaming"
+        except Exception:
+            return Path(tempfile.gettempdir())
+    if is_macos():
+        try:
+            return Path.home() / "Library" / "Application Support"
         except Exception:
             return Path(tempfile.gettempdir())
     return Path.home() / ".config"

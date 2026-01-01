@@ -16,7 +16,7 @@ def test_type_text_accepts_empty() -> None:
 
 
 def test_type_text_prefers_xdotool_on_x11(monkeypatch) -> None:
-    if sys.platform == "win32":
+    if sys.platform in ("win32", "darwin"):
         pytest.skip("Linux-only typing backend")
     monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
     monkeypatch.setenv("DISPLAY", ":0")
@@ -46,7 +46,7 @@ def test_type_text_prefers_xdotool_on_x11(monkeypatch) -> None:
 
 
 def test_get_active_window_id_uses_xdotool(monkeypatch) -> None:
-    if sys.platform == "win32":
+    if sys.platform in ("win32", "darwin"):
         pytest.skip("Linux-only typing backend")
     def fake_which(name: str):
         return "/bin/xdotool" if name == "xdotool" else None
@@ -60,7 +60,7 @@ def test_get_active_window_id_uses_xdotool(monkeypatch) -> None:
 
 
 def test_type_text_uses_wtype_on_wayland(monkeypatch) -> None:
-    if sys.platform == "win32":
+    if sys.platform in ("win32", "darwin"):
         pytest.skip("Linux-only typing backend")
     monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
@@ -94,7 +94,7 @@ def test_type_text_uses_wtype_on_wayland(monkeypatch) -> None:
 
 
 def test_resolve_typing_backend_prefers_wtype_when_both_display_and_wayland(monkeypatch) -> None:
-    if sys.platform == "win32":
+    if sys.platform in ("win32", "darwin"):
         pytest.skip("Linux-only typing backend")
     monkeypatch.setenv("XDG_SESSION_TYPE", "wayland")
     monkeypatch.setenv("DISPLAY", ":0")
@@ -123,7 +123,7 @@ def test_resolve_typing_backend_override_none(monkeypatch) -> None:
 
 
 def test_resolve_typing_backend_override_wtype(monkeypatch) -> None:
-    if sys.platform == "win32":
+    if sys.platform in ("win32", "darwin"):
         pytest.skip("Linux-only typing backend")
     monkeypatch.setenv("VOICEPIPE_TYPE_BACKEND", "wtype")
 
@@ -137,7 +137,7 @@ def test_resolve_typing_backend_override_wtype(monkeypatch) -> None:
 
 
 def test_resolve_typing_backend_override_xdotool(monkeypatch) -> None:
-    if sys.platform == "win32":
+    if sys.platform in ("win32", "darwin"):
         pytest.skip("Linux-only typing backend")
     monkeypatch.setenv("VOICEPIPE_TYPE_BACKEND", "xdotool")
 
@@ -152,7 +152,7 @@ def test_resolve_typing_backend_override_xdotool(monkeypatch) -> None:
 
 
 def test_resolve_typing_backend_alias_wayland(monkeypatch) -> None:
-    if sys.platform == "win32":
+    if sys.platform in ("win32", "darwin"):
         pytest.skip("Linux-only typing backend")
     monkeypatch.setenv("VOICEPIPE_TYPE_BACKEND", "wayland")
 
@@ -166,7 +166,7 @@ def test_resolve_typing_backend_alias_wayland(monkeypatch) -> None:
 
 
 def test_resolve_typing_backend_alias_x11(monkeypatch) -> None:
-    if sys.platform == "win32":
+    if sys.platform in ("win32", "darwin"):
         pytest.skip("Linux-only typing backend")
     monkeypatch.setenv("VOICEPIPE_TYPE_BACKEND", "x11")
 
@@ -181,8 +181,8 @@ def test_resolve_typing_backend_alias_x11(monkeypatch) -> None:
 
 
 def test_type_text_returns_helpful_error_when_no_backend(monkeypatch) -> None:
-    if sys.platform == "win32":
-        pytest.skip("Windows uses sendinput by default")
+    if sys.platform in ("win32", "darwin"):
+        pytest.skip("Linux-only typing backend")
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     monkeypatch.delenv("XDG_SESSION_TYPE", raising=False)
@@ -209,6 +209,50 @@ def test_resolve_typing_backend_override_sendinput_on_windows(monkeypatch) -> No
     monkeypatch.setenv("VOICEPIPE_TYPE_BACKEND", "sendinput")
     backend = resolve_typing_backend()
     assert backend.name == "sendinput"
+
+
+def test_resolve_typing_backend_auto_is_osascript_on_macos(monkeypatch) -> None:
+    import voicepipe.platform as platform_mod
+
+    monkeypatch.setattr(platform_mod.sys, "platform", "darwin")
+    monkeypatch.delenv("VOICEPIPE_TYPE_BACKEND", raising=False)
+
+    def fake_which(name: str):
+        return "/usr/bin/osascript" if name == "osascript" else None
+
+    monkeypatch.setattr("voicepipe.typing.shutil.which", fake_which)
+    backend = resolve_typing_backend()
+    assert backend.name == "osascript"
+    assert backend.session_type == "macos"
+
+
+def test_type_text_uses_osascript_backend(monkeypatch) -> None:
+    import voicepipe.platform as platform_mod
+
+    monkeypatch.setattr(platform_mod.sys, "platform", "darwin")
+
+    def fake_which(name: str):
+        return "/usr/bin/osascript" if name == "osascript" else None
+
+    calls: list[list[str]] = []
+    argv: list[str] = []
+
+    def fake_run(cmd, **kwargs):
+        nonlocal argv
+        calls.append(list(cmd))
+        argv = list(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("voicepipe.typing.shutil.which", fake_which)
+    monkeypatch.setattr("voicepipe.typing.subprocess.run", fake_run)
+
+    backend = resolve_typing_backend()
+    ok, err = type_text("hello\nworld", backend=backend)
+    assert ok is True
+    assert err is None
+    assert calls
+    assert argv[:2] == ["/usr/bin/osascript", "-"]
+    assert argv[2] == "hello\rworld"
 
 
 @pytest.mark.desktop

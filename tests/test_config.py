@@ -21,6 +21,8 @@ def test_config_home_ignores_xdg_config_home(tmp_path: Path, monkeypatch) -> Non
         monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
         assert config.config_home() == tmp_path / "appdata"
+    elif sys.platform == "darwin":
+        assert config.config_home() == tmp_path / "Library" / "Application Support"
     else:
         assert config.config_home() == tmp_path / ".config"
 
@@ -32,6 +34,11 @@ def test_env_file_path_uses_dot_config_home(tmp_path: Path, monkeypatch) -> None
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
     if sys.platform == "win32":
         assert config.env_file_path() == tmp_path / "appdata" / "voicepipe" / "voicepipe.env"
+    elif sys.platform == "darwin":
+        assert (
+            config.env_file_path()
+            == tmp_path / "Library" / "Application Support" / "voicepipe" / "voicepipe.env"
+        )
     else:
         assert config.env_file_path() == tmp_path / ".config" / "voicepipe" / "voicepipe.env"
 

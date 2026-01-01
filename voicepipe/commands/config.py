@@ -170,6 +170,7 @@ def config_edit() -> None:
         if is_windows():
             try:
                 os.startfile(env_path)  # type: ignore[attr-defined]
+                print_restart_hint()
                 return
             except Exception as e:
                 raise click.ClickException(f"Failed to open env file: {e}") from e

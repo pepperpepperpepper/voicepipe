@@ -229,11 +229,26 @@ def test_auto_backend_stop_prefers_daemon_when_recording(monkeypatch) -> None:
         "stop",
         lambda: rb.StopResult(mode="daemon", audio_file="/tmp/d.wav", session=None),
     )
-    monkeypatch.setattr(backend._subprocess, "stop", lambda: (_ for _ in ()).throw(AssertionError()))
+    if rb.is_windows():
+        monkeypatch.setattr(
+            backend._subprocess,
+            "stop",
+            lambda: rb.StopResult(mode="subprocess", audio_file="/tmp/s.wav", session=None),
+        )
+    else:
+        monkeypatch.setattr(
+            backend._subprocess,
+            "stop",
+            lambda: (_ for _ in ()).throw(AssertionError()),
+        )
 
     out = backend.stop()
-    assert out.mode == "daemon"
-    assert out.audio_file == "/tmp/d.wav"
+    if rb.is_windows():
+        assert out.mode == "subprocess"
+        assert out.audio_file == "/tmp/s.wav"
+    else:
+        assert out.mode == "daemon"
+        assert out.audio_file == "/tmp/d.wav"
 
 
 def test_auto_backend_cancel_prefers_subprocess_when_daemon_idle(monkeypatch) -> None:

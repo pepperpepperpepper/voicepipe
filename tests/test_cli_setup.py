@@ -18,6 +18,15 @@ def _read_calls(log_path: Path) -> list[list[str]]:
     return [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines() if line]
 
 
+def _combined_cli_output(result) -> str:
+    out = getattr(result, "output", "") or ""
+    try:
+        err = getattr(result, "stderr", "") or ""
+    except ValueError:
+        err = ""
+    return out + err
+
+
 def test_setup_writes_env_file_installs_units_and_enables_target(
     isolated_home: Path, fake_systemd: Path
 ) -> None:
@@ -66,7 +75,7 @@ def test_setup_skips_systemd_on_windows(isolated_home: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(main, ["setup", "--api-key", "sk-test"])
     assert result.exit_code == 0, result.output
-    assert "skipping systemd setup" in (result.output + (result.stderr or ""))
+    assert "skipping systemd setup" in _combined_cli_output(result)
     assert env_file_path().exists()
 
 
@@ -76,5 +85,5 @@ def test_setup_skips_systemd_on_macos(isolated_home: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(main, ["setup", "--api-key", "sk-test"])
     assert result.exit_code == 0, result.output
-    assert "skipping systemd setup" in (result.output + (result.stderr or ""))
+    assert "skipping systemd setup" in _combined_cli_output(result)
     assert env_file_path().exists()

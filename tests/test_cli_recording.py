@@ -19,6 +19,15 @@ class _StopResult:
     recording_id: str | None = None
 
 
+def _combined_cli_output(result) -> str:
+    out = getattr(result, "output", "") or ""
+    try:
+        err = getattr(result, "stderr", "") or ""
+    except ValueError:
+        err = ""
+    return out + err
+
+
 def test_stop_deletes_audio_file_on_success(tmp_path: Path, monkeypatch, isolated_home: Path) -> None:
     import voicepipe.commands.recording as recording_cmd
 
@@ -81,8 +90,9 @@ def test_stop_preserves_audio_file_on_transcription_error(
     runner = CliRunner()
     result = runner.invoke(main, ["stop"])
     assert result.exit_code == 1
-    assert "Error: boom" in result.stderr
-    assert "Preserved audio file:" in result.stderr
+    combined = _combined_cli_output(result)
+    assert "Error: boom" in combined
+    assert "Preserved audio file:" in combined
 
     preserved_dir = preserved_audio_dir()
     preserved = preserved_dir / audio.name

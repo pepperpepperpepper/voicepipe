@@ -22,6 +22,15 @@ def _read_json_lines(path: Path) -> list[list[str]]:
     return out
 
 
+def _combined_cli_output(result) -> str:
+    out = getattr(result, "output", "") or ""
+    try:
+        err = getattr(result, "stderr", "") or ""
+    except ValueError:
+        err = ""
+    return out + err
+
+
 def test_service_install_writes_units_and_calls_daemon_reload(
     isolated_home: Path, fake_systemd: Path
 ) -> None:
@@ -91,7 +100,7 @@ def test_service_commands_fail_on_windows(isolated_home: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(main, ["service", "install"])
     assert result.exit_code != 0
-    assert "systemd is not available" in (result.output + (result.stderr or "")).lower()
+    assert "systemd is not available" in _combined_cli_output(result).lower()
 
 
 def test_service_commands_fail_on_macos(isolated_home: Path) -> None:
@@ -100,4 +109,4 @@ def test_service_commands_fail_on_macos(isolated_home: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(main, ["service", "install"])
     assert result.exit_code != 0
-    assert "systemd is not available" in (result.output + (result.stderr or "")).lower()
+    assert "systemd is not available" in _combined_cli_output(result).lower()

@@ -34,7 +34,8 @@ def service_group() -> None:
     if is_macos():
         raise click.ClickException(
             "systemd is not available on macOS.\n\n"
-            "Use launchd LaunchAgents (or a Shortcuts/Automator workflow) to run Voicepipe at login."
+            "Use launchd LaunchAgents (or a Shortcuts/Automator workflow) to run Voicepipe at login.\n"
+            "Tip: `voicepipe launchd install` can generate a LaunchAgent plist (opt-in)."
         )
 
 

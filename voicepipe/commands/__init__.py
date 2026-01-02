@@ -10,11 +10,13 @@ from .recording import cancel, daemon, dictate, start, status, stop, transcribe_
 from . import smoke as smoke_module
 from .service import service_group
 from .setup import setup
+from .launchd import launchd_group
 
 
 def register(main: click.Group) -> None:
     main.add_command(config_group)
     main.add_command(service_group)
+    main.add_command(launchd_group)
     main.add_command(setup)
     main.add_command(doctor_group)
     main.add_command(doctor_legacy)

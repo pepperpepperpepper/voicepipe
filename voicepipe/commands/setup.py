@@ -191,7 +191,8 @@ def setup(
         if is_macos():
             click.echo(
                 "systemd is not available on macOS; skipping systemd setup.\n"
-                "Use launchd LaunchAgents (or a Shortcuts/Automator workflow) to run Voicepipe at login.",
+                "Use launchd LaunchAgents (or a Shortcuts/Automator workflow) to run Voicepipe at login.\n"
+                "Tip: `voicepipe launchd install` can generate a LaunchAgent plist (opt-in).",
                 err=True,
             )
             return

@@ -11,6 +11,14 @@ Goal: run `voicepipe-fast toggle` from a global keyboard shortcut without third-
 
 ## Option A — Automator “Quick Action” (recommended)
 
+If you already have Voicepipe installed, the fastest path is:
+
+```sh
+voicepipe hotkey install
+```
+
+Then assign a keyboard shortcut in System Settings (steps below).
+
 1. Open **Automator** → **New Document** → **Quick Action**.
 2. Set:
    - “Workflow receives” → **no input**

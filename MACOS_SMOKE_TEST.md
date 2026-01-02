@@ -26,6 +26,7 @@ Grant **Accessibility** permission to the launching app (Terminal / Shortcuts / 
 ## 4) Hotkey binding (Quick Action / Shortcuts)
 
 - Follow `hotkey-examples/macos-quick-action.md`
+- Or install the Quick Action bundle automatically:
+  - `voicepipe hotkey install`
 - Trigger the shortcut and confirm log output:
   - `~/Library/Logs/voicepipe/voicepipe-fast.log`
-

@@ -18,6 +18,7 @@ from .audio_device import (
     resolve_device_index,
     apply_pulse_source_preference,
 )
+from .commands.config import config_group
 from .recorder import AudioRecorder, RecordingSession
 from .transcriber import WhisperTranscriber
 from .daemon import RecordingDaemon
@@ -197,6 +198,9 @@ def run_recording_subprocess():
 def main():
     """Voicepipe - Voice recording and transcription CLI tool."""
     pass
+
+
+main.add_command(config_group)
 
 
 @main.command()

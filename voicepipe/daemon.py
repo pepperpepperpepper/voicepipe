@@ -13,6 +13,11 @@ from pathlib import Path
 import sounddevice as sd
 
 from .audio import select_audio_input
+from .audio_device import (
+    read_device_preference,
+    resolve_device_index,
+    apply_pulse_source_preference,
+)
 from .recorder import FastAudioRecorder
 from .systray import get_systray
 
@@ -74,24 +79,24 @@ class RecordingDaemon:
         if device_index is None or device_index == "":
             return None, None
         if isinstance(device_index, bool):
-            return None, "device must be an integer"
-        if isinstance(device_index, int):
-            return device_index, None
-        if isinstance(device_index, str):
-            raw = device_index.strip()
-            if not raw:
-                return None, None
-            if raw.isdigit():
-                return int(raw), None
-            return None, "device must be an integer"
-        return None, "device must be an integer"
+            return None, "device must be a device index or name"
+        index, err = resolve_device_index(device_index)
+        if err:
+            return None, err
+        return index, None
 
     def _find_working_audio_device(self):
         """Find a working audio input configuration (device + samplerate + channels)."""
         print("Selecting audio input device...", file=sys.stderr)
 
-        env_device = os.environ.get("VOICEPIPE_DEVICE")
-        preferred_device = int(env_device) if (env_device or "").isdigit() else None
+        pulse_source = apply_pulse_source_preference()
+        device_pref = read_device_preference()
+        preferred_device, pref_err = resolve_device_index(device_pref)
+        if pref_err:
+            print(f"Warning: {pref_err}", file=sys.stderr)
+            preferred_device = None
+        if preferred_device is None and pulse_source:
+            preferred_device, _ = resolve_device_index("pulse")
 
         selection = select_audio_input(
             preferred_device_index=preferred_device,
@@ -224,6 +229,7 @@ class RecordingDaemon:
             return {'error': 'Recording already in progress'}
             
         try:
+            apply_pulse_source_preference()
             device_index, device_err = self._parse_device_index(device_index)
             if device_err:
                 return {"error": device_err}

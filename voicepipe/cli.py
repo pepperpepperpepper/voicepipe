@@ -13,6 +13,11 @@ from pathlib import Path
 import click
 
 from .audio import select_audio_input
+from .audio_device import (
+    read_device_preference,
+    resolve_device_index,
+    apply_pulse_source_preference,
+)
 from .recorder import AudioRecorder, RecordingSession
 from .transcriber import WhisperTranscriber
 from .daemon import RecordingDaemon
@@ -156,15 +161,18 @@ def run_recording_subprocess():
         signal.signal(signal.SIGTERM, signal_handler)
         signal.signal(signal.SIGINT, signal_handler)
         
-        # Get device from environment or use default
-        device = os.environ.get('VOICEPIPE_DEVICE')
-        device_index = int(device) if device and device.isdigit() else None
-        
+        # Get device from env/config or use default
+        apply_pulse_source_preference()
+        device_pref = read_device_preference()
+        device_index, device_err = resolve_device_index(device_pref)
+        if device_err:
+            raise RuntimeError(device_err)
+
         selection = select_audio_input(
             preferred_device_index=device_index,
             preferred_samplerate=_get_preferred_sample_rate(),
             preferred_channels=_get_preferred_channels(),
-            strict_device_index=bool(device_index is not None),
+            strict_device_index=bool(device_pref is not None),
         )
         recorder = AudioRecorder(
             device_index=selection.device_index,
@@ -192,7 +200,7 @@ def main():
 
 
 @main.command()
-@click.option('--device', envvar='VOICEPIPE_DEVICE', help='Audio device index to use')
+@click.option('--device', envvar='VOICEPIPE_DEVICE', help='Audio device index or name to use (or pulse:<source>)')
 def start(device):
     """Start recording audio from microphone."""
     try:
@@ -445,6 +453,30 @@ def doctor(audio_test, record_test, transcribe_test, record_seconds, play):
     print(f"~/.config/voicepipe/api_key exists: {key_file.exists()}")
     print(f"~/.voicepipe_api_key exists: {key_alt.exists()}")
 
+    device_env = os.environ.get("VOICEPIPE_DEVICE")
+    device_file = Path.home() / ".config" / "voicepipe" / "device"
+    device_alt = Path.home() / ".voicepipe_device"
+    print(f"VOICEPIPE_DEVICE env set: {bool(device_env)}")
+    print(f"~/.config/voicepipe/device exists: {device_file.exists()}")
+    print(f"~/.voicepipe_device exists: {device_alt.exists()}")
+
+    pulse_env = os.environ.get("VOICEPIPE_PULSE_SOURCE")
+    pulse_file = Path.home() / ".config" / "voicepipe" / "pulse_source"
+    pulse_alt = Path.home() / ".voicepipe_pulse_source"
+    print(f"VOICEPIPE_PULSE_SOURCE env set: {bool(pulse_env)}")
+    print(f"~/.config/voicepipe/pulse_source exists: {pulse_file.exists()}")
+    print(f"~/.voicepipe_pulse_source exists: {pulse_alt.exists()}")
+    print(f"PULSE_SOURCE env set: {bool(os.environ.get('PULSE_SOURCE'))}")
+
+    device_pref = read_device_preference()
+    if device_pref:
+        print(f"device preference: {device_pref}")
+        resolved, resolve_err = resolve_device_index(device_pref)
+        if resolve_err:
+            print(f"device resolve error: {resolve_err}")
+        else:
+            print(f"device resolved: {resolved}")
+
     ffmpeg_path = shutil.which("ffmpeg")
     xdotool_path = shutil.which("xdotool")
     print(f"ffmpeg found: {bool(ffmpeg_path)}")
@@ -557,13 +589,16 @@ def doctor(audio_test, record_test, transcribe_test, record_seconds, play):
             import numpy as np
             import sounddevice as sd
 
-            env_device = os.environ.get("VOICEPIPE_DEVICE")
-            preferred_device = int(env_device) if (env_device or "").isdigit() else None
+            apply_pulse_source_preference()
+            device_pref = read_device_preference()
+            preferred_device, device_err = resolve_device_index(device_pref)
+            if device_err:
+                raise RuntimeError(device_err)
             selection = select_audio_input(
                 preferred_device_index=preferred_device,
                 preferred_samplerate=_get_preferred_sample_rate(),
                 preferred_channels=_get_preferred_channels(),
-                strict_device_index=bool(preferred_device is not None),
+                strict_device_index=bool(device_pref is not None),
             )
 
             fs = int(selection.samplerate)

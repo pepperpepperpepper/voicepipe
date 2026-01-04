@@ -5,42 +5,40 @@ import sys
 import signal
 import socket
 import json
+import logging
 import threading
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
-import sounddevice as sd
+try:
+    import sounddevice as sd
+except Exception:  # pragma: no cover
+    sd = None  # type: ignore[assignment]
 
-from .audio import select_audio_input
-from .audio_device import (
-    read_device_preference,
-    resolve_device_index,
-    apply_pulse_source_preference,
-)
+from .audio import resolve_audio_input, select_audio_input
+from .audio_device import apply_pulse_source_preference
+from .config import get_audio_channels, get_audio_sample_rate
+from .device import parse_device_index
+from .logging_utils import configure_logging
+from .paths import audio_tmp_dir, daemon_socket_path
 from .recorder import FastAudioRecorder
 from .systray import get_systray
 
-
-def _runtime_dir() -> Path:
-    xdg_runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
-    if xdg_runtime_dir:
-        return Path(xdg_runtime_dir)
-    run_user_dir = Path("/run/user") / str(os.getuid())
-    if run_user_dir.exists():
-        return run_user_dir
-    return Path("/tmp")
-
+logger = logging.getLogger(__name__)
 
 class RecordingDaemon:
     """Background daemon that handles recording requests."""
-    
-    SOCKET_PATH = _runtime_dir() / "voicepipe.sock"
-    
+
     def __init__(self):
+        self._state_lock = threading.Lock()
+        self.socket_path = daemon_socket_path()
+        self.socket = None
         self.recorder = None
         self.recording = False
         self.audio_file = None
+        self.recording_id = None
         self.running = True
         self.timeout_timer = None
         self.default_device = None
@@ -49,83 +47,43 @@ class RecordingDaemon:
         self._timeout_triggered = False
         self._initialize_audio()
     
-    def _get_preferred_sample_rate(self) -> int:
-        for name in ("VOICEPIPE_AUDIO_SAMPLE_RATE", "VOICEPIPE_SAMPLE_RATE"):
-            raw = os.environ.get(name)
-            if not raw:
-                continue
-            try:
-                value = int(str(raw).strip())
-            except Exception:
-                continue
-            if value > 0:
-                return value
-        return 16000
-
-    def _get_preferred_channels(self) -> int:
-        for name in ("VOICEPIPE_AUDIO_CHANNELS", "VOICEPIPE_CHANNELS"):
-            raw = os.environ.get(name)
-            if not raw:
-                continue
-            try:
-                value = int(str(raw).strip())
-            except Exception:
-                continue
-            if value > 0:
-                return value
-        return 1
-
-    def _parse_device_index(self, device_index):
-        if device_index is None or device_index == "":
-            return None, None
-        if isinstance(device_index, bool):
-            return None, "device must be a device index or name"
-        index, err = resolve_device_index(device_index)
-        if err:
-            return None, err
-        return index, None
-
     def _find_working_audio_device(self):
         """Find a working audio input configuration (device + samplerate + channels)."""
-        print("Selecting audio input device...", file=sys.stderr)
+        if sd is None:
+            raise RuntimeError(
+                "sounddevice is not installed; install it to use the recording daemon"
+            )
+        logger.info("Selecting audio input device...")
+        preferred_samplerate = get_audio_sample_rate()
+        preferred_channels = get_audio_channels()
 
-        pulse_source = apply_pulse_source_preference()
-        device_pref = read_device_preference()
-        preferred_device, pref_err = resolve_device_index(device_pref)
-        if pref_err:
-            print(f"Warning: {pref_err}", file=sys.stderr)
-            preferred_device = None
-        if preferred_device is None and pulse_source:
-            preferred_device, _ = resolve_device_index("pulse")
-
-        selection = select_audio_input(
-            preferred_device_index=preferred_device,
-            preferred_samplerate=self._get_preferred_sample_rate(),
-            preferred_channels=self._get_preferred_channels(),
+        return resolve_audio_input(
+            preferred_samplerate=preferred_samplerate,
+            preferred_channels=preferred_channels,
         )
-        try:
-            name = sd.query_devices(selection.device_index, "input")["name"]
-        except Exception:
-            name = str(selection.device_index)
-        print(
-            f"✓ Using device {selection.device_index}: {name} "
-            f"(samplerate={selection.samplerate}, channels={selection.channels})",
-            file=sys.stderr,
-        )
-        return selection
 
     def _initialize_audio(self):
         """Pre-initialize audio and recorder to reduce startup delay."""
         try:
-            selection = self._find_working_audio_device()
+            if sd is None:
+                raise RuntimeError(
+                    "sounddevice is not installed; install it to use the recording daemon"
+                )
+            # Find a working audio device automatically (best-effort).
+            resolution = self._find_working_audio_device()
+            selection = resolution.selection
             self.default_device = selection.device_index
             self.default_samplerate = selection.samplerate
             self.default_channels = selection.channels
             device_info = sd.query_devices(self.default_device, "input")
-            print(
-                f"Audio initialized. Selected device {self.default_device}: {device_info['name']} "
-                f"(samplerate={self.default_samplerate}, channels={self.default_channels})",
-                file=sys.stderr,
+            logger.info(
+                "Audio initialized (%s). Selected device %s: %s (samplerate=%s channels=%s max_amp=%s)",
+                getattr(resolution, "source", "unknown"),
+                self.default_device,
+                getattr(resolution, "device_name", None) or device_info.get("name", ""),
+                self.default_samplerate,
+                self.default_channels,
+                getattr(resolution, "max_amp", None),
             )
             
             # Pre-create recorder instance to avoid initialization delay
@@ -133,27 +91,39 @@ class RecordingDaemon:
                 device_index=self.default_device,
                 sample_rate=int(self.default_samplerate or 16000),
                 channels=int(self.default_channels or 1),
+                use_mp3=False,
+                max_duration=None,
             )
-            print("Recorder pre-initialized for fast startup", file=sys.stderr)
+            logger.info("Recorder pre-initialized for fast startup")
         except Exception as e:
-            print(f"Warning: Could not pre-initialize audio: {e}", file=sys.stderr)
+            logger.warning("Could not pre-initialize audio: %s", e)
         
     def start(self):
         """Start the daemon service."""
+        # Ensure parent dir exists for the socket path.
+        try:
+            self.socket_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+
         # Clean up any existing socket
-        if self.SOCKET_PATH.exists():
-            self.SOCKET_PATH.unlink()
+        if self.socket_path.exists():
+            self.socket_path.unlink()
             
         # Create Unix domain socket
         self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.socket.bind(str(self.SOCKET_PATH))
+        self.socket.bind(str(self.socket_path))
+        try:
+            os.chmod(self.socket_path, 0o600)
+        except Exception:
+            pass
         self.socket.listen(1)
         
         # Set up signal handlers
         signal.signal(signal.SIGTERM, self._signal_handler)
         signal.signal(signal.SIGINT, self._signal_handler)
         
-        print(f"Voicepipe daemon started. Socket: {self.SOCKET_PATH}", file=sys.stderr)
+        logger.info("Voicepipe daemon started. Socket: %s", self.socket_path)
         
         # Main loop
         while self.running:
@@ -162,62 +132,79 @@ class RecordingDaemon:
                 threading.Thread(target=self._handle_client, args=(conn,)).start()
             except Exception as e:
                 if self.running:
-                    print(f"Error accepting connection: {e}", file=sys.stderr)
+                    logger.exception("Error accepting connection: %s", e)
                     
     def _signal_handler(self, signum, frame):
         """Handle shutdown signals."""
-        print(f"Received signal {signum}, shutting down gracefully...", file=sys.stderr)
-        self.running = False
-        
-        # Stop any active recording first
-        if self.recording:
-            print("Stopping active recording...", file=sys.stderr)
-            try:
-                self._stop_recording()
-            except Exception as e:
-                print(f"Error stopping recording: {e}", file=sys.stderr)
-        
-        # Clean up recorder
-        if self.recorder:
-            self.recorder.cleanup()
+        logger.info("Received signal %s, shutting down gracefully...", signum)
+        with self._state_lock:
+            self.running = False
+
+            # Stop any active recording first
+            if self.recording:
+                logger.info("Stopping active recording...")
+                try:
+                    self._stop_recording()
+                except Exception as e:
+                    logger.exception("Error stopping recording: %s", e)
+
+            # Clean up recorder
+            if self.recorder:
+                self.recorder.cleanup()
+                self.recorder = None
         if self.socket:
             self.socket.close()
-        if self.SOCKET_PATH.exists():
-            self.SOCKET_PATH.unlink()
+        if self.socket_path.exists():
+            self.socket_path.unlink()
         
-        print("Daemon shutdown complete.", file=sys.stderr)
+        logger.info("Daemon shutdown complete.")
         sys.exit(0)
         
     def _handle_client(self, conn):
         """Handle client requests."""
         try:
-            data = conn.recv(1024).decode()
-            if not data:
+            conn.settimeout(2.0)
+            data = b""
+            request = None
+            while True:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+                if len(data) > 65536:
+                    raise ValueError("Request too large")
+                try:
+                    request = json.loads(data.decode())
+                    break
+                except json.JSONDecodeError:
+                    continue
+
+            if not request:
                 return
-                
-            request = json.loads(data)
+
             command = request.get('command')
             
-            if command == 'start':
-                response = self._start_recording(request.get('device'))
-            elif command == 'stop':
-                response = self._stop_recording()
-            elif command == 'cancel':
-                response = self._cancel_recording()
-            elif command == 'status':
-                response = self._get_status()
-            else:
-                response = {'error': f'Unknown command: {command}'}
+            with self._state_lock:
+                if command == 'start':
+                    response = self._start_recording(request.get('device'))
+                elif command == 'stop':
+                    response = self._stop_recording()
+                elif command == 'cancel':
+                    response = self._cancel_recording()
+                elif command == 'status':
+                    response = self._get_status()
+                else:
+                    response = {'error': f'Unknown command: {command}'}
                 
             try:
-                conn.send(json.dumps(response).encode())
+                conn.sendall(json.dumps(response).encode())
             except (BrokenPipeError, ConnectionResetError):
                 pass
             
         except Exception as e:
             response = {'error': str(e)}
             try:
-                conn.send(json.dumps(response).encode())
+                conn.sendall(json.dumps(response).encode())
             except (BrokenPipeError, ConnectionResetError):
                 pass
         finally:
@@ -227,18 +214,29 @@ class RecordingDaemon:
         """Start a new recording."""
         if self.recording:
             return {'error': 'Recording already in progress'}
-            
-        try:
-            apply_pulse_source_preference()
-            device_index, device_err = self._parse_device_index(device_index)
-            if device_err:
-                return {"error": device_err}
 
-            # Ensure temp directory exists
-            Path('/tmp/voicepipe').mkdir(parents=True, exist_ok=True)
+        recorder_started = False
+        try:
+            if sd is None:
+                return {
+                    "error": (
+                        "sounddevice is not installed; install it to record audio "
+                        "(e.g. `pip install sounddevice`)"
+                    )
+                }
+            apply_pulse_source_preference()
+            device_index, device_error = parse_device_index(device_index)
+            if device_error:
+                return {"error": device_error}
+
+            tmp_dir = audio_tmp_dir(create=True)
 
             # Create temp file
-            fd, self.audio_file = tempfile.mkstemp(suffix='.mp3', prefix='voicepipe_', dir='/tmp/voicepipe')
+            fd, self.audio_file = tempfile.mkstemp(
+                suffix=".wav",
+                prefix="voicepipe_",
+                dir=str(tmp_dir),
+            )
             os.close(fd)
             
             # Use pre-initialized recorder if device matches, otherwise create new one
@@ -246,36 +244,44 @@ class RecordingDaemon:
                 # Different device requested, create new recorder
                 if self.recorder:
                     self.recorder.cleanup()
+                pref_sr = get_audio_sample_rate()
+                pref_ch = get_audio_channels()
                 selection = select_audio_input(
                     preferred_device_index=device_index,
-                    preferred_samplerate=self._get_preferred_sample_rate(),
-                    preferred_channels=self._get_preferred_channels(),
+                    preferred_samplerate=pref_sr,
+                    preferred_channels=pref_ch,
                     strict_device_index=True,
                 )
                 self.recorder = FastAudioRecorder(
                     device_index=selection.device_index,
                     sample_rate=selection.samplerate,
                     channels=selection.channels,
+                    use_mp3=False,
+                    max_duration=None,
                 )
             elif not self.recorder:
-                # No pre-initialized recorder, create one
+                # No pre-initialized recorder, create one (best-effort selection).
                 if self.default_device is None or self.default_samplerate is None or self.default_channels is None:
-                    selection = select_audio_input(
-                        preferred_device_index=device_index,
-                        preferred_samplerate=self._get_preferred_sample_rate(),
-                        preferred_channels=self._get_preferred_channels(),
+                    resolution = resolve_audio_input(
+                        preferred_samplerate=get_audio_sample_rate(),
+                        preferred_channels=get_audio_channels(),
                     )
+                    selection = resolution.selection
                     self.default_device = selection.device_index
                     self.default_samplerate = selection.samplerate
                     self.default_channels = selection.channels
                 self.recorder = FastAudioRecorder(
                     device_index=device_index if device_index is not None else self.default_device,
-                    sample_rate=int(self.default_samplerate or 16000),
-                    channels=int(self.default_channels or 1),
+                    sample_rate=int(self.default_samplerate),
+                    channels=int(self.default_channels),
+                    use_mp3=False,
+                    max_duration=None,
                 )
             
             # Start recording with existing recorder
             self.recorder.start_recording(output_file=self.audio_file)
+            recorder_started = True
+            self.recording_id = uuid.uuid4().hex
             self.recording = True
             
             # Set up timeout (5 minutes)
@@ -283,36 +289,74 @@ class RecordingDaemon:
             self.timeout_timer.start()
             
             # Show systray icon if available
-            systray = get_systray()
-            # Use icon from project assets
-            icon_path = Path(__file__).parent / "assets" / "recording_icon.tiff"
-            if icon_path.exists():
-                systray.show(str(icon_path))
-            else:
-                systray.show()  # Use default red recording icon
+            try:
+                systray = get_systray()
+                # Use icon from project assets
+                icon_path = Path(__file__).parent / "assets" / "recording_icon.tiff"
+                if icon_path.exists():
+                    systray.show(str(icon_path))
+                else:
+                    systray.show()  # Use default red recording icon
+            except Exception as e:
+                logger.debug("Systray init failed: %s", e)
             
             return {
                 'status': 'recording',
                 'audio_file': self.audio_file,
-                'pid': os.getpid()
+                'pid': os.getpid(),
+                'recording_id': self.recording_id,
             }
             
         except Exception as e:
+            try:
+                if self.timeout_timer:
+                    self.timeout_timer.cancel()
+                    self.timeout_timer = None
+            except Exception:
+                pass
+
+            if recorder_started and self.recorder:
+                try:
+                    self.recorder.stop_recording()
+                except Exception:
+                    pass
+                try:
+                    self.recorder.cleanup()
+                except Exception:
+                    pass
+            elif self.recorder:
+                try:
+                    self.recorder.cleanup()
+                except Exception:
+                    pass
+
+            self.recording = False
+            self.recorder = None
+            self.recording_id = None
+            self._timeout_triggered = False
+
+            try:
+                get_systray().hide()
+            except Exception:
+                pass
+
             if self.audio_file and os.path.exists(self.audio_file):
                 os.unlink(self.audio_file)
+            self.audio_file = None
             return {'error': str(e)}
     
     def _timeout_callback(self):
         """Called when recording timeout is reached."""
-        if self.recording:
-            print("Recording timeout reached (5 minutes), stopping...", file=sys.stderr)
-            self._timeout_triggered = True
-            try:
-                self._stop_recording()
-            except Exception as e:
-                print(f"Error during timeout handling: {e}", file=sys.stderr)
-                # Ensure we clean up gracefully even if stop fails
-                self._cleanup_timeout_state()
+        with self._state_lock:
+            if self.recording:
+                logger.info("Recording timeout reached (5 minutes), stopping...")
+                self._timeout_triggered = True
+                try:
+                    self._stop_recording()
+                except Exception as e:
+                    logger.exception("Error during timeout handling: %s", e)
+                    # Ensure we clean up gracefully even if stop fails
+                    self._cleanup_timeout_state()
             
     def _stop_recording(self):
         """Stop recording and save audio."""
@@ -320,6 +364,8 @@ class RecordingDaemon:
             return {'error': 'No recording in progress'}
             
         try:
+            recording_id = self.recording_id
+
             # Cancel timeout timer
             if self.timeout_timer:
                 self.timeout_timer.cancel()
@@ -333,11 +379,15 @@ class RecordingDaemon:
             self.recorder.cleanup()
             
             # Hide systray icon
-            get_systray().hide()
+            try:
+                get_systray().hide()
+            except Exception:
+                pass
             
             response = {
                 'status': 'stopped',
-                'audio_file': self.audio_file
+                'audio_file': self.audio_file,
+                'recording_id': recording_id,
             }
             
             # Handle file cleanup - only delete on timeout, preserve for transcription
@@ -351,6 +401,7 @@ class RecordingDaemon:
             self.recording = False
             self.recorder = None
             self.audio_file = None
+            self.recording_id = None
             self._timeout_triggered = False
             
             return response
@@ -364,6 +415,8 @@ class RecordingDaemon:
             return {'error': 'No recording in progress'}
             
         try:
+            recording_id = self.recording_id
+
             # Cancel timeout timer
             if self.timeout_timer:
                 self.timeout_timer.cancel()
@@ -382,12 +435,16 @@ class RecordingDaemon:
             self.recording = False
             self.recorder = None
             self.audio_file = None
+            self.recording_id = None
             self._timeout_triggered = False
             
             # Hide systray icon
-            get_systray().hide()
+            try:
+                get_systray().hide()
+            except Exception:
+                pass
             
-            return {'status': 'cancelled'}
+            return {'status': 'cancelled', 'recording_id': recording_id}
             
         except Exception as e:
             return {'error': str(e)}
@@ -397,7 +454,8 @@ class RecordingDaemon:
         return {
             'status': 'recording' if self.recording else 'idle',
             'pid': os.getpid(),
-            'audio_file': self.audio_file
+            'audio_file': self.audio_file,
+            'recording_id': self.recording_id,
         }
 
     def _cleanup_timeout_state(self):
@@ -412,10 +470,13 @@ class RecordingDaemon:
                     self.recorder.stop_recording()
                     self.recorder.cleanup()
                 except Exception as e:
-                    print(f"Error cleaning up recorder: {e}", file=sys.stderr)
+                    logger.exception("Error cleaning up recorder: %s", e)
             
             # Hide systray icon
-            get_systray().hide()
+            try:
+                get_systray().hide()
+            except Exception:
+                pass
             
             # Reset state but preserve audio file
             self.recording = False
@@ -423,11 +484,12 @@ class RecordingDaemon:
             # Keep audio_file reference so the file isn't deleted
             
         except Exception as e:
-            print(f"Error in cleanup_timeout_state: {e}", file=sys.stderr)
+            logger.exception("Error in cleanup_timeout_state: %s", e)
 
 
 def main():
     """Run the daemon."""
+    configure_logging(default_level=logging.INFO)
     daemon = RecordingDaemon()
     daemon.start()
 

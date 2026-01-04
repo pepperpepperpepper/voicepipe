@@ -40,25 +40,6 @@ rm -rf .venv
 poetry install --extras systray
 
 echo "✓ Installation complete!"
-
-# Install voicepipe-fast script
-    echo "Installing voicepipe-fast control script..."
-    if [ -f "voicepipe-fast" ]; then
-        cp voicepipe-fast "$HOME/.local/bin/voicepipe-fast"
-        chmod +x "$HOME/.local/bin/voicepipe-fast"
-        echo "✓ voicepipe-fast installed to ~/.local/bin/"
-    else
-        echo "Warning: voicepipe-fast script not found in current directory"
-    fi
-    
-    echo "Installing voicepipe-transcribe-file script for file transcription..."
-    if [ -f "voicepipe-transcribe-file" ]; then
-        cp voicepipe-transcribe-file "$HOME/.local/bin/voicepipe-transcribe-file"
-        chmod +x "$HOME/.local/bin/voicepipe-transcribe-file"
-        echo "✓ voicepipe-transcribe-file installed to ~/.local/bin/"
-    else
-        echo "Warning: voicepipe-transcribe-file script not found in current directory"
-    fi
 echo
 
 # Get venv path from poetry
@@ -75,76 +56,70 @@ ln -sf "$VOICEPIPE_CMD" "$HOME/.local/bin/voicepipe"
 echo "✓ voicepipe command symlinked to ~/.local/bin/voicepipe"
 echo "Found voicepipe at: $VOICEPIPE_CMD"
 
-# Setup systemd service
-if command -v systemctl &> /dev/null; then
-    echo "Setting up systemd user service..."
-    
-    # Create systemd user directory
-    mkdir -p ~/.config/systemd/user/
-    
-    # Generate service file
-    if [ -f "voicepipe-recorder.service.template" ]; then
-        sed -e "s|VOICEPIPE_COMMAND|$VOICEPIPE_CMD|g" \
-            -e "s|HOME_DIR|$HOME|g" \
-            voicepipe-recorder.service.template > ~/.config/systemd/user/voicepipe-recorder.service
+VOICEPIPE_FAST_CMD="$VENV_PATH/bin/voicepipe-fast"
+if [ -x "$VOICEPIPE_FAST_CMD" ]; then
+    ln -sf "$VOICEPIPE_FAST_CMD" "$HOME/.local/bin/voicepipe-fast"
+    echo "✓ voicepipe-fast symlinked to ~/.local/bin/voicepipe-fast"
+fi
+
+VOICEPIPE_TRANSCRIBE_FILE_CMD="$VENV_PATH/bin/voicepipe-transcribe-file"
+if [ -x "$VOICEPIPE_TRANSCRIBE_FILE_CMD" ]; then
+    ln -sf "$VOICEPIPE_TRANSCRIBE_FILE_CMD" "$HOME/.local/bin/voicepipe-transcribe-file"
+    echo "✓ voicepipe-transcribe-file symlinked to ~/.local/bin/voicepipe-transcribe-file"
+fi
+
+VOICEPIPE_TRANSCRIBER_DAEMON_CMD="$VENV_PATH/bin/voicepipe-transcriber-daemon"
+if [ -x "$VOICEPIPE_TRANSCRIBER_DAEMON_CMD" ]; then
+    ln -sf "$VOICEPIPE_TRANSCRIBER_DAEMON_CMD" "$HOME/.local/bin/voicepipe-transcriber-daemon"
+    echo "✓ voicepipe-transcriber-daemon symlinked to ~/.local/bin/voicepipe-transcriber-daemon"
+fi
+
+# Ensure a systemd-friendly env file exists for config/secrets.
+VOICEPIPE_CONFIG_DIR="$HOME/.config/voicepipe"
+VOICEPIPE_ENV_FILE="$VOICEPIPE_CONFIG_DIR/voicepipe.env"
+mkdir -p "$VOICEPIPE_CONFIG_DIR"
+chmod 700 "$VOICEPIPE_CONFIG_DIR" 2>/dev/null || true
+if [ ! -f "$VOICEPIPE_ENV_FILE" ]; then
+    if [ -n "$OPENAI_API_KEY" ]; then
+        printf 'OPENAI_API_KEY=%s\n' "$OPENAI_API_KEY" > "$VOICEPIPE_ENV_FILE"
     else
-        # Create service file directly
-        cat > ~/.config/systemd/user/voicepipe-recorder.service << EOF
-[Unit]
-Description=Voicepipe Recorder Service
-After=graphical-session.target
-
-[Service]
-Type=simple
-ExecStart=$VOICEPIPE_CMD daemon
-Restart=on-failure
-RestartSec=5
-Environment="PATH=/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin"
-
-# Security hardening
-PrivateTmp=no
-ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/tmp %t
-NoNewPrivileges=true
-
-[Install]
-WantedBy=default.target
+        cat > "$VOICEPIPE_ENV_FILE" << EOF
+# Voicepipe environment config (used by systemd services and the CLI)
+# OPENAI_API_KEY=sk-...
+# VOICEPIPE_DEVICE=12
+# VOICEPIPE_TRANSCRIBE_MODEL=gpt-4o-transcribe
 EOF
     fi
-    
-    # Reload systemd
-    systemctl --user daemon-reload
-    
-    # Install transcriber service from template
-    if [ -f "voicepipe-transcriber.service.template" ]; then
-        PYTHON_PATH="$VENV_PATH/bin/python"
-        SCRIPT_PATH="$(pwd)/transcriber_daemon.py"
-        sed -e "s|{{PYTHON_PATH}}|$PYTHON_PATH|g" \
-            -e "s|{{SCRIPT_PATH}}|$SCRIPT_PATH|g" \
-            voicepipe-transcriber.service.template > ~/.config/systemd/user/voicepipe-transcriber.service
+    chmod 600 "$VOICEPIPE_ENV_FILE" 2>/dev/null || true
+fi
+
+# Setup systemd service
+if command -v systemctl &> /dev/null; then
+    echo "Setting up systemd user services..."
+    if "$VOICEPIPE_CMD" service install; then
+        echo "✓ Systemd user units installed"
+    else
+        echo "Warning: failed to install systemd user units." >&2
+        echo "You can retry with: $HOME/.local/bin/voicepipe service install" >&2
     fi
-    
-    
-    
-    # Reload systemd
-    systemctl --user daemon-reload
-    
-    echo "✓ Systemd services configured"
     echo
     echo "Services installed:"
     echo "  • voicepipe-recorder.service - Fast recording daemon"
     echo "  • voicepipe-transcriber.service - Persistent transcription daemon"
+    echo "  • voicepipe.target - Starts/stops both"
     echo
     echo "To enable and start both services:"
-    echo "  systemctl --user enable voicepipe-recorder.service voicepipe-transcriber.service"
-    echo "  systemctl --user start voicepipe-recorder.service voicepipe-transcriber.service"
+    echo "  systemctl --user enable voicepipe.target"
+    echo "  systemctl --user start voicepipe.target"
+    echo "Or:"
+    echo "  $HOME/.local/bin/voicepipe service enable"
+    echo "  $HOME/.local/bin/voicepipe service start"
     echo
     echo "To check service status:"
-    echo "  systemctl --user status voicepipe-recorder.service voicepipe-transcriber.service"
+    echo "  systemctl --user status voicepipe.target"
     echo
     echo "To restart services after API key changes:"
-    echo "  systemctl --user restart voicepipe-transcriber.service"
+    echo "  systemctl --user restart voicepipe.target"
 fi
 
 echo
@@ -168,9 +143,17 @@ echo "• Fast recording startup (daemon mode)"
 echo "• Systray icon during recording"
 echo "• Automatic transcription with OpenAI"
 echo
-echo "Remember to set your OpenAI API key in your shell configuration:"
-echo "  Add 'export OPENAI_API_KEY=your-api-key-here' to ~/.bashrc or ~/.api-keys"
-echo "  Then restart the voicepipe service: systemctl --user restart voicepipe-transcriber.service"
+echo "Set your OpenAI API key here (works for systemd services and CLI):"
+echo "  $VOICEPIPE_ENV_FILE"
+echo "Example:"
+echo "  echo 'OPENAI_API_KEY=sk-...' >> $VOICEPIPE_ENV_FILE"
+echo "Or (recommended, avoids shell history):"
+echo "  echo 'sk-...' | $HOME/.local/bin/voicepipe config set-openai-key --from-stdin"
+echo "Or (recommended):"
+echo "  $HOME/.local/bin/voicepipe setup"
+echo
+echo "Then restart Voicepipe:"
+echo "  systemctl --user restart voicepipe.target"
 echo
 echo "Hotkey Setup:"
 echo "============="

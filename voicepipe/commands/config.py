@@ -27,6 +27,8 @@ from voicepipe.config import (
     load_environment,
     get_transcribe_backend,
     get_transcribe_model,
+    get_audio_channels,
+    get_audio_sample_rate,
     legacy_api_key_paths,
     legacy_elevenlabs_key_paths,
     read_env_file,
@@ -189,6 +191,7 @@ def config_edit() -> None:
         raise
     if rc != 0:
         raise SystemExit(rc)
+    print_restart_hint()
 
 
 def _probe_device_level(
@@ -348,6 +351,26 @@ def config_audio(seconds: float, auto: bool | None, list_only: bool) -> None:
         click.echo(f"Configured VOICEPIPE_DEVICE=pulse:{chosen.name}")
         click.echo(f"Configured VOICEPIPE_PULSE_SOURCE={chosen.name}")
         click.echo(f"env file: {env_path}")
+        # Best-effort: also update the auto-detect cache.
+        try:
+            import sounddevice as sd
+            from voicepipe.audio import select_audio_input, write_device_cache
+
+            idx, err = resolve_device_index(device_value)
+            if err is None and idx is not None:
+                selection = select_audio_input(
+                    preferred_device_index=int(idx),
+                    preferred_samplerate=get_audio_sample_rate(),
+                    preferred_channels=get_audio_channels(),
+                    strict_device_index=True,
+                )
+                write_device_cache(
+                    selection=selection,
+                    device_name=str(sd.query_devices(int(idx)).get("name", "")),
+                    source="manual",
+                )
+        except Exception:
+            pass
         print_restart_hint()
         return
 
@@ -420,8 +443,23 @@ def config_audio(seconds: float, auto: bool | None, list_only: bool) -> None:
     _write_legacy_device_files(device_value=device_value, pulse_source=None)
     click.echo(f"Configured VOICEPIPE_DEVICE={chosen_idx}")
     click.echo(f"env file: {env_path}")
-    print_restart_hint()
+    # Best-effort: also update the auto-detect cache.
+    try:
+        from voicepipe.audio import select_audio_input, write_device_cache
 
+        selection = select_audio_input(
+            preferred_device_index=int(chosen_idx),
+            preferred_samplerate=get_audio_sample_rate(),
+            preferred_channels=get_audio_channels(),
+            strict_device_index=True,
+        )
+        write_device_cache(
+            selection=selection,
+            device_name=str(sd.query_devices(int(chosen_idx)).get("name", "")),
+            source="manual",
+        )
+    except Exception:
+        pass
     print_restart_hint()
 
 

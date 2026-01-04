@@ -1,15 +1,18 @@
 """OpenAI Whisper API integration for transcription."""
 
-import os
-import sys
-from pathlib import Path
+from __future__ import annotations
+
 from typing import Optional
+
+from voicepipe.config import get_openai_api_key
 
 try:
     from openai import OpenAI
-except ImportError:
-    print("Error: openai package not installed. Install with: pip install openai", file=sys.stderr)
-    sys.exit(1)
+except ImportError as e:  # pragma: no cover
+    OpenAI = None  # type: ignore[assignment]
+    _OPENAI_IMPORT_ERROR = e
+else:
+    _OPENAI_IMPORT_ERROR = None
 
 
 class WhisperTranscriber:
@@ -30,35 +33,33 @@ Example: If speaker says "open quote hello close quote", transcribe as: "hello" 
     
     def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o-transcribe"):
         """Initialize the transcriber with API key and model."""
-        self.api_key = api_key or os.environ.get('OPENAI_API_KEY')
-        
-        if not self.api_key:
-            # Check common config locations
-            config_paths = [
-                Path.home() / '.config' / 'voicepipe' / 'api_key',
-                Path.home() / '.voicepipe_api_key',
-            ]
-            
-            for path in config_paths:
-                if path.exists():
-                    self.api_key = path.read_text().strip()
-                    break
-        
-        if not self.api_key:
-            raise ValueError(
-                "OpenAI API key not found. Please set OPENAI_API_KEY environment variable "
-                "or save your API key to ~/.config/voicepipe/api_key"
-            )
+        if OpenAI is None:
+            raise RuntimeError(
+                "openai is not installed; install it to use transcription "
+                "(e.g. `pip install openai`)"
+            ) from _OPENAI_IMPORT_ERROR
+        self.api_key = api_key or get_openai_api_key()
         
         self.client = OpenAI(api_key=self.api_key)
         self.model = model
     
-    def transcribe(self, audio_file: str, language: Optional[str] = None, prompt: Optional[str] = None, temperature: float = 0.0) -> str:
+    def transcribe(
+        self,
+        audio_file: str,
+        language: Optional[str] = None,
+        prompt: Optional[str] = None,
+        temperature: float = 0.0,
+        model: Optional[str] = None,
+    ) -> str:
         """Transcribe an audio file using Whisper API."""
         try:
+            effective_model = (model or self.model or "").strip()
+            if not effective_model:
+                raise RuntimeError("No model specified for transcription")
+
             with open(audio_file, 'rb') as f:
                 params = {
-                    "model": self.model,
+                    "model": effective_model,
                     "file": f,
                     "response_format": "text",
                     "temperature": temperature,
@@ -69,9 +70,9 @@ Example: If speaker says "open quote hello close quote", transcribe as: "hello" 
                 
                 # Use appropriate default prompt if none provided
                 if prompt is None:
-                    if self.model.startswith('gpt-4'):
+                    if effective_model.startswith('gpt-4'):
                         prompt = self.GPT4_PROMPT
-                    elif self.model == 'whisper-1':
+                    elif effective_model == 'whisper-1':
                         prompt = self.WHISPER_PROMPT
                 
                 if prompt:

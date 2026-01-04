@@ -10,12 +10,20 @@ import sys
 
 import click
 
+from voicepipe.audio_device import (
+    get_default_pulse_source,
+    list_pulse_sources,
+    resolve_device_index,
+)
 from voicepipe.config import (
     detect_elevenlabs_api_key,
     detect_openai_api_key,
     ensure_env_file,
     env_file_path,
     env_file_permissions_ok,
+    get_audio_channels,
+    get_audio_sample_rate,
+    load_environment,
     get_transcribe_backend,
     get_transcribe_model,
     legacy_api_key_paths,
@@ -141,6 +149,9 @@ def config_show() -> None:
     click.echo(
         f"device env set (VOICEPIPE_DEVICE): {bool(os.environ.get('VOICEPIPE_DEVICE'))}"
     )
+    click.echo(
+        f"pulse source env set (VOICEPIPE_PULSE_SOURCE): {bool(os.environ.get('VOICEPIPE_PULSE_SOURCE'))}"
+    )
 
 
 @config_group.command("edit")
@@ -177,6 +188,217 @@ def config_edit() -> None:
         raise
     if rc != 0:
         raise SystemExit(rc)
+
+
+def _probe_device_level(
+    *,
+    device_index: int,
+    seconds: float,
+    samplerate: int,
+    channels: int,
+) -> int:
+    import numpy as np
+    import sounddevice as sd
+
+    frames = int(max(0.05, float(seconds)) * float(samplerate))
+    data = sd.rec(
+        frames,
+        samplerate=int(samplerate),
+        channels=int(channels),
+        dtype="int16",
+        device=int(device_index),
+    )
+    sd.wait()
+    return int(np.max(np.abs(data))) if data.size else 0
+
+
+def _probe_pulse_source(
+    *,
+    source: str,
+    seconds: float,
+    samplerate: int,
+    channels: int,
+) -> int:
+    prev = os.environ.get("PULSE_SOURCE")
+    os.environ["PULSE_SOURCE"] = source
+    try:
+        idx, err = resolve_device_index("pulse")
+        if err or idx is None:
+            raise RuntimeError(err or "pulse device not found")
+        return _probe_device_level(
+            device_index=idx,
+            seconds=seconds,
+            samplerate=samplerate,
+            channels=channels,
+        )
+    finally:
+        if prev is None:
+            os.environ.pop("PULSE_SOURCE", None)
+        else:
+            os.environ["PULSE_SOURCE"] = prev
+
+
+def _format_source_line(idx: int, name: str, description: str, level: int | None) -> str:
+    desc = f" - {description}" if description else ""
+    level_text = f" (level={level})" if level is not None else ""
+    return f"{idx:>2}. {name}{desc}{level_text}"
+
+
+@config_group.command("audio")
+@click.option(
+    "--seconds",
+    default=0.5,
+    type=float,
+    show_default=True,
+    help="Seconds to sample each input during auto-detection",
+)
+@click.option(
+    "--auto/--wizard",
+    default=None,
+    help="Auto-detect without prompts (default: wizard on TTY)",
+)
+@click.option(
+    "--list",
+    "list_only",
+    is_flag=True,
+    help="List detected inputs and exit",
+)
+def config_audio(seconds: float, auto: bool | None, list_only: bool) -> None:
+    """Detect and configure the preferred audio input."""
+    load_environment()
+    seconds = float(seconds)
+
+    sources = list_pulse_sources()
+    non_monitor = [s for s in sources if not s.is_monitor]
+    if sources and not non_monitor:
+        non_monitor = sources
+
+    if non_monitor:
+        if list_only:
+            click.echo("PulseAudio sources:")
+            for i, src in enumerate(non_monitor, start=1):
+                click.echo(_format_source_line(i, src.name, src.description, None))
+            return
+
+        use_wizard = auto is False or (auto is None and sys.stdin.isatty())
+        levels: list[int] = []
+        if use_wizard:
+            click.echo(
+                "Testing PulseAudio sources. Please speak so we can pick the loudest mic..."
+            )
+            for src in non_monitor:
+                try:
+                    level = _probe_pulse_source(
+                        source=src.name,
+                        seconds=seconds,
+                        samplerate=get_audio_sample_rate(),
+                        channels=get_audio_channels(),
+                    )
+                except Exception as e:
+                    click.echo(f"  {src.name}: error: {e}", err=True)
+                    level = 0
+                levels.append(level)
+
+            click.echo("Detected sources:")
+            for i, (src, level) in enumerate(zip(non_monitor, levels), start=1):
+                click.echo(_format_source_line(i, src.name, src.description, level))
+
+            default_idx = 1
+            if levels:
+                default_idx = int(max(range(len(levels)), key=lambda i: levels[i])) + 1
+            choice = click.prompt(
+                "Select input",
+                default=default_idx,
+                type=click.IntRange(1, len(non_monitor)),
+            )
+            chosen = non_monitor[int(choice) - 1]
+        else:
+            default_source = get_default_pulse_source()
+            chosen = None
+            if default_source:
+                for src in non_monitor:
+                    if src.name == default_source:
+                        chosen = src
+                        break
+            if chosen is None:
+                chosen = non_monitor[0]
+
+        env_path = upsert_env_var("VOICEPIPE_DEVICE", f"pulse:{chosen.name}")
+        upsert_env_var("VOICEPIPE_PULSE_SOURCE", chosen.name)
+        click.echo(f"Configured VOICEPIPE_DEVICE=pulse:{chosen.name}")
+        click.echo(f"Configured VOICEPIPE_PULSE_SOURCE={chosen.name}")
+        click.echo(f"env file: {env_path}")
+        print_restart_hint()
+        return
+
+    # Fallback: use sounddevice device list.
+    try:
+        import sounddevice as sd
+    except Exception as e:
+        raise click.ClickException(f"sounddevice not available: {e}") from e
+
+    inputs: list[tuple[int, str]] = []
+    try:
+        devices = sd.query_devices()
+    except Exception as e:
+        raise click.ClickException(f"Failed to list audio devices: {e}") from e
+    for idx, dev in enumerate(devices):
+        if dev.get("max_input_channels", 0) <= 0:
+            continue
+        name = str(dev.get("name", ""))
+        inputs.append((idx, name))
+
+    if not inputs:
+        raise click.ClickException("No input devices found")
+
+    if list_only:
+        click.echo("Input devices:")
+        for i, (idx, name) in enumerate(inputs, start=1):
+            click.echo(_format_source_line(i, f"{idx} - {name}", "", None))
+        return
+
+    use_wizard = auto is False or (auto is None and sys.stdin.isatty())
+    if use_wizard:
+        click.echo("Testing input devices. Please speak so we can pick the loudest mic...")
+        levels = []
+        for idx, _name in inputs:
+            try:
+                level = _probe_device_level(
+                    device_index=idx,
+                    seconds=seconds,
+                    samplerate=get_audio_sample_rate(),
+                    channels=get_audio_channels(),
+                )
+            except Exception as e:
+                click.echo(f"  device {idx}: error: {e}", err=True)
+                level = 0
+            levels.append(level)
+
+        click.echo("Detected input devices:")
+        for i, ((idx, name), level) in enumerate(zip(inputs, levels), start=1):
+            click.echo(_format_source_line(i, f"{idx} - {name}", "", level))
+
+        default_idx = 1
+        if levels:
+            default_idx = int(max(range(len(levels)), key=lambda i: levels[i])) + 1
+        choice = click.prompt(
+            "Select input",
+            default=default_idx,
+            type=click.IntRange(1, len(inputs)),
+        )
+        chosen_idx = inputs[int(choice) - 1][0]
+    else:
+        default_in = None
+        try:
+            default_in = sd.default.device[0]
+        except Exception:
+            default_in = None
+        chosen_idx = int(default_in) if isinstance(default_in, int) else inputs[0][0]
+
+    env_path = upsert_env_var("VOICEPIPE_DEVICE", str(chosen_idx))
+    click.echo(f"Configured VOICEPIPE_DEVICE={chosen_idx}")
+    click.echo(f"env file: {env_path}")
+    print_restart_hint()
 
     print_restart_hint()
 

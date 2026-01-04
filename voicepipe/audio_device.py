@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Union, Tuple
 
@@ -144,3 +147,108 @@ def resolve_device_index(spec: Optional[object]) -> Tuple[Optional[int], Optiona
             return None, f"device not found: {parsed}"
         return idx, None
     return parsed, None
+
+
+@dataclass(frozen=True)
+class PulseSource:
+    name: str
+    description: str
+    is_monitor: bool
+
+
+def _parse_pactl_sources(output: str) -> list[PulseSource]:
+    sources: list[PulseSource] = []
+    name = ""
+    description = ""
+    for raw in output.splitlines():
+        line = raw.strip()
+        if line.startswith("Source #"):
+            if name:
+                lower = name.lower()
+                desc_lower = description.lower()
+                is_monitor = lower.endswith(".monitor") or "monitor of" in desc_lower
+                sources.append(
+                    PulseSource(name=name, description=description, is_monitor=is_monitor)
+                )
+            name = ""
+            description = ""
+            continue
+        if line.startswith("Name:"):
+            name = line.split("Name:", 1)[1].strip()
+            continue
+        if line.startswith("Description:"):
+            description = line.split("Description:", 1)[1].strip()
+            continue
+    if name:
+        lower = name.lower()
+        desc_lower = description.lower()
+        is_monitor = lower.endswith(".monitor") or "monitor of" in desc_lower
+        sources.append(PulseSource(name=name, description=description, is_monitor=is_monitor))
+    return sources
+
+
+def list_pulse_sources() -> list[PulseSource]:
+    """Return PulseAudio sources if pactl is available (best-effort)."""
+    pactl = shutil.which("pactl")
+    if not pactl:
+        return []
+
+    try:
+        proc = subprocess.run(
+            [pactl, "list", "sources"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode == 0:
+            sources = _parse_pactl_sources(proc.stdout or "")
+            if sources:
+                return sources
+    except Exception:
+        pass
+
+    # Fallback: parse names from `pactl list short sources`.
+    try:
+        proc = subprocess.run(
+            [pactl, "list", "short", "sources"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return []
+        out = proc.stdout or ""
+        sources: list[PulseSource] = []
+        for raw in out.splitlines():
+            parts = raw.split("\t")
+            if len(parts) < 2:
+                continue
+            name = parts[1].strip()
+            if not name:
+                continue
+            lower = name.lower()
+            is_monitor = lower.endswith(".monitor") or ".monitor" in lower
+            sources.append(PulseSource(name=name, description="", is_monitor=is_monitor))
+        return sources
+    except Exception:
+        return []
+
+
+def get_default_pulse_source() -> Optional[str]:
+    """Return the default PulseAudio source name if available."""
+    pactl = shutil.which("pactl")
+    if not pactl:
+        return None
+    try:
+        proc = subprocess.run(
+            [pactl, "get-default-source"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return None
+        value = (proc.stdout or "").strip()
+        return value or None
+    except Exception:
+        return None

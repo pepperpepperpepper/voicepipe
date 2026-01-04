@@ -191,6 +191,7 @@ def config_edit() -> None:
         raise
     if rc != 0:
         raise SystemExit(rc)
+    print_restart_hint()
 
 
 def _probe_device_level(

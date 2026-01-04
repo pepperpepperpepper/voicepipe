@@ -124,10 +124,10 @@ def _transcribe_and_finalize(
 @click.option(
     "--device",
     envvar="VOICEPIPE_DEVICE",
-    type=int,
-    help="Audio device index to use",
+    type=str,
+    help="Audio device index or name to use (or pulse:<source>)",
 )
-def start(device: int | None) -> None:
+def start(device: str | None) -> None:
     """Start recording audio from microphone."""
     try:
         backend = AutoRecorderBackend()
@@ -336,8 +336,8 @@ def transcribe_file(
 @click.option(
     "--device",
     envvar="VOICEPIPE_DEVICE",
-    type=int,
-    help="Audio device index to use",
+    type=str,
+    help="Audio device index or name to use (or pulse:<source>)",
 )
 @click.option(
     "--type",
@@ -377,7 +377,7 @@ def transcribe_file(
 @click.option("--json", "json_", is_flag=True, help="Output structured JSON (default: plain text)")
 def dictate(
     seconds: float | None,
-    device: int | None,
+    device: str | None,
     type_: bool,
     language: str | None,
     prompt: str | None,

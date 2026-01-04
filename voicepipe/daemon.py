@@ -18,6 +18,11 @@ except Exception:  # pragma: no cover
     sd = None  # type: ignore[assignment]
 
 from .audio import select_audio_input
+from .audio_device import (
+    read_device_preference,
+    resolve_device_index,
+    apply_pulse_source_preference,
+)
 from .config import get_audio_channels, get_audio_sample_rate
 from .device import parse_device_index
 from .logging_utils import configure_logging
@@ -54,8 +59,14 @@ class RecordingDaemon:
             )
         logger.info("Selecting audio input device...")
 
-        env_device = os.environ.get("VOICEPIPE_DEVICE")
-        preferred_device = int(env_device) if (env_device or "").isdigit() else None
+        pulse_source = apply_pulse_source_preference()
+        device_pref = read_device_preference()
+        preferred_device, pref_err = resolve_device_index(device_pref)
+        if pref_err:
+            logger.warning("Audio device preference error: %s", pref_err)
+            preferred_device = None
+        if preferred_device is None and pulse_source:
+            preferred_device, _ = resolve_device_index("pulse")
 
         preferred_samplerate = get_audio_sample_rate()
         preferred_channels = get_audio_channels()
@@ -225,6 +236,7 @@ class RecordingDaemon:
                         "(e.g. `pip install sounddevice`)"
                     )
                 }
+            apply_pulse_source_preference()
             device_index, device_error = parse_device_index(device_index)
             if device_error:
                 return {"error": device_error}

@@ -515,19 +515,27 @@ def _doctor_audio(seconds: float) -> None:
         import numpy as np
         import sounddevice as sd
         from voicepipe.audio import select_audio_input
+        from voicepipe.audio_device import (
+            read_device_preference,
+            resolve_device_index,
+            apply_pulse_source_preference,
+        )
         from voicepipe.config import get_audio_channels, get_audio_sample_rate
     except Exception as e:
         click.echo(f"audio-test error: {e}", err=True)
         return
 
     try:
-        env_device = os.environ.get("VOICEPIPE_DEVICE")
-        preferred_device = int(env_device) if (env_device or "").isdigit() else None
+        apply_pulse_source_preference()
+        device_pref = read_device_preference()
+        preferred_device, device_err = resolve_device_index(device_pref)
+        if device_err:
+            raise RuntimeError(device_err)
         selection = select_audio_input(
             preferred_device_index=preferred_device,
             preferred_samplerate=get_audio_sample_rate(),
             preferred_channels=get_audio_channels(),
-            strict_device_index=bool(preferred_device is not None),
+            strict_device_index=bool(device_pref is not None),
         )
         fs = int(selection.samplerate)
         frames = int(max(0.01, float(seconds)) * fs)

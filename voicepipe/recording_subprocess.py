@@ -17,6 +17,11 @@ def run_recording_subprocess() -> None:
     from pathlib import Path
 
     from voicepipe.audio import select_audio_input
+    from voicepipe.audio_device import (
+        read_device_preference,
+        resolve_device_index,
+        apply_pulse_source_preference,
+    )
     from voicepipe.config import get_audio_channels, get_audio_sample_rate
     from voicepipe.recorder import AudioRecorder
     from voicepipe.session import RecordingSession
@@ -75,14 +80,17 @@ def run_recording_subprocess() -> None:
         except Exception:
             pass
 
-        device = os.environ.get("VOICEPIPE_DEVICE")
-        device_index = int(device) if device and device.isdigit() else None
+        apply_pulse_source_preference()
+        device_pref = read_device_preference()
+        device_index, device_err = resolve_device_index(device_pref)
+        if device_err:
+            raise RuntimeError(device_err)
 
         selection = select_audio_input(
             preferred_device_index=device_index,
             preferred_samplerate=get_audio_sample_rate(),
             preferred_channels=get_audio_channels(),
-            strict_device_index=bool(device_index is not None),
+            strict_device_index=bool(device_pref is not None),
         )
         recorder = AudioRecorder(
             device_index=selection.device_index,

@@ -71,7 +71,7 @@ class DaemonRecorderBackend:
             raise RecordingError(str(resp.get("error")))
         return resp
 
-    def start(self, *, device: int | None) -> StartResult:
+    def start(self, *, device: str | int | None) -> StartResult:
         resp = self._call("start", device=device)
         return StartResult(
             mode=self.mode,
@@ -140,7 +140,7 @@ class SubprocessRecorderBackend:
             time.sleep(0.05)
         raise RecordingError(f"Timed out waiting for recording subprocess to exit (pid={pid})")
 
-    def start(self, *, device: int | None) -> StartResult:
+    def start(self, *, device: str | int | None) -> StartResult:
         active = RecordingSession.find_active_sessions()
         if active:
             raise RecordingError(
@@ -315,7 +315,7 @@ class AutoRecorderBackend:
     def _subprocess_status(self) -> StatusResult:
         return self._subprocess.status()
 
-    def start(self, *, device: int | None) -> StartResult:
+    def start(self, *, device: str | int | None) -> StartResult:
         if self._daemon_allowed():
             try:
                 return self._daemon.start(device=device)

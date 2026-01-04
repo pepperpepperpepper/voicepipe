@@ -130,6 +130,59 @@ class AudioRecorder:
         self._ffmpeg_start_thread = thread
         thread.start()
 
+    def _is_device_unavailable(self, error: Exception) -> bool:
+        msg = str(error).lower()
+        return (
+            "device unavailable" in msg
+            or "paerrorcode -9985" in msg
+            or "device busy" in msg
+            or "device is busy" in msg
+        )
+
+    def _open_stream_with_retry(self, device: int | None) -> None:
+        _require_sounddevice()
+
+        last_error: Exception | None = None
+        backoff = 0.1
+        for attempt in range(4):
+            if self.stream:
+                try:
+                    self.stream.start()
+                    return
+                except Exception as e:
+                    last_error = e
+                    try:
+                        self.stream.close()
+                    except Exception:
+                        pass
+                    self.stream = None
+
+            try:
+                self.stream = sd.InputStream(
+                    device=device,
+                    channels=self.channels,
+                    samplerate=self.rate,
+                    dtype=self.format,
+                    callback=self._audio_callback,
+                    blocksize=1024,
+                )
+                self.stream.start()
+                return
+            except Exception as e:
+                last_error = e
+                if not self._is_device_unavailable(e):
+                    break
+                try:
+                    import time as _time
+                    _time.sleep(backoff)
+                except Exception:
+                    pass
+                backoff = min(backoff * 2, 1.0)
+                self.stream = None
+
+        if last_error is not None:
+            raise last_error
+
     def start_recording(self, output_file: str | None = None) -> None:
         """Start recording. In MP3 mode, `output_file` is required."""
         _require_sounddevice()
@@ -147,17 +200,7 @@ class AudioRecorder:
 
             self.recording = True
 
-            if not self.stream:
-                self.stream = sd.InputStream(
-                    device=device,
-                    channels=self.channels,
-                    samplerate=self.rate,
-                    dtype=self.format,
-                    callback=self._audio_callback,
-                    blocksize=1024,
-                )
-
-            self.stream.start()
+            self._open_stream_with_retry(device)
 
             if self.max_duration:
                 self.timeout_timer = threading.Timer(

@@ -7,6 +7,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 import click
 
@@ -244,6 +245,20 @@ def _format_source_line(idx: int, name: str, description: str, level: int | None
     return f"{idx:>2}. {name}{desc}{level_text}"
 
 
+def _write_legacy_device_files(*, device_value: str, pulse_source: str | None) -> None:
+    """Persist device selection for legacy configs (best-effort)."""
+    try:
+        cfg_dir = Path.home() / ".config" / "voicepipe"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        device_path = cfg_dir / "device"
+        device_path.write_text(device_value + "\n", encoding="utf-8")
+        if pulse_source:
+            pulse_path = cfg_dir / "pulse_source"
+            pulse_path.write_text(pulse_source + "\n", encoding="utf-8")
+    except Exception:
+        pass
+
+
 @config_group.command("audio")
 @click.option(
     "--seconds",
@@ -323,8 +338,13 @@ def config_audio(seconds: float, auto: bool | None, list_only: bool) -> None:
             if chosen is None:
                 chosen = non_monitor[0]
 
-        env_path = upsert_env_var("VOICEPIPE_DEVICE", f"pulse:{chosen.name}")
+        device_value = f"pulse:{chosen.name}"
+        env_path = upsert_env_var("VOICEPIPE_DEVICE", device_value)
         upsert_env_var("VOICEPIPE_PULSE_SOURCE", chosen.name)
+        _write_legacy_device_files(
+            device_value=device_value,
+            pulse_source=chosen.name,
+        )
         click.echo(f"Configured VOICEPIPE_DEVICE=pulse:{chosen.name}")
         click.echo(f"Configured VOICEPIPE_PULSE_SOURCE={chosen.name}")
         click.echo(f"env file: {env_path}")
@@ -395,7 +415,9 @@ def config_audio(seconds: float, auto: bool | None, list_only: bool) -> None:
             default_in = None
         chosen_idx = int(default_in) if isinstance(default_in, int) else inputs[0][0]
 
-    env_path = upsert_env_var("VOICEPIPE_DEVICE", str(chosen_idx))
+    device_value = str(chosen_idx)
+    env_path = upsert_env_var("VOICEPIPE_DEVICE", device_value)
+    _write_legacy_device_files(device_value=device_value, pulse_source=None)
     click.echo(f"Configured VOICEPIPE_DEVICE={chosen_idx}")
     click.echo(f"env file: {env_path}")
     print_restart_hint()

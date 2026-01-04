@@ -16,12 +16,7 @@ def run_recording_subprocess() -> None:
     import time
     from pathlib import Path
 
-    from voicepipe.audio import select_audio_input
-    from voicepipe.audio_device import (
-        read_device_preference,
-        resolve_device_index,
-        apply_pulse_source_preference,
-    )
+    from voicepipe.audio import resolve_audio_input
     from voicepipe.config import get_audio_channels, get_audio_sample_rate
     from voicepipe.recorder import AudioRecorder
     from voicepipe.session import RecordingSession
@@ -80,18 +75,11 @@ def run_recording_subprocess() -> None:
         except Exception:
             pass
 
-        apply_pulse_source_preference()
-        device_pref = read_device_preference()
-        device_index, device_err = resolve_device_index(device_pref)
-        if device_err:
-            raise RuntimeError(device_err)
-
-        selection = select_audio_input(
-            preferred_device_index=device_index,
+        resolution = resolve_audio_input(
             preferred_samplerate=get_audio_sample_rate(),
             preferred_channels=get_audio_channels(),
-            strict_device_index=bool(device_pref is not None),
         )
+        selection = resolution.selection
         recorder = AudioRecorder(
             device_index=selection.device_index,
             sample_rate=selection.samplerate,
@@ -99,6 +87,10 @@ def run_recording_subprocess() -> None:
             max_duration=None,
         )
 
+        _safe_stderr(
+            f"Audio input ({resolution.source}): device={selection.device_index} "
+            f"samplerate={selection.samplerate} channels={selection.channels}"
+        )
         _safe_stderr(f"Recording started (PID: {os.getpid()})...")
         recorder.start_recording(output_file=audio_file)
 

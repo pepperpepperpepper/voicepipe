@@ -514,29 +514,18 @@ def _doctor_audio(seconds: float) -> None:
     try:
         import numpy as np
         import sounddevice as sd
-        from voicepipe.audio import select_audio_input
-        from voicepipe.audio_device import (
-            read_device_preference,
-            resolve_device_index,
-            apply_pulse_source_preference,
-        )
+        from voicepipe.audio import resolve_audio_input
         from voicepipe.config import get_audio_channels, get_audio_sample_rate
     except Exception as e:
         click.echo(f"audio-test error: {e}", err=True)
         return
 
     try:
-        apply_pulse_source_preference()
-        device_pref = read_device_preference()
-        preferred_device, device_err = resolve_device_index(device_pref)
-        if device_err:
-            raise RuntimeError(device_err)
-        selection = select_audio_input(
-            preferred_device_index=preferred_device,
+        resolution = resolve_audio_input(
             preferred_samplerate=get_audio_sample_rate(),
             preferred_channels=get_audio_channels(),
-            strict_device_index=bool(device_pref is not None),
         )
+        selection = resolution.selection
         fs = int(selection.samplerate)
         frames = int(max(0.01, float(seconds)) * fs)
         data = sd.rec(
@@ -549,7 +538,7 @@ def _doctor_audio(seconds: float) -> None:
         sd.wait()
         max_amp = int(np.max(np.abs(data))) if data.size else 0
         click.echo(
-            f"audio-test device={selection.device_index} samplerate={fs} "
+            f"audio-test source={resolution.source} device={selection.device_index} samplerate={fs} "
             f"channels={selection.channels} max_amp={max_amp}"
         )
     except Exception as e:

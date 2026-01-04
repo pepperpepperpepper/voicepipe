@@ -109,6 +109,20 @@ def env_file_path() -> Path:
     return config_dir() / f"{APP_NAME}.env"
 
 
+def device_override_path() -> Path:
+    """Optional per-user audio device override file.
+
+    This is a simple integer file containing a PortAudio input device index.
+    It is used as a fallback when VOICEPIPE_DEVICE is not set.
+    """
+    return config_dir() / "device"
+
+
+def device_cache_path() -> Path:
+    """Cached auto-detected audio input selection (Linux)."""
+    return config_dir() / "device_cache.json"
+
+
 def legacy_api_key_paths() -> list[Path]:
     return [
         config_dir() / "api_key",

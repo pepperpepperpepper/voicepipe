@@ -17,12 +17,8 @@ try:
 except Exception:  # pragma: no cover
     sd = None  # type: ignore[assignment]
 
-from .audio import select_audio_input
-from .audio_device import (
-    read_device_preference,
-    resolve_device_index,
-    apply_pulse_source_preference,
-)
+from .audio import resolve_audio_input, select_audio_input
+from .audio_device import apply_pulse_source_preference
 from .config import get_audio_channels, get_audio_sample_rate
 from .device import parse_device_index
 from .logging_utils import configure_logging
@@ -58,21 +54,10 @@ class RecordingDaemon:
                 "sounddevice is not installed; install it to use the recording daemon"
             )
         logger.info("Selecting audio input device...")
-
-        pulse_source = apply_pulse_source_preference()
-        device_pref = read_device_preference()
-        preferred_device, pref_err = resolve_device_index(device_pref)
-        if pref_err:
-            logger.warning("Audio device preference error: %s", pref_err)
-            preferred_device = None
-        if preferred_device is None and pulse_source:
-            preferred_device, _ = resolve_device_index("pulse")
-
         preferred_samplerate = get_audio_sample_rate()
         preferred_channels = get_audio_channels()
 
-        return select_audio_input(
-            preferred_device_index=preferred_device,
+        return resolve_audio_input(
             preferred_samplerate=preferred_samplerate,
             preferred_channels=preferred_channels,
         )
@@ -85,17 +70,20 @@ class RecordingDaemon:
                     "sounddevice is not installed; install it to use the recording daemon"
                 )
             # Find a working audio device automatically (best-effort).
-            selection = self._find_working_audio_device()
+            resolution = self._find_working_audio_device()
+            selection = resolution.selection
             self.default_device = selection.device_index
             self.default_samplerate = selection.samplerate
             self.default_channels = selection.channels
             device_info = sd.query_devices(self.default_device, "input")
             logger.info(
-                "Audio initialized. Selected device %s: %s (samplerate=%s channels=%s)",
+                "Audio initialized (%s). Selected device %s: %s (samplerate=%s channels=%s max_amp=%s)",
+                getattr(resolution, "source", "unknown"),
                 self.default_device,
-                device_info.get("name", ""),
+                getattr(resolution, "device_name", None) or device_info.get("name", ""),
                 self.default_samplerate,
                 self.default_channels,
+                getattr(resolution, "max_amp", None),
             )
             
             # Pre-create recorder instance to avoid initialization delay
@@ -274,11 +262,11 @@ class RecordingDaemon:
             elif not self.recorder:
                 # No pre-initialized recorder, create one (best-effort selection).
                 if self.default_device is None or self.default_samplerate is None or self.default_channels is None:
-                    selection = select_audio_input(
-                        preferred_device_index=device_index,
+                    resolution = resolve_audio_input(
                         preferred_samplerate=get_audio_sample_rate(),
                         preferred_channels=get_audio_channels(),
                     )
+                    selection = resolution.selection
                     self.default_device = selection.device_index
                     self.default_samplerate = selection.samplerate
                     self.default_channels = selection.channels

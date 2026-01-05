@@ -300,7 +300,7 @@ def _restart_recorder_if_needed(was_active: bool) -> None:
 @config_group.command("audio")
 @click.option(
     "--seconds",
-    default=0.5,
+    default=5.0,
     type=float,
     show_default=True,
     help="Seconds to sample each input during auto-detection",

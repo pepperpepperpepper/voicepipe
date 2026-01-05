@@ -34,7 +34,13 @@ from voicepipe.config import (
     read_env_file,
     upsert_env_var,
 )
-from voicepipe.systemd import TARGET_UNIT
+from voicepipe.systemd import (
+    RECORDER_UNIT,
+    TARGET_UNIT,
+    run_systemctl,
+    systemctl_path,
+    systemctl_show_properties,
+)
 from voicepipe.platform import is_windows
 from voicepipe.commands._hints import print_restart_hint
 
@@ -262,6 +268,35 @@ def _write_legacy_device_files(*, device_value: str, pulse_source: str | None) -
         pass
 
 
+def _recorder_is_active() -> bool:
+    if not systemctl_path():
+        return False
+    try:
+        props = systemctl_show_properties(RECORDER_UNIT, ["ActiveState"])
+        return props.get("ActiveState") == "active"
+    except Exception:
+        return False
+
+
+def _stop_recorder_if_active() -> bool:
+    if not _recorder_is_active():
+        return False
+    try:
+        run_systemctl(["stop", RECORDER_UNIT], check=False)
+        return True
+    except Exception:
+        return False
+
+
+def _restart_recorder_if_needed(was_active: bool) -> None:
+    if not was_active or not systemctl_path():
+        return
+    try:
+        run_systemctl(["start", RECORDER_UNIT], check=False)
+    except Exception:
+        pass
+
+
 @config_group.command("audio")
 @click.option(
     "--seconds",
@@ -285,6 +320,7 @@ def config_audio(seconds: float, auto: bool | None, list_only: bool) -> None:
     """Detect and configure the preferred audio input."""
     load_environment()
     seconds = float(seconds)
+    recorder_was_active = False
 
     sources = list_pulse_sources()
     non_monitor = [s for s in sources if not s.is_monitor]
@@ -326,6 +362,7 @@ def config_audio(seconds: float, auto: bool | None, list_only: bool) -> None:
                 "PulseAudio sources returned silence; falling back to ALSA device scan.",
                 err=True,
             )
+            recorder_was_active = _stop_recorder_if_active()
         else:
             if use_wizard:
                 click.echo("Detected sources:")
@@ -391,12 +428,14 @@ def config_audio(seconds: float, auto: bool | None, list_only: bool) -> None:
     try:
         import sounddevice as sd
     except Exception as e:
+        _restart_recorder_if_needed(recorder_was_active)
         raise click.ClickException(f"sounddevice not available: {e}") from e
 
     inputs: list[tuple[int, str]] = []
     try:
         devices = sd.query_devices()
     except Exception as e:
+        _restart_recorder_if_needed(recorder_was_active)
         raise click.ClickException(f"Failed to list audio devices: {e}") from e
     for idx, dev in enumerate(devices):
         if dev.get("max_input_channels", 0) <= 0:
@@ -405,12 +444,14 @@ def config_audio(seconds: float, auto: bool | None, list_only: bool) -> None:
         inputs.append((idx, name))
 
     if not inputs:
+        _restart_recorder_if_needed(recorder_was_active)
         raise click.ClickException("No input devices found")
 
     if list_only:
         click.echo("Input devices:")
         for i, (idx, name) in enumerate(inputs, start=1):
             click.echo(_format_source_line(i, f"{idx} - {name}", "", None))
+        _restart_recorder_if_needed(recorder_was_active)
         return
 
     use_wizard = auto is False or (auto is None and sys.stdin.isatty())
@@ -474,6 +515,7 @@ def config_audio(seconds: float, auto: bool | None, list_only: bool) -> None:
     except Exception:
         pass
     print_restart_hint()
+    _restart_recorder_if_needed(recorder_was_active)
 
 
 @config_group.command("migrate")

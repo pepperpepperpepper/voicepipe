@@ -18,6 +18,7 @@ from voicepipe.systemd import (
     run_systemctl,
     selected_units,
     systemctl_cat,
+    systemctl_show_properties,
     systemctl_path,
     user_unit_dir,
 )
@@ -162,8 +163,8 @@ def service_uninstall() -> None:
 
 
 @service_group.command("enable")
-@click.option("--recorder", is_flag=True, help="Only manage the recorder unit")
-@click.option("--transcriber", is_flag=True, help="Only manage the transcriber unit")
+@click.option("--recorder", is_flag=True, hidden=True, help="Only manage the recorder unit")
+@click.option("--transcriber", is_flag=True, hidden=True, help="Only manage the transcriber unit")
 def service_enable(recorder: bool, transcriber: bool) -> None:
     """Enable Voicepipe services to start on login."""
     units = _activation_units(recorder, transcriber)
@@ -171,8 +172,8 @@ def service_enable(recorder: bool, transcriber: bool) -> None:
 
 
 @service_group.command("disable")
-@click.option("--recorder", is_flag=True, help="Only manage the recorder unit")
-@click.option("--transcriber", is_flag=True, help="Only manage the transcriber unit")
+@click.option("--recorder", is_flag=True, hidden=True, help="Only manage the recorder unit")
+@click.option("--transcriber", is_flag=True, hidden=True, help="Only manage the transcriber unit")
 def service_disable(recorder: bool, transcriber: bool) -> None:
     """Disable Voicepipe services."""
     if recorder or transcriber:
@@ -194,8 +195,8 @@ def service_disable(recorder: bool, transcriber: bool) -> None:
 
 
 @service_group.command("start")
-@click.option("--recorder", is_flag=True, help="Only manage the recorder unit")
-@click.option("--transcriber", is_flag=True, help="Only manage the transcriber unit")
+@click.option("--recorder", is_flag=True, hidden=True, help="Only manage the recorder unit")
+@click.option("--transcriber", is_flag=True, hidden=True, help="Only manage the transcriber unit")
 def service_start(recorder: bool, transcriber: bool) -> None:
     """Start Voicepipe services."""
     units = _activation_units(recorder, transcriber)
@@ -203,8 +204,8 @@ def service_start(recorder: bool, transcriber: bool) -> None:
 
 
 @service_group.command("stop")
-@click.option("--recorder", is_flag=True, help="Only manage the recorder unit")
-@click.option("--transcriber", is_flag=True, help="Only manage the transcriber unit")
+@click.option("--recorder", is_flag=True, hidden=True, help="Only manage the recorder unit")
+@click.option("--transcriber", is_flag=True, hidden=True, help="Only manage the transcriber unit")
 def service_stop(recorder: bool, transcriber: bool) -> None:
     """Stop Voicepipe services."""
     units = _activation_units(recorder, transcriber)
@@ -212,45 +213,110 @@ def service_stop(recorder: bool, transcriber: bool) -> None:
 
 
 @service_group.command("restart")
-@click.option("--recorder", is_flag=True, help="Only manage the recorder unit")
-@click.option("--transcriber", is_flag=True, help="Only manage the transcriber unit")
+@click.option("--recorder", is_flag=True, hidden=True, help="Only manage the recorder unit")
+@click.option("--transcriber", is_flag=True, hidden=True, help="Only manage the transcriber unit")
 def service_restart(recorder: bool, transcriber: bool) -> None:
     """Restart Voicepipe services."""
     units = _activation_units(recorder, transcriber)
     raise SystemExit(run_systemctl(["restart", *units], check=False).returncode)
 
 
+def _format_unit_line(unit: str) -> tuple[str, bool, bool]:
+    props_wanted = ["LoadState", "ActiveState", "SubState", "UnitFileState"]
+    props = systemctl_show_properties(unit, props_wanted)
+    load_state = props.get("LoadState", "")
+    active_state = props.get("ActiveState", "") or "unknown"
+    sub_state = props.get("SubState", "")
+    unit_file_state = props.get("UnitFileState", "")
+    err = props.get("error", "")
+
+    if load_state == "not-found":
+        return f"{unit}: not found", False, False
+
+    if err and not load_state:
+        return f"{unit}: not found", False, False
+
+    active_detail = f"{active_state} ({sub_state})" if sub_state else active_state
+    enabled_detail = unit_file_state or "unknown"
+    is_active = active_state == "active"
+    return f"{unit}: {active_detail} [{enabled_detail}]", True, is_active
+
+
 @service_group.command("status")
-@click.option("--recorder", is_flag=True, help="Only manage the recorder unit")
-@click.option("--transcriber", is_flag=True, help="Only manage the transcriber unit")
-def service_status(recorder: bool, transcriber: bool) -> None:
+@click.option(
+    "--full",
+    is_flag=True,
+    help="Show full `systemctl --user status ...` output (verbose).",
+)
+@click.option("--recorder", is_flag=True, hidden=True, help="Only manage the recorder unit")
+@click.option("--transcriber", is_flag=True, hidden=True, help="Only manage the transcriber unit")
+def service_status(full: bool, recorder: bool, transcriber: bool) -> None:
     """Show systemd status for Voicepipe services."""
     if not systemctl_path():
         raise click.ClickException("systemctl not found (is systemd installed?)")
+
+    if bool(full):
+        if recorder or transcriber:
+            units = _service_units(recorder, transcriber)
+        else:
+            units = [RECORDER_UNIT, TRANSCRIBER_UNIT]
+            try:
+                if systemctl_cat(TARGET_UNIT).returncode == 0:
+                    units = [TARGET_UNIT, *units]
+            except Exception:
+                pass
+        rc = 0
+        for unit in units:
+            proc = subprocess.run(
+                ["systemctl", "--user", "--no-pager", "--full", "status", unit],
+                check=False,
+            )
+            rc = max(rc, proc.returncode)
+        raise SystemExit(rc)
+
+    click.echo("Voicepipe services (systemd --user):")
+    units: list[str] = []
     if recorder or transcriber:
         units = _service_units(recorder, transcriber)
     else:
-        units = [RECORDER_UNIT, TRANSCRIBER_UNIT]
         try:
             if systemctl_cat(TARGET_UNIT).returncode == 0:
-                units = [TARGET_UNIT, *units]
+                units.append(TARGET_UNIT)
         except Exception:
             pass
-    rc = 0
+        units.extend([RECORDER_UNIT, TRANSCRIBER_UNIT])
+
+    any_missing = False
+    any_inactive = False
     for unit in units:
-        proc = subprocess.run(
-            ["systemctl", "--user", "--no-pager", "--full", "status", unit],
-            check=False,
-        )
-        rc = max(rc, proc.returncode)
-    raise SystemExit(rc)
+        line, found, is_active = _format_unit_line(unit)
+        click.echo(f"  {line}")
+        if not found:
+            any_missing = True
+        elif not is_active:
+            any_inactive = True
+
+    if any_missing:
+        click.echo("")
+        click.echo("Not installed? Run:")
+        click.echo("  voicepipe service install")
+        click.echo("  voicepipe service enable")
+        click.echo("  voicepipe service start")
+        return
+
+    if any_inactive:
+        click.echo("")
+        click.echo("Not running? Try:")
+        click.echo("  voicepipe service restart")
+        click.echo(f"  # or: systemctl --user restart {TARGET_UNIT}")
+        return
 
 
 @service_group.command("logs")
 @click.option("-n", "--lines", default=200, show_default=True, help="Number of log lines")
 @click.option("--follow/--no-follow", default=True, show_default=True)
-@click.option("--recorder", is_flag=True, help="Only manage the recorder unit")
-@click.option("--transcriber", is_flag=True, help="Only manage the transcriber unit")
+@click.option("--recorder", is_flag=True, hidden=True, help="Only manage the recorder unit")
+@click.option("--transcriber", is_flag=True, hidden=True, help="Only manage the transcriber unit")
 def service_logs(lines: int, follow: bool, recorder: bool, transcriber: bool) -> None:
     """Tail logs for Voicepipe services."""
     if not journalctl_path():

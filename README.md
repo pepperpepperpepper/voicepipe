@@ -374,6 +374,7 @@ Common issues:
 - **Typing backend missing**: install `xdotool` (X11) or `wtype` (Wayland), or set `VOICEPIPE_TYPE_BACKEND=none` to disable typing.
 
 Diagnostics:
+- `voicepipe doctor`
 - `voicepipe doctor env`
 - `voicepipe doctor daemon --record-test --record-seconds 2 --play`
 - `voicepipe doctor audio`

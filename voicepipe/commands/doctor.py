@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -17,6 +18,8 @@ from voicepipe.config import (
     detect_openai_api_key,
     env_file_path,
     env_file_permissions_ok,
+    get_daemon_mode,
+    get_transcribe_backend,
     legacy_api_key_paths,
     legacy_elevenlabs_key_paths,
     read_env_file,
@@ -46,11 +49,144 @@ from voicepipe.platform import is_macos, is_windows
 
 
 @click.group(name="doctor", invoke_without_command=True)
+@click.option(
+    "--verbose",
+    is_flag=True,
+    help="Show additional details in the default summary output.",
+)
 @click.pass_context
-def doctor_group(ctx: click.Context) -> None:
+def doctor_group(ctx: click.Context, verbose: bool) -> None:
     """Diagnostics for common Voicepipe issues."""
     if ctx.invoked_subcommand is None:
-        click.echo(ctx.get_help())
+        _doctor_summary(verbose=bool(verbose))
+        click.echo("")
+        click.echo("More detail:")
+        click.echo("  voicepipe doctor env")
+        click.echo("  voicepipe doctor systemd")
+        click.echo("  voicepipe doctor daemon")
+        click.echo("  voicepipe doctor audio")
+
+
+def _doctor_summary(*, verbose: bool) -> None:
+    click.echo("Voicepipe doctor (summary)")
+
+    # Config + keys.
+    env_path = env_file_path()
+    env_exists = bool(env_path.exists())
+    perms_ok = env_file_permissions_ok(env_path) if env_exists else False
+    backend = get_transcribe_backend(load_env=True)
+    daemon_mode = get_daemon_mode(load_env=True)
+    has_key = (
+        detect_elevenlabs_api_key(load_env=True)
+        if backend == "elevenlabs"
+        else detect_openai_api_key(load_env=True)
+    )
+
+    click.echo(f"  config file: {env_path} ({'ok' if env_exists else 'missing'})")
+    if env_exists:
+        click.echo(f"  config perms: 0600 ({'ok' if perms_ok else 'fix'})")
+    click.echo(f"  backend: {backend}")
+    click.echo(f"  api key: {'ok' if has_key else 'missing'}")
+    click.echo(f"  daemon mode: {daemon_mode}")
+
+    # Daemons.
+    recorder_ok = False
+    transcriber_ok = False
+    if is_windows():
+        click.echo("  recorder daemon: not supported on Windows (expected)")
+        click.echo("  transcriber daemon: not supported on Windows (expected)")
+    else:
+        daemon_socket = find_daemon_socket_path()
+        daemon_status = None
+        if daemon_socket is not None and daemon_socket.exists():
+            daemon_status = try_send_request("status", socket_path=daemon_socket)
+
+        if daemon_status is None:
+            click.echo("  recorder daemon: unavailable")
+        elif daemon_status.get("error"):
+            click.echo(f"  recorder daemon: error ({daemon_status.get('error')})")
+        else:
+            recorder_ok = True
+            click.echo(
+                f"  recorder daemon: ok (status={daemon_status.get('status', 'unknown')})"
+            )
+
+        transcriber_socket = find_transcriber_socket_path()
+        if transcriber_socket is not None and transcriber_socket.exists():
+            try:
+                client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                try:
+                    client.settimeout(0.2)
+                    client.connect(str(transcriber_socket))
+                    transcriber_ok = True
+                finally:
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
+            except Exception:
+                transcriber_ok = False
+
+        if transcriber_ok:
+            click.echo("  transcriber daemon: ok")
+        else:
+            click.echo("  transcriber daemon: unavailable")
+
+    # systemd (Linux only).
+    systemd_available = False
+    target_installed = False
+    target_active = False
+    if not is_windows() and not is_macos():
+        systemctl = systemctl_path()
+        systemd_available = bool(systemctl)
+        if systemd_available:
+            try:
+                target_installed = systemctl_cat(TARGET_UNIT).returncode == 0
+            except Exception:
+                target_installed = False
+
+            if target_installed:
+                props = systemctl_show_properties(
+                    TARGET_UNIT,
+                    ["LoadState", "ActiveState", "SubState", "UnitFileState"],
+                )
+                load_state = props.get("LoadState", "")
+                active_state = props.get("ActiveState", "")
+                sub_state = props.get("SubState", "")
+                unit_file_state = props.get("UnitFileState", "")
+                if props.get("error") and not load_state:
+                    click.echo(f"  systemd: error ({props.get('error')})")
+                else:
+                    target_active = active_state == "active"
+                    click.echo(
+                        f"  systemd: {TARGET_UNIT} {active_state} ({sub_state}) {unit_file_state}"
+                    )
+            else:
+                click.echo(f"  systemd: {TARGET_UNIT} not installed")
+        else:
+            if verbose:
+                click.echo("  systemd: systemctl not found (skipped)")
+
+    suggestions: list[str] = []
+    if env_exists and not perms_ok:
+        suggestions.append(f"chmod 600 {env_path}")
+    if not env_exists or not has_key:
+        suggestions.append("voicepipe setup")
+        if backend == "elevenlabs":
+            suggestions.append("# or: voicepipe setup --backend elevenlabs")
+
+    if systemd_available and target_installed and not target_active:
+        suggestions.append("voicepipe service start")
+    elif systemd_available and target_installed and target_active:
+        if daemon_mode != "never" and (not recorder_ok or not transcriber_ok):
+            suggestions.append("voicepipe service restart")
+            suggestions.append(f"# or: systemctl --user restart {TARGET_UNIT}")
+
+    if suggestions:
+        click.echo("")
+        click.echo("Suggested fix:")
+        for line in suggestions:
+            click.echo(f"  {line}")
 
 
 def _preserve_doctor_audio_file(path: Path) -> Path:

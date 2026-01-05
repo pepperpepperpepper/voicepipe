@@ -304,75 +304,88 @@ def config_audio(seconds: float, auto: bool | None, list_only: bool) -> None:
             click.echo(
                 "Testing PulseAudio sources. Please speak so we can pick the loudest mic..."
             )
-            for src in non_monitor:
-                try:
-                    level = _probe_pulse_source(
-                        source=src.name,
-                        seconds=seconds,
-                        samplerate=get_audio_sample_rate(),
-                        channels=get_audio_channels(),
-                    )
-                except Exception as e:
+
+        for src in non_monitor:
+            try:
+                level = _probe_pulse_source(
+                    source=src.name,
+                    seconds=seconds,
+                    samplerate=get_audio_sample_rate(),
+                    channels=get_audio_channels(),
+                )
+            except Exception as e:
+                if use_wizard:
                     click.echo(f"  {src.name}: error: {e}", err=True)
-                    level = 0
-                levels.append(level)
+                level = 0
+            levels.append(level)
 
-            click.echo("Detected sources:")
-            for i, (src, level) in enumerate(zip(non_monitor, levels), start=1):
-                click.echo(_format_source_line(i, src.name, src.description, level))
-
-            default_idx = 1
-            if levels:
-                default_idx = int(max(range(len(levels)), key=lambda i: levels[i])) + 1
-            choice = click.prompt(
-                "Select input",
-                default=default_idx,
-                type=click.IntRange(1, len(non_monitor)),
+        silence_threshold = 50
+        max_level = max(levels) if levels else 0
+        if max_level <= silence_threshold:
+            click.echo(
+                "PulseAudio sources returned silence; falling back to ALSA device scan.",
+                err=True,
             )
-            chosen = non_monitor[int(choice) - 1]
         else:
-            default_source = get_default_pulse_source()
-            chosen = None
-            if default_source:
-                for src in non_monitor:
-                    if src.name == default_source:
-                        chosen = src
-                        break
-            if chosen is None:
-                chosen = non_monitor[0]
+            if use_wizard:
+                click.echo("Detected sources:")
+                for i, (src, level) in enumerate(zip(non_monitor, levels), start=1):
+                    click.echo(_format_source_line(i, src.name, src.description, level))
 
-        device_value = f"pulse:{chosen.name}"
-        env_path = upsert_env_var("VOICEPIPE_DEVICE", device_value)
-        upsert_env_var("VOICEPIPE_PULSE_SOURCE", chosen.name)
-        _write_legacy_device_files(
-            device_value=device_value,
-            pulse_source=chosen.name,
-        )
-        click.echo(f"Configured VOICEPIPE_DEVICE=pulse:{chosen.name}")
-        click.echo(f"Configured VOICEPIPE_PULSE_SOURCE={chosen.name}")
-        click.echo(f"env file: {env_path}")
-        # Best-effort: also update the auto-detect cache.
-        try:
-            import sounddevice as sd
-            from voicepipe.audio import select_audio_input, write_device_cache
+                default_idx = 1
+                if levels:
+                    default_idx = int(max(range(len(levels)), key=lambda i: levels[i])) + 1
+                choice = click.prompt(
+                    "Select input",
+                    default=default_idx,
+                    type=click.IntRange(1, len(non_monitor)),
+                )
+                chosen = non_monitor[int(choice) - 1]
+            else:
+                default_source = get_default_pulse_source()
+                chosen = None
+                if default_source:
+                    for src in non_monitor:
+                        if src.name == default_source:
+                            chosen = src
+                            break
+                if chosen is None:
+                    loudest_idx = int(max(range(len(levels)), key=lambda i: levels[i]))
+                    chosen = non_monitor[loudest_idx]
 
-            idx, err = resolve_device_index(device_value)
-            if err is None and idx is not None:
-                selection = select_audio_input(
-                    preferred_device_index=int(idx),
-                    preferred_samplerate=get_audio_sample_rate(),
-                    preferred_channels=get_audio_channels(),
-                    strict_device_index=True,
-                )
-                write_device_cache(
-                    selection=selection,
-                    device_name=str(sd.query_devices(int(idx)).get("name", "")),
-                    source="manual",
-                )
-        except Exception:
-            pass
-        print_restart_hint()
-        return
+            device_value = f"pulse:{chosen.name}"
+            env_path = upsert_env_var("VOICEPIPE_DEVICE", device_value)
+            upsert_env_var("VOICEPIPE_PULSE_SOURCE", chosen.name)
+            _write_legacy_device_files(
+                device_value=device_value,
+                pulse_source=chosen.name,
+            )
+            click.echo(f"Configured VOICEPIPE_DEVICE=pulse:{chosen.name}")
+            click.echo(f"Configured VOICEPIPE_PULSE_SOURCE={chosen.name}")
+            click.echo(f"env file: {env_path}")
+            # Best-effort: also update the auto-detect cache.
+            try:
+                import sounddevice as sd
+                from voicepipe.audio import select_audio_input, write_device_cache
+
+                idx, err = resolve_device_index(device_value)
+                if err is None and idx is not None:
+                    selection = select_audio_input(
+                        preferred_device_index=int(idx),
+                        preferred_samplerate=get_audio_sample_rate(),
+                        preferred_channels=get_audio_channels(),
+                        strict_device_index=True,
+                    )
+                    write_device_cache(
+                        selection=selection,
+                        device_name=str(sd.query_devices(int(idx)).get("name", "")),
+                        source="manual",
+                    )
+            except Exception:
+                pass
+            print_restart_hint()
+            return
+        # If PulseAudio sources are silent, fall through to ALSA scan below.
 
     # Fallback: use sounddevice device list.
     try:

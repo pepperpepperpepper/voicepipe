@@ -362,6 +362,47 @@ def config_audio(seconds: float, auto: bool | None, list_only: bool) -> None:
                 "PulseAudio sources returned silence; falling back to ALSA device scan.",
                 err=True,
             )
+            # Try the PipeWire device (often works even when Pulse source probing fails).
+            try:
+                idx, err = resolve_device_index("pipewire")
+                if err is None and idx is not None:
+                    level = _probe_device_level(
+                        device_index=int(idx),
+                        seconds=seconds,
+                        samplerate=get_audio_sample_rate(),
+                        channels=get_audio_channels(),
+                    )
+                    if level > silence_threshold:
+                        device_value = "pipewire"
+                        env_path = upsert_env_var("VOICEPIPE_DEVICE", device_value)
+                        _write_legacy_device_files(
+                            device_value=device_value,
+                            pulse_source=None,
+                        )
+                        click.echo("Configured VOICEPIPE_DEVICE=pipewire")
+                        click.echo(f"env file: {env_path}")
+                        try:
+                            from voicepipe.audio import select_audio_input, write_device_cache
+                            import sounddevice as sd
+
+                            selection = select_audio_input(
+                                preferred_device_index=int(idx),
+                                preferred_samplerate=get_audio_sample_rate(),
+                                preferred_channels=get_audio_channels(),
+                                strict_device_index=True,
+                            )
+                            write_device_cache(
+                                selection=selection,
+                                device_name=str(sd.query_devices(int(idx)).get("name", "")),
+                                source="manual",
+                            )
+                        except Exception:
+                            pass
+                        print_restart_hint()
+                        _restart_recorder_if_needed(recorder_was_active)
+                        return
+            except Exception:
+                pass
             recorder_was_active = _stop_recorder_if_active()
         else:
             if use_wizard:

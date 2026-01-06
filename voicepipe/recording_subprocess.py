@@ -16,9 +16,6 @@ def run_recording_subprocess() -> None:
     import time
     from pathlib import Path
 
-    from voicepipe.audio import resolve_audio_input
-    from voicepipe.config import get_audio_channels, get_audio_sample_rate
-    from voicepipe.recorder import AudioRecorder
     from voicepipe.session import RecordingSession
 
     recorder = None
@@ -35,6 +32,9 @@ def run_recording_subprocess() -> None:
             except Exception:
                 pass
 
+        # Create the session file first so callers can observe that the
+        # subprocess is alive even if importing audio dependencies is slow
+        # (Windows AV / first-run import jitter).
         session = RecordingSession.create_session()
         audio_file = str(session.get("audio_file") or "")
         control_path = str(session.get("control_path") or "")
@@ -74,6 +74,10 @@ def run_recording_subprocess() -> None:
             signal.signal(signal.SIGUSR1, cancel_handler)
         except Exception:
             pass
+
+        from voicepipe.audio import resolve_audio_input
+        from voicepipe.config import get_audio_channels, get_audio_sample_rate
+        from voicepipe.recorder import AudioRecorder
 
         resolution = resolve_audio_input(
             preferred_samplerate=get_audio_sample_rate(),
@@ -195,4 +199,15 @@ def run_recording_subprocess() -> None:
             pass
         if recorder:
             recorder.cleanup()
+        if session:
+            try:
+                RecordingSession.cleanup_session(session)
+            except Exception:
+                pass
+        try:
+            audio_file = str(session.get("audio_file") or "") if session else ""
+            if audio_file and os.path.exists(audio_file):
+                os.unlink(audio_file)
+        except Exception:
+            pass
         raise SystemExit(1)

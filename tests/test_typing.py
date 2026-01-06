@@ -211,6 +211,38 @@ def test_resolve_typing_backend_override_sendinput_on_windows(monkeypatch) -> No
     assert backend.name == "sendinput"
 
 
+def test_sendinput_falls_back_when_ulong_ptr_missing(monkeypatch) -> None:
+    if sys.platform != "win32":
+        pytest.skip("Windows-only behavior")
+
+    import ctypes
+    from ctypes import wintypes
+
+    monkeypatch.delattr(wintypes, "ULONG_PTR", raising=False)
+
+    class _Func:
+        def __init__(self, func):
+            self._func = func
+            self.argtypes = None
+            self.restype = None
+
+        def __call__(self, *args):
+            return self._func(*args)
+
+    class _User32:
+        def __init__(self) -> None:
+            self.GetForegroundWindow = _Func(lambda: wintypes.HWND(1))
+            self.SetForegroundWindow = _Func(lambda _hwnd: wintypes.BOOL(1))
+            self.SendInput = _Func(lambda n_inputs, _inputs, _size: n_inputs)
+
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *_a, **_kw: _User32())
+
+    backend = resolve_typing_backend()
+    ok, err = type_text("hello", backend=backend)
+    assert ok is True, err
+    assert err is None
+
+
 def test_resolve_typing_backend_auto_is_osascript_on_macos(monkeypatch) -> None:
     import voicepipe.platform as platform_mod
 

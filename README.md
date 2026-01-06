@@ -52,23 +52,42 @@ Windows uses the subprocess recording path by default (no systemd, no recorder/t
 - Typing: `--type` defaults to `sendinput` and requires an interactive desktop session; typing into elevated apps usually requires running Voicepipe elevated too
 - Daemon policy: `VOICEPIPE_DAEMON_MODE=auto|never|always` (on Windows, `auto` behaves like `never`)
 
-### AutoHotkey example (hotkey → `voicepipe-fast toggle`)
+### Native hotkey runner (recommended)
+
+Voicepipe includes a stdlib-only Windows hotkey runner that registers **Alt+F5** and triggers `voicepipe-fast toggle` in-process:
+
+```powershell
+# Run it (no console):
+pythonw -m voicepipe.win_hotkey
+```
+
+Install it to start at login:
+
+```powershell
+voicepipe hotkey install
+```
+
+### AutoHotkey (optional)
 
 ```ahk
+#Requires AutoHotkey v2.0
+#SingleInstance Force
+
 ; Win+Shift+V toggles Voicepipe (runs hidden to avoid console flicker)
-# + v::
-    Run, voicepipe-fast toggle, , Hide
-return
+#+v::
+{
+    Run "voicepipe-fast toggle", , "Hide"
+}
 ```
 
 See `hotkey-examples/voicepipe.ahk` for a copy-pasteable file.
 
 If `voicepipe-fast` is not on PATH, use `python -m voicepipe.fast toggle` instead (and ensure `python` is on PATH).
 
-### Run at login
+### Run at login (Windows)
 
-- **Startup folder**: put your `.ahk` script (or a shortcut to it) in `%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup`
-- **Task Scheduler**: create a task triggered “At log on” that runs your `.ahk` script; for typing to work, set it to run only when the user is logged on
+- **Startup folder**: use `voicepipe hotkey install` (recommended), or add a shortcut that runs `pythonw -m voicepipe.win_hotkey`
+- **Task Scheduler**: create a task triggered “At log on” that runs `pythonw -m voicepipe.win_hotkey` (for typing to work, set it to run only when the user is logged on)
 - Smoke test checklist: `WINDOWS_SMOKE_TEST.md`
 
 ## Dependencies

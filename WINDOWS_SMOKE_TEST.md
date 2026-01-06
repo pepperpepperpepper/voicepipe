@@ -45,9 +45,22 @@ Notes:
 - Check the log file:
   - `%LOCALAPPDATA%\\voicepipe\\logs\\voicepipe-fast.log` (or override via `VOICEPIPE_FAST_LOG_FILE`)
 
+## Native hotkey runner (Alt+F5)
+
+Voicepipe includes a stdlib-only hotkey runner that registers **Alt+F5** and triggers `voicepipe-fast toggle`:
+
+- Install at login (Startup folder shortcut):
+  - `voicepipe hotkey install`
+  - Log out/in (or reboot), then press Alt+F5 twice.
+- Or run it manually (no console):
+  - `pythonw -m voicepipe.win_hotkey`
+
+Then:
+- Press Alt+F5 once (start recording), then again (stop/transcribe/preserve).
+- Check `%LOCALAPPDATA%\\voicepipe\\logs\\voicepipe-fast.log` for `[HOTKEY]` lines.
+
 ## Optional: API key smoke
 
 After setting `OPENAI_API_KEY` (or ElevenLabs key) in your `voicepipe.env`:
 
 - `voicepipe start` → `voicepipe stop --type` (expect: transcript printed + typed into the focused app)
-

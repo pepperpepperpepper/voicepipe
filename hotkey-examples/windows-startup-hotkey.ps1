@@ -7,6 +7,9 @@ $ErrorActionPreference = "Stop"
 # - Creates a Startup-folder shortcut that runs:
 #     pythonw.exe -m voicepipe.win_hotkey
 #
+# Note: if `voicepipe` is installed and on PATH, you can use:
+#   voicepipe hotkey install
+#
 # Verify:
 # - Log out/in (or reboot), then press Alt+F5.
 # - Check `%LOCALAPPDATA%\voicepipe\logs\voicepipe-fast.log`.
@@ -28,4 +31,3 @@ Write-Host "Installed Startup shortcut:"
 Write-Host "  $shortcutPath"
 Write-Host "Target:"
 Write-Host "  $pythonw -m voicepipe.win_hotkey"
-

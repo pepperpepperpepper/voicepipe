@@ -377,6 +377,7 @@ def _sendinput_type_text(text: str, *, window_id: Optional[str]) -> tuple[bool, 
         from ctypes import wintypes
 
         user32 = ctypes.WinDLL("user32", use_last_error=True)
+        ULONG_PTR = getattr(wintypes, "ULONG_PTR", ctypes.c_size_t)
 
         # Basic interactive-session check.
         user32.GetForegroundWindow.argtypes = []
@@ -398,7 +399,7 @@ def _sendinput_type_text(text: str, *, window_id: Optional[str]) -> tuple[bool, 
                 ("wScan", wintypes.WORD),
                 ("dwFlags", wintypes.DWORD),
                 ("time", wintypes.DWORD),
-                ("dwExtraInfo", wintypes.ULONG_PTR),
+                ("dwExtraInfo", ULONG_PTR),
             ]
 
         class _INPUT_UNION(ctypes.Union):

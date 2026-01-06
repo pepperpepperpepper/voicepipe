@@ -4,6 +4,7 @@
 - System: Windows 10/11 (no WSL runtime), interactive desktop available.
 - Repo path: `C:\Users\fenlo\Downloads\voicepipe`
 - Hotkey target: `voicepipe-fast toggle` (recommended by repo docs for Windows).
+- Preferred hotkey runner (no third-party): `pythonw -m voicepipe.win_hotkey` (Alt+F5), install via `voicepipe hotkey install`.
 - Keys file: `C:\Users\fenlo\.api-keys` (OPENAI_API_KEY, ELEVENLABS_API_KEY).
 
 ## Installation Notes (Poetry / Windows)
@@ -81,6 +82,7 @@ Excerpt:
 1) **Typing backend error** in `voicepipe/typing.py` on Python 3.11:
    - `wintypes.ULONG_PTR` is missing in this runtime.
    - This prevents typing even when transcription succeeds.
+   - Fix: fall back to `ctypes.c_size_t` when `ULONG_PTR` is missing (now implemented; update Voicepipe on the Windows machine).
 
 2) **Recording startup timeout** intermittently triggers:
    - Start call may time out before the session file is written.
@@ -117,15 +119,8 @@ Excerpt:
 
 ## Recommended Fixes / Next Steps
 1) Fix SendInput typing error:
-   - Patch `voicepipe/typing.py` to provide a fallback for `ULONG_PTR`:
-     - Example:
-       ```python
-       try:
-           ULONG_PTR = wintypes.ULONG_PTR
-       except AttributeError:
-           ULONG_PTR = ctypes.c_size_t
-       ```
-     - Then use `ULONG_PTR` for the `dwExtraInfo` field.
+   - Implemented in `voicepipe/typing.py` (fallback for `ULONG_PTR`).
+   - Update Voicepipe on the Windows machine and re-test `--type` and hotkey paths.
 
 2) Verify hotkey actually fires:
    - Temporarily add a `MsgBox "hotkey fired"` to the script.

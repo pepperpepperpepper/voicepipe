@@ -3,12 +3,18 @@
 On macOS, the most native way to bind a global keyboard shortcut without third
 party hotkey apps is a Quick Action (Automator service). This module provides
 an opt-in helper to install such a workflow bundle.
+
+On Windows, Voicepipe ships a small stdlib-only hotkey runner
+(`pythonw -m voicepipe.win_hotkey`) that registers a global hotkey (Alt+F5 by
+default). This module can install a Startup-folder shortcut to run it at login.
 """
 
 from __future__ import annotations
 
+import os
 import plistlib
 import shutil
+import subprocess
 import sys
 import uuid
 from dataclasses import dataclass
@@ -16,7 +22,7 @@ from pathlib import Path
 
 import click
 
-from voicepipe.platform import is_macos
+from voicepipe.platform import is_macos, is_windows
 
 
 @dataclass(frozen=True)
@@ -163,9 +169,97 @@ def _safe_rmtree(path: Path) -> None:
 @click.group(name="hotkey", invoke_without_command=True)
 @click.pass_context
 def hotkey_group(ctx: click.Context) -> None:
-    """Hotkey helpers (macOS Quick Action installer)."""
+    """Hotkey helpers (macOS Quick Action, Windows Alt+F5)."""
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
+
+
+def _windows_startup_dir() -> Path:
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        return (
+            Path(appdata)
+            / "Microsoft"
+            / "Windows"
+            / "Start Menu"
+            / "Programs"
+            / "Startup"
+        )
+    return (
+        Path.home()
+        / "AppData"
+        / "Roaming"
+        / "Microsoft"
+        / "Windows"
+        / "Start Menu"
+        / "Programs"
+        / "Startup"
+    )
+
+
+def _windows_shortcut_path(name: str) -> Path:
+    safe = (name or "").strip() or "Voicepipe Toggle"
+    if not safe.lower().endswith(".lnk"):
+        safe += ".lnk"
+    return _windows_startup_dir() / safe
+
+
+def _windows_pythonw(python_path: str | None) -> str:
+    raw = (python_path or sys.executable).strip() or sys.executable
+    try:
+        python = Path(raw)
+    except Exception:
+        return raw
+    if python.name.lower() == "pythonw.exe":
+        return str(python)
+    candidate = python.with_name("pythonw.exe")
+    return str(candidate) if candidate.exists() else str(python)
+
+
+def _ps_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _windows_install_shortcut(*, name: str, python_path: str | None, force: bool) -> Path:
+    shortcut_path = _windows_shortcut_path(name)
+    if shortcut_path.exists() and not force:
+        raise click.ClickException(
+            f"Startup shortcut already exists: {shortcut_path} (use --force to overwrite)"
+        )
+
+    pythonw = _windows_pythonw(python_path)
+    shortcut_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Use PowerShell to create a real .lnk file (no third-party deps).
+    ps = "\n".join(
+        [
+            "$ErrorActionPreference = 'Stop'",
+            f"$pythonw = {_ps_quote(pythonw)}",
+            f"$shortcutPath = {_ps_quote(str(shortcut_path))}",
+            "$shell = New-Object -ComObject WScript.Shell",
+            "$shortcut = $shell.CreateShortcut($shortcutPath)",
+            "$shortcut.TargetPath = $pythonw",
+            "$shortcut.Arguments = '-m voicepipe.win_hotkey'",
+            "$shortcut.WorkingDirectory = $env:USERPROFILE",
+            "$shortcut.WindowStyle = 7",
+            "$shortcut.Description = 'Voicepipe hotkey runner (Alt+F5)'",
+            "$shortcut.Save()",
+        ]
+    )
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as e:
+        raise click.ClickException("powershell not found (required for Windows shortcut install)") from e
+    except subprocess.CalledProcessError as e:
+        detail = ((e.stderr or "") + "\n" + (e.stdout or "")).strip()
+        raise click.ClickException(f"Failed to create Startup shortcut: {detail}") from e
+
+    return shortcut_path
 
 
 @hotkey_group.command("install")
@@ -178,9 +272,16 @@ def hotkey_group(ctx: click.Context) -> None:
 )
 @click.option("--force", is_flag=True, help="Overwrite existing workflow if present")
 def hotkey_install(name: str, python_path: str | None, force: bool) -> None:
-    """Install a macOS Quick Action workflow (assign shortcut in System Settings)."""
+    """Install a hotkey helper (macOS Quick Action or Windows Startup shortcut)."""
+    if is_windows():
+        shortcut_path = _windows_install_shortcut(name=name, python_path=python_path, force=force)
+        click.echo(f"Installed Startup shortcut: {shortcut_path}")
+        click.echo("Next: log out/in (or reboot), then press Alt+F5.")
+        click.echo("Log: %LOCALAPPDATA%\\voicepipe\\logs\\voicepipe-fast.log")
+        return
+
     if not is_macos():
-        raise click.ClickException("Hotkey installer is only available on macOS.")
+        raise click.ClickException("Hotkey installer is only available on macOS and Windows.")
 
     workflow_name = (name or "").strip() or "Voicepipe Toggle"
     python = (python_path or sys.executable).strip() or sys.executable
@@ -212,9 +313,21 @@ def hotkey_install(name: str, python_path: str | None, force: bool) -> None:
 @hotkey_group.command("uninstall")
 @click.option("--name", default="Voicepipe Toggle", show_default=True)
 def hotkey_uninstall(name: str) -> None:
-    """Remove the macOS Quick Action workflow bundle."""
+    """Remove the installed hotkey helper."""
+    if is_windows():
+        shortcut_path = _windows_shortcut_path(name)
+        try:
+            shortcut_path.unlink()
+        except FileNotFoundError:
+            click.echo(f"No Startup shortcut found at: {shortcut_path}")
+            return
+        except Exception as e:
+            raise click.ClickException(f"Failed to remove {shortcut_path}: {e}") from e
+        click.echo(f"Removed: {shortcut_path}")
+        return
+
     if not is_macos():
-        raise click.ClickException("Hotkey installer is only available on macOS.")
+        raise click.ClickException("Hotkey installer is only available on macOS and Windows.")
 
     workflow_name = (name or "").strip() or "Voicepipe Toggle"
     workflow = QuickActionWorkflow(name=workflow_name, command="")
@@ -224,4 +337,3 @@ def hotkey_uninstall(name: str) -> None:
         return
     _safe_rmtree(bundle_dir)
     click.echo(f"Removed: {bundle_dir}")
-

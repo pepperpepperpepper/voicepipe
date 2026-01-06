@@ -182,10 +182,24 @@ def config_edit() -> None:
     if not editor:
         raise click.ClickException("No editor found (set $EDITOR)")
 
-    cmd = [*shlex.split(editor), str(env_path)]
+    def _split_editor_command(raw: str) -> list[str]:
+        if is_windows():
+            # On Windows, `shlex.split()` with POSIX rules treats backslashes as
+            # escape characters. Use `posix=False` and strip wrapping quotes.
+            parts = shlex.split(raw, posix=False)
+            cleaned: list[str] = []
+            for part in parts:
+                if len(part) >= 2 and part[0] == part[-1] and part[0] in ('"', "'"):
+                    cleaned.append(part[1:-1])
+                else:
+                    cleaned.append(part)
+            return cleaned
+        return shlex.split(raw)
+
+    cmd = [*_split_editor_command(editor), str(env_path)]
     try:
         rc = subprocess.run(cmd, check=False).returncode
-    except FileNotFoundError:
+    except (FileNotFoundError, OSError):
         # Windows fallback: let Explorer choose an editor.
         if is_windows():
             try:

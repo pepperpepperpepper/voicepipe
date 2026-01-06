@@ -99,7 +99,15 @@ def _run_launchctl(args: list[str]) -> subprocess.CompletedProcess:
 
 def _launchctl_domain_target() -> str:
     # Use the GUI domain to tie the job to the user's graphical login session.
-    return f"gui/{os.getuid()}"
+    # NOTE: `os.getuid()` is not available on Windows. We keep this function
+    # resilient so unit tests can exercise the macOS code paths on any host.
+    try:
+        getuid = getattr(os, "getuid", None)
+        if callable(getuid):
+            return f"gui/{int(getuid())}"
+    except Exception:
+        pass
+    return "gui/0"
 
 
 @click.group(name="launchd", invoke_without_command=True)

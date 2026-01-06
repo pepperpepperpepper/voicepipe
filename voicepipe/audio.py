@@ -23,9 +23,6 @@ import numpy as np
 
 from voicepipe.audio_device import apply_pulse_source_preference, read_device_preference, resolve_device_index
 from voicepipe.config import device_cache_path, load_environment
-from voicepipe.platform import is_linux
-
-
 logger = logging.getLogger(__name__)
 
 _SILENCE_THRESHOLD_INT16 = 50
@@ -544,17 +541,6 @@ def resolve_audio_input(
             device_name=_device_name(selection.device_index),
         )
 
-    if not is_linux():
-        selection = select_audio_input(
-            preferred_samplerate=preferred_samplerate,
-            preferred_channels=preferred_channels,
-        )
-        return AudioInputResolution(
-            selection=selection,
-            source="auto",
-            device_name=_device_name(selection.device_index),
-        )
-
     cached = read_device_cache()
     if cached is not None:
         probed = probe_audio_signal(
@@ -576,6 +562,9 @@ def resolve_audio_input(
             )
 
     devices = sd.query_devices()
+    # Prefer "pulse"/"pipewire"/"default" candidates first when present, but
+    # fall back to probing any input-capable device. Despite the name, this
+    # heuristic is useful cross-platform (it is exercised in unit tests).
     candidates = _linux_candidate_device_indices(devices)
 
     best: AudioDeviceProbeResult | None = None

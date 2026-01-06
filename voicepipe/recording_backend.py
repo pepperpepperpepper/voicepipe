@@ -154,7 +154,14 @@ class SubprocessRecorderBackend:
         proc = self._spawn([sys.executable, "-m", "voicepipe.cli", "_record"], env=env)
 
         state_file = RecordingSession.get_state_file(proc.pid)
-        deadline = time.monotonic() + 5.0
+        timeout_s = 5.0
+        raw_timeout = os.environ.get("VOICEPIPE_RECORDING_INIT_TIMEOUT")
+        if raw_timeout:
+            try:
+                timeout_s = max(1.0, float(raw_timeout))
+            except ValueError:
+                pass
+        deadline = time.monotonic() + timeout_s
         session: dict[str, Any] | None = None
         while time.monotonic() < deadline:
             if proc.poll() is not None:

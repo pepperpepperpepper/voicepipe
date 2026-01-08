@@ -20,6 +20,8 @@ WM_HOTKEY: Final[int] = 0x0312
 MOD_ALT: Final[int] = 0x0001
 VK_F5: Final[int] = 0x74
 
+_TOGGLE_FN = None
+
 
 def _hotkey_id() -> int:
     return 1
@@ -37,9 +39,13 @@ def _log(message: str) -> None:
 
 def _run_toggle() -> None:
     try:
-        from voicepipe.fast import toggle_inprocess_main
+        global _TOGGLE_FN
+        if _TOGGLE_FN is None:
+            from voicepipe.fast import toggle_inprocess_main
 
-        toggle_inprocess_main()
+            _TOGGLE_FN = toggle_inprocess_main
+
+        _TOGGLE_FN()
     except SystemExit:
         return
     except Exception as e:
@@ -63,6 +69,17 @@ def _prewarm_audio() -> None:
         )
     except Exception as e:
         _log(f"audio prewarm failed: {e}")
+
+
+def _prewarm_fast() -> None:
+    try:
+        global _TOGGLE_FN
+        if _TOGGLE_FN is None:
+            from voicepipe.fast import toggle_inprocess_main
+
+            _TOGGLE_FN = toggle_inprocess_main
+    except Exception as e:
+        _log(f"fast prewarm failed: {e}")
 
 
 def _parse_hotkey() -> tuple[int, int]:
@@ -113,6 +130,7 @@ def main() -> None:
     _log("registered Alt+F5")
 
     threading.Thread(target=_prewarm_audio, daemon=True).start()
+    threading.Thread(target=_prewarm_fast, daemon=True).start()
 
     msg = wintypes.MSG()
     try:

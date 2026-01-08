@@ -265,12 +265,15 @@ def _inprocess_start() -> None:
     import os
     import tempfile
 
-    from voicepipe.audio import resolve_audio_input_for_recording
+    from voicepipe.audio import resolve_audio_input_for_recording, select_audio_input, write_device_cache
     from voicepipe.config import get_audio_channels, get_audio_sample_rate
     from voicepipe.recorder import AudioRecorder
 
     if _inprocess_is_recording():
         return
+
+    preferred_samplerate = get_audio_sample_rate()
+    preferred_channels = get_audio_channels()
 
     tmp_dir = audio_tmp_dir(create=True)
     fd, audio_file = tempfile.mkstemp(
@@ -282,25 +285,71 @@ def _inprocess_start() -> None:
 
     t0 = time.monotonic()
     resolution = resolve_audio_input_for_recording(
-        preferred_samplerate=get_audio_sample_rate(),
-        preferred_channels=get_audio_channels(),
+        preferred_samplerate=preferred_samplerate,
+        preferred_channels=preferred_channels,
     )
     t1 = time.monotonic()
     selection = resolution.selection
-    recorder = AudioRecorder(
-        device_index=selection.device_index,
-        sample_rate=selection.samplerate,
-        channels=selection.channels,
-        max_duration=None,
-    )
 
+    def _start_with_selection(sel) -> tuple[AudioRecorder, float]:
+        rec = AudioRecorder(
+            device_index=sel.device_index,
+            sample_rate=sel.samplerate,
+            channels=sel.channels,
+            max_duration=None,
+        )
+        t_start = time.monotonic()
+        rec.start_recording(output_file=None)
+        return rec, t_start
+
+    start_selection = selection
+    recorder: AudioRecorder | None = None
+    t2 = time.monotonic()
+    t3 = t2
     try:
-        t2 = time.monotonic()
-        recorder.start_recording(output_file=None)
-        t3 = time.monotonic()
+        try:
+            recorder, t2 = _start_with_selection(selection)
+            t3 = time.monotonic()
+        except Exception as e:
+            fast_log(
+                f"[TOGGLE] In-process start failed (source={getattr(resolution, 'source', '')}): {e}"
+            )
+            try:
+                if recorder:
+                    recorder.cleanup()
+            except Exception:
+                pass
+
+            strict = str(getattr(resolution, "source", "")).startswith("config-")
+            start_selection = select_audio_input(
+                preferred_device_index=selection.device_index,
+                preferred_samplerate=preferred_samplerate,
+                preferred_channels=preferred_channels,
+                strict_device_index=strict,
+            )
+            fast_log(
+                "[TOGGLE] In-process retry selection: "
+                f"device={start_selection.device_index} samplerate={start_selection.samplerate} "
+                f"channels={start_selection.channels}"
+            )
+
+            recorder, t2 = _start_with_selection(start_selection)
+            t3 = time.monotonic()
+
+            try:
+                import sounddevice as sd  # type: ignore
+
+                name = str(sd.query_devices(int(start_selection.device_index)).get("name", ""))
+            except Exception:
+                name = ""
+            try:
+                write_device_cache(start_selection, device_name=name, source="auto")
+            except Exception:
+                pass
     except Exception:
         try:
-            recorder.cleanup()
+            if recorder:
+                recorder.cleanup()
         except Exception:
             pass
         try:
@@ -309,6 +358,8 @@ def _inprocess_start() -> None:
         except Exception:
             pass
         raise
+
+    assert recorder is not None
 
     _INPROCESS_RECORDING.clear()
     _INPROCESS_RECORDING.update(
@@ -321,8 +372,8 @@ def _inprocess_start() -> None:
 
     fast_log(
         "[TOGGLE] In-process recording started: "
-        f"device={selection.device_index} samplerate={selection.samplerate} channels={selection.channels} "
-        f"source={getattr(resolution, 'source', '')}"
+        f"device={start_selection.device_index} samplerate={start_selection.samplerate} "
+        f"channels={start_selection.channels} source={getattr(resolution, 'source', '')}"
     )
     fast_log(
         "[TOGGLE] In-process timing: "

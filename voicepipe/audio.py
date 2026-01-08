@@ -654,56 +654,29 @@ def resolve_audio_input_for_recording(
             raise RuntimeError(device_err)
         if device_index is None:
             raise RuntimeError("Configured device did not resolve to an input index")
-        selection = select_audio_input(
-            preferred_device_index=int(device_index),
-            preferred_samplerate=preferred_samplerate,
-            preferred_channels=preferred_channels,
-            strict_device_index=True,
-        )
+
+        samplerate = int(preferred_samplerate) if isinstance(preferred_samplerate, int) else 16000
+        channels = int(preferred_channels) if isinstance(preferred_channels, int) else 1
         return AudioInputResolution(
-            selection=selection,
+            selection=AudioInputSelection(
+                device_index=int(device_index),
+                samplerate=samplerate,
+                channels=channels,
+            ),
             source="config-env" if env_device_raw else "config-file",
-            device_name=_device_name(selection.device_index),
+            device_name=None,
         )
 
     cached = read_device_cache()
     if cached is not None:
-        selection = AudioInputSelection(
-            device_index=int(cached.device_index),
-            samplerate=int(cached.samplerate),
-            channels=int(cached.channels),
-        )
-        try:
-            _probe_input_stream(
-                device_index=int(selection.device_index),
-                samplerate=int(selection.samplerate),
-                channels=int(selection.channels),
-            )
-        except Exception:
-            selection = select_audio_input(
-                preferred_device_index=int(selection.device_index),
-                preferred_samplerate=preferred_samplerate,
-                preferred_channels=preferred_channels,
-                strict_device_index=False,
-            )
-
-        name = str(getattr(cached, "device_name", "") or "")
-        if not name or int(selection.device_index) != int(cached.device_index):
-            name = _device_name(selection.device_index)
-
-        if (
-            int(selection.device_index) != int(cached.device_index)
-            or int(selection.samplerate) != int(cached.samplerate)
-            or int(selection.channels) != int(cached.channels)
-        ):
-            try:
-                write_device_cache(selection, device_name=name, source=str(cached.source or "auto"))
-            except Exception:
-                pass
         return AudioInputResolution(
-            selection=selection,
+            selection=AudioInputSelection(
+                device_index=int(cached.device_index),
+                samplerate=int(cached.samplerate),
+                channels=int(cached.channels),
+            ),
             source="cache",
-            device_name=name,
+            device_name=str(getattr(cached, "device_name", "") or "") or None,
         )
 
     selection = select_audio_input(

@@ -75,13 +75,20 @@ def run_recording_subprocess() -> None:
         except Exception:
             pass
 
-        from voicepipe.audio import resolve_audio_input_for_recording
+        from voicepipe.audio import (
+            resolve_audio_input_for_recording,
+            select_audio_input,
+            write_device_cache,
+        )
         from voicepipe.config import get_audio_channels, get_audio_sample_rate
         from voicepipe.recorder import AudioRecorder
 
+        preferred_samplerate = get_audio_sample_rate()
+        preferred_channels = get_audio_channels()
+
         resolution = resolve_audio_input_for_recording(
-            preferred_samplerate=get_audio_sample_rate(),
-            preferred_channels=get_audio_channels(),
+            preferred_samplerate=preferred_samplerate,
+            preferred_channels=preferred_channels,
         )
         selection = resolution.selection
         recorder = AudioRecorder(
@@ -96,7 +103,44 @@ def run_recording_subprocess() -> None:
             f"samplerate={selection.samplerate} channels={selection.channels}"
         )
         _safe_stderr(f"Recording started (PID: {os.getpid()})...")
-        recorder.start_recording(output_file=audio_file)
+        try:
+            recorder.start_recording(output_file=audio_file)
+        except Exception as e:
+            _safe_stderr(f"Audio start failed ({resolution.source}): {e}")
+            try:
+                recorder.cleanup()
+            except Exception:
+                pass
+
+            strict = str(getattr(resolution, "source", "")).startswith("config-")
+            selection = select_audio_input(
+                preferred_device_index=selection.device_index,
+                preferred_samplerate=preferred_samplerate,
+                preferred_channels=preferred_channels,
+                strict_device_index=strict,
+            )
+            recorder = AudioRecorder(
+                device_index=selection.device_index,
+                sample_rate=selection.samplerate,
+                channels=selection.channels,
+                max_duration=None,
+            )
+            _safe_stderr(
+                "Audio input (retry): "
+                f"device={selection.device_index} samplerate={selection.samplerate} channels={selection.channels}"
+            )
+            recorder.start_recording(output_file=audio_file)
+
+            try:
+                import sounddevice as sd  # type: ignore
+
+                name = str(sd.query_devices(int(selection.device_index)).get("name", ""))
+            except Exception:
+                name = ""
+            try:
+                write_device_cache(selection, device_name=name, source="auto")
+            except Exception:
+                pass
 
         def _timeout_stop() -> None:
             _request("stop")

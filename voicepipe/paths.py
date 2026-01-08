@@ -39,7 +39,10 @@ def _ensure_private_dir(path: Path) -> None:
 def runtime_dir() -> Path:
     """Return the best-available per-user runtime base directory."""
     if is_windows():
-        return Path(tempfile.gettempdir())
+        local_appdata = getenv_path("LOCALAPPDATA")
+        if local_appdata:
+            return Path(local_appdata) / APP_NAME / "run"
+        return Path(tempfile.gettempdir()) / APP_NAME
 
     xdg_runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
     if xdg_runtime_dir:
@@ -60,21 +63,22 @@ def runtime_app_dir(*, create: bool = False) -> Path:
 
     # If we fell back to a global temp dir, make it per-user to avoid collisions.
     tmp_dir = Path(tempfile.gettempdir())
-    if base != tmp_dir:
+    if is_windows():
+        # `runtime_dir()` already includes an app-specific suffix on Windows.
+        path = base
+    elif base == tmp_dir:
+        path = tmp_dir / f"{APP_NAME}-{os.getuid()}"
+    else:
+        path = base / APP_NAME
+    if not is_windows() and base != tmp_dir:
         try:
             # If the runtime dir isn't writable/executable, fall back to /tmp.
             if not base.is_dir() or not os.access(base, os.W_OK | os.X_OK):
                 base = tmp_dir
+                path = tmp_dir / f"{APP_NAME}-{os.getuid()}"
         except Exception:
             base = tmp_dir
-
-    if base == tmp_dir:
-        if is_windows():
-            path = tmp_dir / APP_NAME
-        else:
             path = tmp_dir / f"{APP_NAME}-{os.getuid()}"
-    else:
-        path = base / APP_NAME
 
     if create:
         try:
@@ -99,13 +103,11 @@ def runtime_app_dir(*, create: bool = False) -> Path:
                     raise PermissionError("runtime dir not writable")
         except Exception:
             if is_windows():
-                # If %TEMP% is misconfigured/unwritable, fall back to LOCALAPPDATA.
-                local_appdata = getenv_path("LOCALAPPDATA")
-                if local_appdata:
-                    fallback = Path(local_appdata) / APP_NAME / "run"
-                    fallback.mkdir(parents=True, exist_ok=True, mode=_PRIVATE_DIR_MODE)
-                    _ensure_private_dir(fallback)
-                    path = fallback
+                # If LOCALAPPDATA is missing/misconfigured, fall back to TEMP.
+                fallback = tmp_dir / APP_NAME
+                fallback.mkdir(parents=True, exist_ok=True, mode=_PRIVATE_DIR_MODE)
+                _ensure_private_dir(fallback)
+                path = fallback
             else:
                 # If XDG_RUNTIME_DIR is misconfigured/unwritable, fall back to /tmp.
                 fallback = tmp_dir / f"{APP_NAME}-{os.getuid()}"

@@ -39,7 +39,14 @@ def _ensure_private_dir(path: Path) -> None:
 def runtime_dir() -> Path:
     """Return the best-available per-user runtime base directory."""
     if is_windows():
+        # Prefer LOCALAPPDATA when present, but don't rely on it (Scheduled Tasks
+        # and other non-shell launches can omit it).
         local_appdata = getenv_path("LOCALAPPDATA")
+        if not local_appdata:
+            try:
+                local_appdata = str(Path.home() / "AppData" / "Local")
+            except Exception:
+                local_appdata = None
         if local_appdata:
             return Path(local_appdata) / APP_NAME / "run"
         return Path(tempfile.gettempdir()) / APP_NAME

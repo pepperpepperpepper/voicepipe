@@ -102,6 +102,35 @@ def main() -> None:
     if not is_windows():
         raise SystemExit("voicepipe.win_hotkey is Windows-only")
 
+    # Emit a small diagnostic header early so we can debug Task Scheduler /
+    # environment issues from logs without an interactive console.
+    try:
+        import sys
+
+        import voicepipe  # noqa: F401
+
+        from voicepipe.config import env_file_path
+        from voicepipe.paths import runtime_app_dir
+
+        env_path = env_file_path()
+        try:
+            env_exists = bool(env_path.exists())
+        except Exception:
+            env_exists = False
+        _log(f"python={sys.executable}")
+        _log(f"voicepipe={getattr(voicepipe, '__file__', None)}")
+        _log(f"cwd={os.getcwd()}")
+        _log(f"env_file={env_path} exists={env_exists}")
+        _log(f"runtime_dir={runtime_app_dir(create=True)}")
+        _log(
+            "env: "
+            f"LOCALAPPDATA={'set' if os.environ.get('LOCALAPPDATA') else 'missing'} "
+            f"TEMP={'set' if os.environ.get('TEMP') else 'missing'} "
+            f"USERPROFILE={'set' if os.environ.get('USERPROFILE') else 'missing'}"
+        )
+    except Exception as e:
+        _log(f"diagnostics failed: {e}")
+
     import ctypes
     from ctypes import wintypes
 

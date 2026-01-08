@@ -276,8 +276,10 @@ def execute_toggle() -> None:
 
 
 def _inprocess_is_recording() -> bool:
-    rec = _INPROCESS_RECORDING.get("recorder")
-    return bool(rec is not None and getattr(rec, "recording", False))
+    # Treat the presence of a recorder object as authoritative state for the
+    # in-process hotkey runner. On some Windows environments, the `recording`
+    # flag can end up falsey even though the stream is still active.
+    return _INPROCESS_RECORDING.get("recorder") is not None
 
 
 def _inprocess_start() -> None:
@@ -364,6 +366,15 @@ def _inprocess_start() -> None:
 
     assert recorder is not None
 
+    prior = _INPROCESS_RECORDING.get("recorder")
+    if prior is not None:
+        try:
+            cleanup = getattr(prior, "cleanup", None)
+            if callable(cleanup):
+                cleanup()
+        except Exception:
+            pass
+
     _INPROCESS_RECORDING.clear()
     _INPROCESS_RECORDING.update(
         {
@@ -407,6 +418,20 @@ def _inprocess_stop() -> tuple[bytes, int, int, str]:
             pass
 
     if not audio_data:
+        # If `stop_recording()` returns None (e.g. if it thought recording was
+        # already stopped), try to salvage any frames captured so far.
+        try:
+            frames: list[bytes] = []
+            q = getattr(recorder, "audio_queue", None)
+            if q is not None:
+                while not q.empty():
+                    frames.append(q.get())
+            if frames:
+                audio_data = b"".join(frames)
+        except Exception:
+            audio_data = None
+
+    if not audio_data:
         raise RecordingError("No audio data recorded (in-process)")
 
     if not recording_id:
@@ -418,6 +443,16 @@ def execute_toggle_inprocess() -> None:
     """Windows hotkey path: record/stop in-process (avoids subprocess cold-start)."""
     try:
         fast_log("[TOGGLE] Starting toggle execution (in-process)")
+        try:
+            rec = _INPROCESS_RECORDING.get("recorder")
+            fast_log(
+                "[TOGGLE] In-process state: "
+                f"recorder={'set' if rec is not None else 'none'} "
+                f"recording={getattr(rec, 'recording', None) if rec is not None else None} "
+                f"stream={'set' if getattr(rec, 'stream', None) is not None else 'none'}"
+            )
+        except Exception:
+            pass
 
         if _inprocess_is_recording():
             from voicepipe.typing import (
@@ -533,7 +568,9 @@ def toggle_inprocess_main(argv: Optional[list[str]] = None) -> None:
 
     try:
         fast_log("[MAIN] Toggle command received (in-process)")
-        with PidFileLock(_lock_path(create_dir=True)):
+        lock_path = _lock_path(create_dir=True)
+        fast_log(f"[MAIN] Lock path: {lock_path}")
+        with PidFileLock(lock_path):
             fast_log("[MAIN] Lock acquired")
             if not check_debounce():
                 fast_log("[MAIN] Debounced, exiting")

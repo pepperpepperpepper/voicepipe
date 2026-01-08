@@ -289,7 +289,7 @@ def _windows_install_task(*, name: str, python_path: str | None, force: bool) ->
             "}",
             "$action = New-ScheduledTaskAction -Execute $pythonw -Argument '-m voicepipe.win_hotkey' -WorkingDirectory $env:USERPROFILE",
             "$trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId",
-            "$principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel LeastPrivilege",
+            "$principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited",
             "Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null",
             # Start now so Alt+F5 works immediately.
             "Start-ScheduledTask -TaskName $taskName | Out-Null",

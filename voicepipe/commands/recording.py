@@ -7,8 +7,11 @@ import logging
 import os
 import shutil
 import sys
+import tempfile
+import threading
 import time
 from pathlib import Path
+from typing import BinaryIO
 
 import click
 
@@ -19,14 +22,50 @@ from voicepipe.intent_router import route_intent
 from voicepipe.recording_backend import (
     AutoRecorderBackend,
     RecordingError,
-    SubprocessRecorderBackend,
 )
 from voicepipe.session import RecordingSession
-from voicepipe.transcription import transcribe_audio_file_result
+from voicepipe.transcription import transcribe_audio_file_result, transcribe_audio_fileobj_result
 from voicepipe.typing import type_text
 from voicepipe.platform import is_windows
 
 logger = logging.getLogger(__name__)
+
+
+def _emit_transcription(
+    result,
+    *,
+    type_: bool,
+    json_output: bool,
+) -> None:
+    intent = route_intent(result)
+    output_text = result.text
+    if intent.mode == "dictation" and intent.dictation_text is not None:
+        output_text = intent.dictation_text
+    elif intent.mode == "command" and intent.command_text is not None:
+        output_text = intent.command_text
+
+    payload = result.to_dict()
+    payload["intent"] = intent.to_dict()
+
+    strict_commands = os.environ.get("VOICEPIPE_COMMANDS_STRICT") == "1"
+    if strict_commands and intent.mode == "command":
+        if json_output:
+            click.echo(json.dumps(payload, ensure_ascii=False))
+        click.echo(
+            "Command-mode detected but commands are not implemented yet.",
+            err=True,
+        )
+        raise SystemExit(2)
+
+    if json_output:
+        click.echo(json.dumps(payload, ensure_ascii=False))
+    else:
+        click.echo(output_text)
+
+    if type_:
+        ok, err = type_text(output_text)
+        if not ok:
+            click.echo(f"Error typing text: {err}", err=True)
 
 
 def _transcribe_and_finalize(
@@ -59,35 +98,7 @@ def _transcribe_and_finalize(
         )
         transcription_ok = True
 
-        intent = route_intent(result)
-        output_text = result.text
-        if intent.mode == "dictation" and intent.dictation_text is not None:
-            output_text = intent.dictation_text
-        elif intent.mode == "command" and intent.command_text is not None:
-            output_text = intent.command_text
-
-        payload = result.to_dict()
-        payload["intent"] = intent.to_dict()
-
-        strict_commands = os.environ.get("VOICEPIPE_COMMANDS_STRICT") == "1"
-        if strict_commands and intent.mode == "command":
-            if json_output:
-                click.echo(json.dumps(payload, ensure_ascii=False))
-            click.echo(
-                "Command-mode detected but commands are not implemented yet.",
-                err=True,
-            )
-            raise SystemExit(2)
-
-        if json_output:
-            click.echo(json.dumps(payload, ensure_ascii=False))
-        else:
-            click.echo(output_text)
-
-        if type_:
-            ok, err = type_text(output_text)
-            if not ok:
-                click.echo(f"Error typing text: {err}", err=True)
+        _emit_transcription(result, type_=bool(type_), json_output=bool(json_output))
     except SystemExit:
         raise
     except Exception as e:
@@ -118,6 +129,60 @@ def _transcribe_and_finalize(
                 except Exception:
                     pass
                 click.echo(f"Preserved audio file: {audio_file}", err=True)
+
+
+def _transcribe_and_finalize_fileobj(
+    *,
+    wav_fh: BinaryIO,
+    wav_filename: str,
+    recording_id: str | None,
+    resolved_model: str,
+    language: str | None,
+    prompt: str | None,
+    temperature: float,
+    type_: bool,
+    json_output: bool,
+    source: str,
+) -> None:
+    transcription_ok = False
+    try:
+        result = transcribe_audio_fileobj_result(
+            wav_fh,
+            filename=wav_filename,
+            model=resolved_model,
+            language=language,
+            prompt=prompt,
+            temperature=float(temperature),
+            recording_id=recording_id,
+            source=source,
+        )
+        transcription_ok = True
+        _emit_transcription(result, type_=bool(type_), json_output=bool(json_output))
+    except SystemExit:
+        raise
+    except Exception as e:
+        error_msg = str(e)
+        click.echo(f"Error: {error_msg}", err=True)
+        if type_:
+            type_text(f"Error: {error_msg}")
+        raise SystemExit(1)
+    finally:
+        if transcription_ok:
+            return
+
+        try:
+            try:
+                wav_fh.seek(0)
+            except Exception:
+                pass
+            dst_dir = preserved_audio_dir(create=True)
+            rid = str(recording_id or int(time.time() * 1000))
+            dst = dst_dir / f"voicepipe_{rid}.wav"
+            with open(dst, "wb") as out:
+                shutil.copyfileobj(wav_fh, out)
+            click.echo(f"Preserved audio file: {dst}", err=True)
+        except Exception:
+            pass
 
 
 @click.command()
@@ -387,33 +452,205 @@ def dictate(
     json_: bool,
 ) -> None:
     """Record from the mic, transcribe, and optionally type (one command)."""
+    max_seconds = 300.0
     if seconds is None:
         if not sys.stdin.isatty():
             raise click.ClickException("No TTY available; pass --seconds to auto-stop")
     else:
         if float(seconds) <= 0:
             raise click.ClickException("--seconds must be > 0")
+        if float(seconds) > max_seconds:
+            raise click.ClickException(f"--seconds must be <= {max_seconds:.0f} (5 minutes)")
 
-    backend = AutoRecorderBackend() if prefer_daemon else SubprocessRecorderBackend()
-    started = False
+    # Keep daemon mode as the default on Unix (when enabled) for compatibility,
+    # but use an in-process (in-memory) recorder when the daemon is not desired
+    # or unavailable (notably on Windows).
+    if not is_windows() and prefer_daemon:
+        backend = AutoRecorderBackend()
+        started = False
+        try:
+            backend.start(device=device)
+            started = True
+
+            if seconds is None:
+                click.echo("Recording... press ENTER to stop (Ctrl+C to cancel).", err=True)
+                _ = sys.stdin.readline()
+            else:
+                click.echo(f"Recording for {float(seconds):.1f}s...", err=True)
+                time.sleep(float(seconds))
+
+            stop_result = backend.stop()
+            started = False
+            resolved_model = (model or get_transcribe_model()).strip()
+            _transcribe_and_finalize(
+                audio_file=stop_result.audio_file,
+                session=stop_result.session,
+                recording_id=getattr(stop_result, "recording_id", None),
+                resolved_model=resolved_model,
+                language=language,
+                prompt=prompt,
+                temperature=float(temperature),
+                type_=bool(type_),
+                json_output=bool(json_),
+                source="dictate",
+                prefer_daemon=True,
+            )
+            return
+        except KeyboardInterrupt:
+            if started:
+                try:
+                    backend.cancel()
+                except Exception:
+                    pass
+            raise SystemExit(130)
+        except RecordingError as e:
+            if started:
+                try:
+                    backend.cancel()
+                except Exception:
+                    pass
+            click.echo(f"Error: {e}", err=True)
+            raise SystemExit(1)
+        except SystemExit:
+            raise
+        except Exception as e:
+            if started:
+                try:
+                    backend.cancel()
+                except Exception:
+                    pass
+            click.echo(f"Error: {e}", err=True)
+            raise SystemExit(1)
+
+    # In-process path: record PCM in memory and send bytes to the STT backend.
+    if device is not None:
+        os.environ["VOICEPIPE_DEVICE"] = str(device)
+
+    from voicepipe.audio import resolve_audio_input_for_recording, select_audio_input, write_device_cache
+    from voicepipe.config import get_audio_channels, get_audio_sample_rate
+    from voicepipe.recorder import AudioRecorder
+    from voicepipe.wav import write_wav_pcm
+
+    preferred_samplerate = get_audio_sample_rate()
+    preferred_channels = get_audio_channels()
+
+    resolution = resolve_audio_input_for_recording(
+        preferred_samplerate=preferred_samplerate,
+        preferred_channels=preferred_channels,
+    )
+    selection = resolution.selection
+
+    recorder: AudioRecorder | None = None
     try:
-        backend.start(device=device)
-        started = True
+        try:
+            recorder = AudioRecorder(
+                device_index=selection.device_index,
+                sample_rate=selection.samplerate,
+                channels=selection.channels,
+                max_duration=None,
+            )
+            recorder.start_recording(output_file=None)
+        except Exception:
+            strict = str(getattr(resolution, "source", "")).startswith("config-")
+            selection = select_audio_input(
+                preferred_device_index=selection.device_index,
+                preferred_samplerate=preferred_samplerate,
+                preferred_channels=preferred_channels,
+                strict_device_index=strict,
+            )
+            recorder = AudioRecorder(
+                device_index=selection.device_index,
+                sample_rate=selection.samplerate,
+                channels=selection.channels,
+                max_duration=None,
+            )
+            recorder.start_recording(output_file=None)
+
+            try:
+                import sounddevice as sd  # type: ignore
+
+                name = str(sd.query_devices(int(selection.device_index)).get("name", ""))
+            except Exception:
+                name = ""
+            try:
+                write_device_cache(selection, device_name=name, source="auto")
+            except Exception:
+                pass
 
         if seconds is None:
-            click.echo("Recording... press ENTER to stop (Ctrl+C to cancel).", err=True)
-            _ = sys.stdin.readline()
+            click.echo(
+                f"Recording... press ENTER to stop (Ctrl+C to cancel). (Auto-stops after {max_seconds:.0f}s)",
+                err=True,
+            )
+            stop_event = threading.Event()
+
+            def _wait_enter() -> None:
+                try:
+                    _ = sys.stdin.readline()
+                finally:
+                    stop_event.set()
+
+            thread = threading.Thread(target=_wait_enter, daemon=True)
+            thread.start()
+            stop_event.wait(timeout=max_seconds)
+            if not stop_event.is_set():
+                click.echo(f"Auto-stopping after {max_seconds:.0f}s...", err=True)
         else:
             click.echo(f"Recording for {float(seconds):.1f}s...", err=True)
             time.sleep(float(seconds))
 
-        stop_result = backend.stop()
-        started = False
+        pcm = recorder.stop_recording()
+        if not pcm:
+            raise click.ClickException("No audio data recorded")
+    except KeyboardInterrupt:
+        try:
+            if recorder and recorder.recording:
+                recorder.stop_recording()
+        except Exception:
+            pass
+        try:
+            if recorder:
+                recorder.cleanup()
+        except Exception:
+            pass
+        raise SystemExit(130)
+    except SystemExit:
+        raise
+    except Exception as e:
+        try:
+            if recorder:
+                recorder.cleanup()
+        except Exception:
+            pass
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(1)
+    finally:
+        try:
+            if recorder:
+                recorder.cleanup()
+        except Exception:
+            pass
+
+    wav_fh = tempfile.SpooledTemporaryFile(max_size=20 * 1024 * 1024, mode="w+b")
+    try:
+        write_wav_pcm(
+            wav_fh,
+            pcm,
+            sample_rate=int(getattr(recorder, "rate", selection.samplerate) or selection.samplerate),
+            channels=int(getattr(recorder, "channels", selection.channels) or selection.channels),
+            sample_width=2,
+        )
+        try:
+            wav_fh.seek(0)
+        except Exception:
+            pass
+
         resolved_model = (model or get_transcribe_model()).strip()
-        _transcribe_and_finalize(
-            audio_file=stop_result.audio_file,
-            session=stop_result.session,
-            recording_id=getattr(stop_result, "recording_id", None),
+        recording_id = str(int(time.time() * 1000))
+        _transcribe_and_finalize_fileobj(
+            wav_fh=wav_fh,
+            wav_filename="audio.wav",
+            recording_id=recording_id,
             resolved_model=resolved_model,
             language=language,
             prompt=prompt,
@@ -421,33 +658,12 @@ def dictate(
             type_=bool(type_),
             json_output=bool(json_),
             source="dictate",
-            prefer_daemon=True,
         )
-    except KeyboardInterrupt:
-        if started:
-            try:
-                backend.cancel()
-            except Exception:
-                pass
-        raise SystemExit(130)
-    except RecordingError as e:
-        if started:
-            try:
-                backend.cancel()
-            except Exception:
-                pass
-        click.echo(f"Error: {e}", err=True)
-        raise SystemExit(1)
-    except SystemExit:
-        raise
-    except Exception as e:
-        if started:
-            try:
-                backend.cancel()
-            except Exception:
-                pass
-        click.echo(f"Error: {e}", err=True)
-        raise SystemExit(1)
+    finally:
+        try:
+            wav_fh.close()
+        except Exception:
+            pass
 
 
 @click.command()

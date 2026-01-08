@@ -72,6 +72,31 @@ class ElevenLabsTranscriber:
         temperature: float = 0.0,
         model: Optional[str] = None,
     ) -> str:
+        path = Path(audio_file)
+        if not path.exists():
+            raise RuntimeError(f"Audio file not found: {audio_file}")
+        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        return self.transcribe_bytes(
+            path.read_bytes(),
+            filename=path.name,
+            content_type=content_type,
+            language=language,
+            prompt=prompt,
+            temperature=float(temperature),
+            model=model,
+        )
+
+    def transcribe_bytes(
+        self,
+        audio_bytes: bytes,
+        *,
+        filename: str = "audio.wav",
+        content_type: str | None = None,
+        language: Optional[str] = None,
+        prompt: Optional[str] = None,
+        temperature: float = 0.0,
+        model: Optional[str] = None,
+    ) -> str:
         # ElevenLabs STT does not currently support prompt/temperature.
         del prompt, temperature
 
@@ -79,12 +104,7 @@ class ElevenLabsTranscriber:
         if not model_id:
             raise RuntimeError("ElevenLabs model_id is required")
 
-        path = Path(audio_file)
-        if not path.exists():
-            raise RuntimeError(f"Audio file not found: {audio_file}")
-
-        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-        audio_bytes = path.read_bytes()
+        resolved_type = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
 
         boundary = f"voicepipe-{uuid4().hex}"
         fields: dict[str, str] = {"model_id": model_id}
@@ -93,7 +113,7 @@ class ElevenLabsTranscriber:
 
         body = _encode_multipart_form(
             fields=fields,
-            files={"file": (path.name, audio_bytes, content_type)},
+            files={"file": (str(filename or "audio.wav"), audio_bytes, resolved_type)},
             boundary=boundary,
         )
 
@@ -138,4 +158,3 @@ class ElevenLabsTranscriber:
         if not isinstance(text, str):
             raise RuntimeError(f"ElevenLabs response missing text: {payload}")
         return text.strip()
-

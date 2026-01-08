@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import BinaryIO
 from typing import Optional
 
 from voicepipe.config import get_openai_api_key
@@ -42,6 +43,89 @@ Example: If speaker says "open quote hello close quote", transcribe as: "hello" 
         
         self.client = OpenAI(api_key=self.api_key)
         self.model = model
+
+    def _resolve_prompt(self, *, prompt: Optional[str], effective_model: str) -> Optional[str]:
+        if prompt is not None:
+            return prompt
+        if effective_model.startswith("gpt-4"):
+            return self.GPT4_PROMPT
+        if effective_model == "whisper-1":
+            return self.WHISPER_PROMPT
+        return None
+
+    def transcribe_file(
+        self,
+        file: object,
+        *,
+        language: Optional[str] = None,
+        prompt: Optional[str] = None,
+        temperature: float = 0.0,
+        model: Optional[str] = None,
+    ) -> str:
+        """Transcribe an uploaded audio file-like/bytes payload."""
+        effective_model = (model or self.model or "").strip()
+        if not effective_model:
+            raise RuntimeError("No model specified for transcription")
+
+        resolved_prompt = self._resolve_prompt(prompt=prompt, effective_model=effective_model)
+
+        params = {
+            "model": effective_model,
+            "file": file,
+            "response_format": "text",
+            "temperature": float(temperature),
+        }
+        if language:
+            params["language"] = language
+        if resolved_prompt:
+            params["prompt"] = resolved_prompt
+
+        transcript = self.client.audio.transcriptions.create(**params)
+        if isinstance(transcript, str):
+            return transcript.strip()
+        return str(transcript).strip()
+
+    def transcribe_bytes(
+        self,
+        audio_bytes: bytes,
+        *,
+        filename: str = "audio.wav",
+        content_type: str = "audio/wav",
+        language: Optional[str] = None,
+        prompt: Optional[str] = None,
+        temperature: float = 0.0,
+        model: Optional[str] = None,
+    ) -> str:
+        """Transcribe audio bytes (WAV/MP3/etc) without writing to disk."""
+        file_param = (filename, audio_bytes, content_type)
+        return self.transcribe_file(
+            file_param,
+            language=language,
+            prompt=prompt,
+            temperature=float(temperature),
+            model=model,
+        )
+
+    def transcribe_fileobj(
+        self,
+        fh: BinaryIO,
+        *,
+        filename: str = "audio.wav",
+        content_type: str = "audio/wav",
+        language: Optional[str] = None,
+        prompt: Optional[str] = None,
+        temperature: float = 0.0,
+        model: Optional[str] = None,
+    ) -> str:
+        """Transcribe a file-like object without requiring a filesystem path."""
+        file_param = (filename, fh, content_type)
+        return self.transcribe_file(
+            file_param,
+            language=language,
+            prompt=prompt,
+            temperature=float(temperature),
+            model=model,
+        )
     
     def transcribe(
         self,
@@ -53,34 +137,14 @@ Example: If speaker says "open quote hello close quote", transcribe as: "hello" 
     ) -> str:
         """Transcribe an audio file using Whisper API."""
         try:
-            effective_model = (model or self.model or "").strip()
-            if not effective_model:
-                raise RuntimeError("No model specified for transcription")
-
-            with open(audio_file, 'rb') as f:
-                params = {
-                    "model": effective_model,
-                    "file": f,
-                    "response_format": "text",
-                    "temperature": temperature,
-                }
-                
-                if language:
-                    params["language"] = language
-                
-                # Use appropriate default prompt if none provided
-                if prompt is None:
-                    if effective_model.startswith('gpt-4'):
-                        prompt = self.GPT4_PROMPT
-                    elif effective_model == 'whisper-1':
-                        prompt = self.WHISPER_PROMPT
-                
-                if prompt:
-                    params["prompt"] = prompt
-                
-                transcript = self.client.audio.transcriptions.create(**params)
-                
-            return transcript.strip()
+            with open(audio_file, "rb") as f:
+                return self.transcribe_file(
+                    f,
+                    language=language,
+                    prompt=prompt,
+                    temperature=float(temperature),
+                    model=model,
+                )
             
         except Exception as e:
             raise RuntimeError(f"Transcription failed: {e}")

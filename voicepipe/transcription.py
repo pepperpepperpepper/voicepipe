@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import socket
 from pathlib import Path
-from typing import Optional
+from typing import BinaryIO, Optional
 
 from voicepipe.config import get_daemon_mode, get_transcribe_backend
 from voicepipe.platform import is_windows
@@ -213,6 +213,111 @@ def transcribe_audio_file(
     )
 
 
+def transcribe_audio_bytes(
+    audio_bytes: bytes,
+    *,
+    filename: str,
+    model: str,
+    language: Optional[str] = None,
+    prompt: Optional[str] = None,
+    temperature: float = 0.0,
+) -> str:
+    """Transcribe audio bytes without requiring an on-disk temp file."""
+    backend, resolved_model, _model_for_daemon = _resolve_backend_and_model(model)
+
+    if backend == "openai":
+        from voicepipe.transcriber import WhisperTranscriber
+
+        try:
+            transcriber = WhisperTranscriber(model=resolved_model)
+            return transcriber.transcribe_bytes(
+                audio_bytes,
+                filename=str(filename or "audio.wav"),
+                language=language,
+                prompt=prompt,
+                temperature=float(temperature),
+                model=resolved_model,
+            )
+        except Exception as e:
+            raise TranscriptionError(str(e)) from e
+
+    if backend == "elevenlabs":
+        from voicepipe.elevenlabs_transcriber import ElevenLabsTranscriber
+
+        try:
+            transcriber = ElevenLabsTranscriber(model_id=resolved_model)
+            return transcriber.transcribe_bytes(
+                audio_bytes,
+                filename=str(filename or "audio.wav"),
+                language=language,
+                prompt=prompt,
+                temperature=float(temperature),
+                model=resolved_model,
+            )
+        except Exception as e:
+            raise TranscriptionError(str(e)) from e
+
+    raise TranscriptionError(
+        "Unsupported transcription backend.\n\n"
+        "Set VOICEPIPE_TRANSCRIBE_BACKEND to one of: openai, elevenlabs\n"
+        "Or prefix the model like: openai:whisper-1 or elevenlabs:scribe_v1\n"
+        f"Got backend={backend!r} model={model!r}"
+    )
+
+
+def transcribe_audio_fileobj(
+    fh: BinaryIO,
+    *,
+    filename: str,
+    model: str,
+    language: Optional[str] = None,
+    prompt: Optional[str] = None,
+    temperature: float = 0.0,
+) -> str:
+    """Transcribe audio from a file-like object without a filesystem path."""
+    backend, resolved_model, _model_for_daemon = _resolve_backend_and_model(model)
+
+    if backend == "openai":
+        from voicepipe.transcriber import WhisperTranscriber
+
+        try:
+            transcriber = WhisperTranscriber(model=resolved_model)
+            return transcriber.transcribe_fileobj(
+                fh,
+                filename=str(filename or "audio.wav"),
+                language=language,
+                prompt=prompt,
+                temperature=float(temperature),
+                model=resolved_model,
+            )
+        except Exception as e:
+            raise TranscriptionError(str(e)) from e
+
+    if backend == "elevenlabs":
+        from voicepipe.elevenlabs_transcriber import ElevenLabsTranscriber
+
+        try:
+            audio_bytes = fh.read()
+            transcriber = ElevenLabsTranscriber(model_id=resolved_model)
+            return transcriber.transcribe_bytes(
+                audio_bytes,
+                filename=str(filename or "audio.wav"),
+                language=language,
+                prompt=prompt,
+                temperature=float(temperature),
+                model=resolved_model,
+            )
+        except Exception as e:
+            raise TranscriptionError(str(e)) from e
+
+    raise TranscriptionError(
+        "Unsupported transcription backend.\n\n"
+        "Set VOICEPIPE_TRANSCRIBE_BACKEND to one of: openai, elevenlabs\n"
+        "Or prefix the model like: openai:whisper-1 or elevenlabs:scribe_v1\n"
+        f"Got backend={backend!r} model={model!r}"
+    )
+
+
 def transcribe_audio_file_result(
     audio_file: str,
     *,
@@ -240,6 +345,72 @@ def transcribe_audio_file_result(
         backend=backend,
         model=resolved_model,
         audio_file=audio_file,
+        recording_id=recording_id,
+        source=source,
+        warnings=[],
+    )
+
+
+def transcribe_audio_bytes_result(
+    audio_bytes: bytes,
+    *,
+    filename: str,
+    model: str,
+    language: Optional[str] = None,
+    prompt: Optional[str] = None,
+    temperature: float = 0.0,
+    recording_id: str | None = None,
+    source: str | None = None,
+) -> TranscriptionResult:
+    """Transcribe audio bytes and return a structured result (no audio_file path)."""
+    backend, resolved_model, _model_for_daemon = _resolve_backend_and_model(model)
+    resolved_model = resolved_model or model
+    text = transcribe_audio_bytes(
+        audio_bytes,
+        filename=filename,
+        model=model,
+        language=language,
+        prompt=prompt,
+        temperature=float(temperature),
+    )
+    return TranscriptionResult(
+        text=text,
+        backend=backend,
+        model=resolved_model,
+        audio_file=None,
+        recording_id=recording_id,
+        source=source,
+        warnings=[],
+    )
+
+
+def transcribe_audio_fileobj_result(
+    fh: BinaryIO,
+    *,
+    filename: str,
+    model: str,
+    language: Optional[str] = None,
+    prompt: Optional[str] = None,
+    temperature: float = 0.0,
+    recording_id: str | None = None,
+    source: str | None = None,
+) -> TranscriptionResult:
+    """Transcribe a file-like object and return a structured result (no audio_file path)."""
+    backend, resolved_model, _model_for_daemon = _resolve_backend_and_model(model)
+    resolved_model = resolved_model or model
+    text = transcribe_audio_fileobj(
+        fh,
+        filename=filename,
+        model=model,
+        language=language,
+        prompt=prompt,
+        temperature=float(temperature),
+    )
+    return TranscriptionResult(
+        text=text,
+        backend=backend,
+        model=resolved_model,
+        audio_file=None,
         recording_id=recording_id,
         source=source,
         warnings=[],

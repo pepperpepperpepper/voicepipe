@@ -9,13 +9,14 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
-from typing import Optional
+from typing import BinaryIO, Optional
 
 from voicepipe.config import get_transcribe_model, load_environment
 from voicepipe.locks import LockHeld, PidFileLock
-from voicepipe.paths import audio_tmp_dir, logs_dir, preserved_audio_dir, runtime_app_dir
+from voicepipe.paths import logs_dir, preserved_audio_dir, runtime_app_dir
 from voicepipe.platform import is_linux, is_macos, is_windows
 from voicepipe.recording_backend import AutoRecorderBackend, RecordingError
 
@@ -146,6 +147,24 @@ def send_transcribe_request(audio_file: str) -> str:
         return ""
 
 
+def send_transcribe_request_fileobj(fh: BinaryIO, *, filename: str) -> str:
+    """Transcribe audio from a file-like object without writing a temp WAV."""
+    # Keep imports out of the `start` hot path.
+    from voicepipe.transcription import transcribe_audio_fileobj
+
+    try:
+        model = get_transcribe_model()
+        return transcribe_audio_fileobj(
+            fh,
+            filename=str(filename or "audio.wav"),
+            model=model,
+            temperature=0.0,
+        )
+    except Exception as e:
+        fast_log(f"[TRANSCRIBE] Error: {e}")
+        return ""
+
+
 def check_debounce() -> bool:
     """Check if enough time has passed since last invocation."""
     try:
@@ -262,9 +281,6 @@ def _inprocess_is_recording() -> bool:
 
 
 def _inprocess_start() -> None:
-    import os
-    import tempfile
-
     from voicepipe.audio import resolve_audio_input_for_recording, select_audio_input, write_device_cache
     from voicepipe.config import get_audio_channels, get_audio_sample_rate
     from voicepipe.recorder import AudioRecorder
@@ -274,14 +290,6 @@ def _inprocess_start() -> None:
 
     preferred_samplerate = get_audio_sample_rate()
     preferred_channels = get_audio_channels()
-
-    tmp_dir = audio_tmp_dir(create=True)
-    fd, audio_file = tempfile.mkstemp(
-        suffix=".wav",
-        prefix="voicepipe_",
-        dir=str(tmp_dir),
-    )
-    os.close(fd)
 
     t0 = time.monotonic()
     resolution = resolve_audio_input_for_recording(
@@ -352,11 +360,6 @@ def _inprocess_start() -> None:
                 recorder.cleanup()
         except Exception:
             pass
-        try:
-            if os.path.exists(audio_file):
-                os.unlink(audio_file)
-        except Exception:
-            pass
         raise
 
     assert recorder is not None
@@ -365,8 +368,8 @@ def _inprocess_start() -> None:
     _INPROCESS_RECORDING.update(
         {
             "recorder": recorder,
-            "audio_file": str(audio_file),
             "resolution_source": str(getattr(resolution, "source", "")),
+            "recording_id": str(int(time.time() * 1000)),
         }
     )
 
@@ -381,17 +384,18 @@ def _inprocess_start() -> None:
     )
 
 
-def _inprocess_stop() -> str:
-    import os
-
+def _inprocess_stop() -> tuple[bytes, int, int, str]:
     from voicepipe.recorder import AudioRecorder
 
     recorder = _INPROCESS_RECORDING.get("recorder")
-    audio_file = str(_INPROCESS_RECORDING.get("audio_file") or "")
+    recording_id = str(_INPROCESS_RECORDING.get("recording_id") or "")
     _INPROCESS_RECORDING.clear()
 
-    if not isinstance(recorder, AudioRecorder) or not audio_file:
+    if not isinstance(recorder, AudioRecorder):
         raise RecordingError("No in-process recording in progress")
+
+    samplerate = int(getattr(recorder, "rate", 0) or 0)
+    channels = int(getattr(recorder, "channels", 0) or 0)
 
     audio_data: bytes | None = None
     try:
@@ -405,10 +409,9 @@ def _inprocess_stop() -> str:
     if not audio_data:
         raise RecordingError("No audio data recorded (in-process)")
 
-    recorder.save_to_file(audio_data, audio_file)
-    if not os.path.exists(audio_file) or os.path.getsize(audio_file) <= 0:
-        raise RecordingError("In-process recording did not produce an audio file")
-    return audio_file
+    if not recording_id:
+        recording_id = str(int(time.time() * 1000))
+    return audio_data, samplerate, channels, recording_id
 
 
 def execute_toggle_inprocess() -> None:
@@ -433,49 +436,79 @@ def execute_toggle_inprocess() -> None:
                     fast_log("[TOGGLE] Target window: (unknown)")
 
             fast_log("[TOGGLE] Recording active (in-process), stopping...")
-            audio_file = _inprocess_stop()
-            fast_log(f"[TOGGLE] Audio file: {audio_file}")
+            pcm, samplerate, channels, recording_id = _inprocess_stop()
 
-            text = send_transcribe_request(audio_file)
-            transcription_ok = False
-            if text:
-                cleaned_text = text.rstrip()
-                fast_log(f"[TOGGLE] Transcription: {cleaned_text}")
-                try:
-                    (_runtime_dir(create=True) / "voicepipe-last.txt").write_text(
-                        cleaned_text + "\n", encoding="utf-8"
-                    )
-                except Exception:
-                    pass
-                typed_ok, type_err = type_text(
-                    cleaned_text,
-                    window_id=target_window,
-                    backend=typing_backend,
+            from voicepipe.wav import pcm_duration_s, write_wav_pcm
+
+            duration_s = pcm_duration_s(pcm, sample_rate=samplerate, channels=channels)
+            if duration_s is not None and duration_s < 0.2:
+                fast_log(
+                    f"[TRANSCRIBE] Skipping transcription (audio too short: {duration_s:.3f}s)"
                 )
-                if not typed_ok:
-                    fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
-                transcription_ok = True
-            else:
-                fast_log("[TOGGLE] No transcription returned")
+                return
 
-            if transcription_ok:
+            if samplerate <= 0 or channels <= 0:
+                raise RecordingError(
+                    f"Invalid audio params (in-process): samplerate={samplerate} channels={channels}"
+                )
+
+            wav_fh = tempfile.SpooledTemporaryFile(max_size=20 * 1024 * 1024, mode="w+b")
+            try:
                 try:
-                    if os.path.exists(audio_file):
-                        os.unlink(audio_file)
-                        fast_log(f"[TOGGLE] Cleaned up audio file: {audio_file}")
+                    write_wav_pcm(
+                        wav_fh,
+                        pcm,
+                        sample_rate=samplerate,
+                        channels=channels,
+                        sample_width=2,
+                    )
+                    wav_fh.seek(0)
+                    text = send_transcribe_request_fileobj(wav_fh, filename="audio.wav")
+                except Exception as e:
+                    fast_log(f"[TRANSCRIBE] Error: {e}")
+                    text = ""
+
+                transcription_ok = False
+                if text:
+                    cleaned_text = text.rstrip()
+                    fast_log(f"[TOGGLE] Transcription: {cleaned_text}")
+                    try:
+                        (_runtime_dir(create=True) / "voicepipe-last.txt").write_text(
+                            cleaned_text + "\n", encoding="utf-8"
+                        )
+                    except Exception:
+                        pass
+                    typed_ok, type_err = type_text(
+                        cleaned_text,
+                        window_id=target_window,
+                        backend=typing_backend,
+                    )
+                    if not typed_ok:
+                        fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
+                    transcription_ok = True
+                else:
+                    fast_log("[TOGGLE] No transcription returned")
+
+                if not transcription_ok:
+                    try:
+                        try:
+                            wav_fh.seek(0)
+                        except Exception:
+                            pass
+                        dst_dir = preserved_audio_dir(create=True)
+                        dst = dst_dir / f"voicepipe_{recording_id}.wav"
+                        with open(dst, "wb") as out:
+                            shutil.copyfileobj(wav_fh, out)
+                        fast_log(f"[TOGGLE] Preserved audio file: {dst}")
+                    except Exception as e:
+                        fast_log(f"[TOGGLE] Failed to preserve audio: {e}")
+
+                return
+            finally:
+                try:
+                    wav_fh.close()
                 except Exception:
                     pass
-            else:
-                try:
-                    dst_dir = preserved_audio_dir(create=True)
-                    dst = dst_dir / Path(audio_file).name
-                    shutil.move(audio_file, dst)
-                    audio_file = str(dst)
-                except Exception:
-                    pass
-                fast_log(f"[TOGGLE] Preserved audio file: {audio_file}")
-
-            return
 
         fast_log("[TOGGLE] Starting recording (in-process)...")
         _inprocess_start()

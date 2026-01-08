@@ -542,8 +542,8 @@ def toggle_inprocess_main(argv: Optional[list[str]] = None) -> None:
             execute_toggle_inprocess()
             fast_log("[MAIN] Toggle completed")
             return
-    except LockHeld:
-        fast_log("[MAIN] Lock already held, exiting")
+    except LockHeld as e:
+        fast_log(f"[MAIN] {e}")
         raise SystemExit(0)
 
 
@@ -581,8 +581,8 @@ def main(argv: Optional[list[str]] = None) -> None:
                 execute_toggle()
                 fast_log("[MAIN] Toggle completed")
                 return
-        except LockHeld:
-            fast_log("[MAIN] Lock already held, exiting")
+        except LockHeld as e:
+            fast_log(f"[MAIN] {e}")
             # Another instance is running, exit silently
             raise SystemExit(0)
 

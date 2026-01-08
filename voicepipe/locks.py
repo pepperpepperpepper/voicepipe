@@ -9,9 +9,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
-from voicepipe.platform import pid_is_running
+from voicepipe.platform import is_windows
 
 
 class LockHeld(RuntimeError):
@@ -31,14 +31,54 @@ def _read_pid(path: Path) -> Optional[int]:
         return None
 
 
+def _lock_info(path: Path) -> Tuple[Optional[int], str]:
+    """Best-effort (pid, raw_first_line) for messaging."""
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return None, ""
+    first = (raw.splitlines()[0].strip() if raw else "").strip()
+    try:
+        return int(first), first
+    except Exception:
+        return None, first
+
+
+def _try_lock_fd(fd: int) -> None:
+    """Lock 1 byte at offset 0 (non-blocking)."""
+    os.lseek(fd, 0, os.SEEK_SET)
+    if is_windows():
+        import msvcrt
+
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_fd(fd: int) -> None:
+    os.lseek(fd, 0, os.SEEK_SET)
+    if is_windows():
+        import msvcrt
+
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(fd, fcntl.LOCK_UN)
+
+
 @dataclass
 class PidFileLock:
-    """A tiny PID-file lock based on atomic file creation.
+    """A tiny PID-file lock based on OS-level file locking.
 
     Implementation notes:
-    - Uses `os.open(..., O_CREAT|O_EXCL)` so it works on Windows and Unix.
-    - Keeps the FD open for the duration of the lock.
-    - Attempts a single stale-lock recovery when the stored PID is not running.
+    - Uses `fcntl.flock` on Unix, `msvcrt.locking` on Windows.
+    - Keeps the FD open for the duration of the lock (releases on process exit).
+    - Writes the PID to the lock file for debugging only.
     """
 
     path: Path
@@ -55,36 +95,45 @@ class PidFileLock:
         if self.fd is not None:
             return
 
-        flags = os.O_CREAT | os.O_EXCL | os.O_RDWR
+        flags = os.O_CREAT | os.O_RDWR
         mode = 0o600
 
-        for attempt in range(2):
+        try:
+            fd = os.open(str(self.path), flags, mode)
+        except Exception as e:
+            raise LockHeld(f"could not open lock file {self.path}: {e}") from e
+
+        try:
             try:
-                fd = os.open(str(self.path), flags, mode)
-            except FileExistsError:
-                pid = _read_pid(self.path)
-                if pid is not None and not pid_is_running(int(pid)):
-                    try:
-                        self.path.unlink()
-                    except Exception:
-                        pass
-                    continue
-                raise LockHeld(f"lock is held: {self.path}")
+                _try_lock_fd(fd)
+            except Exception as e:
+                pid, first = _lock_info(self.path)
+                detail = f" pid={pid}" if pid is not None else (f" first_line={first!r}" if first else "")
+                raise LockHeld(f"lock is held: {self.path}{detail}") from e
 
             self.fd = fd
+
+            # Best-effort: store PID for debugging.
             try:
+                os.ftruncate(fd, 0)
                 os.write(fd, f"{os.getpid()}\n".encode("utf-8", errors="replace"))
             except Exception:
-                # Best-effort; lock ownership doesn't depend on PID contents.
                 pass
-            return
-
-        raise LockHeld(f"lock is held: {self.path}")
+        except Exception:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+            raise
 
     def release(self) -> None:
         fd = self.fd
         self.fd = None
         if fd is not None:
+            try:
+                _unlock_fd(fd)
+            except Exception:
+                pass
             try:
                 os.close(fd)
             except Exception:
@@ -93,4 +142,3 @@ class PidFileLock:
             self.path.unlink()
         except Exception:
             pass
-

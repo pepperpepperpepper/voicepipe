@@ -118,9 +118,16 @@ $py = Resolve-PythonExecutable -Preferred $Python
 $verText = Require-SupportedPython -PythonExe $py
 Write-Host "Using Python: $py ($verText)"
 
-Write-Host "Installing Voicepipe (pip --user) ..."
+Write-Host "Installing Voicepipe ..."
 & $py -m pip install -U pip
-& $py -m pip install --user .
+& $py -m pip install -U .
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "pip install failed (exit=$LASTEXITCODE). Retrying with --user ..."
+  & $py -m pip install --user -U .
+  if ($LASTEXITCODE -ne 0) {
+    throw "pip install failed (exit=$LASTEXITCODE)"
+  }
+}
 
 if (-not $SkipApiKeysImport) {
   $apiKeysPath = Join-Path $env:USERPROFILE ".api-keys"
@@ -143,4 +150,3 @@ Write-Host "  voicepipe-fast toggle"
 Write-Host ""
 Write-Host "Windows hotkey log:"
 Write-Host "  %LOCALAPPDATA%\\voicepipe\\logs\\voicepipe-fast.log"
-

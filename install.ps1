@@ -73,10 +73,10 @@ function Import-ApiKeysIfPresent {
   $raw = (Get-Content -Raw -Path $ApiKeysPath -ErrorAction SilentlyContinue)
   if (-not $raw) { return }
 
-  $openai = [regex]::Match($raw, "(?m)^export\\s+OPENAI_API_KEY=(.*)$").Groups[1].Value.Trim()
-  $eleven = [regex]::Match($raw, "(?m)^export\\s+ELEVENLABS_API_KEY=(.*)$").Groups[1].Value.Trim()
+  $openai = [regex]::Match($raw, '(?m)^export\s+OPENAI_API_KEY\s*=\s*(.*)$').Groups[1].Value.Trim()
+  $eleven = [regex]::Match($raw, '(?m)^export\s+ELEVENLABS_API_KEY\s*=\s*(.*)$').Groups[1].Value.Trim()
   if (-not $eleven) {
-    $eleven = [regex]::Match($raw, "(?m)^export\\s+XI_API_KEY=(.*)$").Groups[1].Value.Trim()
+    $eleven = [regex]::Match($raw, '(?m)^export\s+XI_API_KEY\s*=\s*(.*)$').Groups[1].Value.Trim()
   }
 
   if (-not $openai -and -not $eleven) {
@@ -97,10 +97,10 @@ function Import-ApiKeysIfPresent {
   $out = $existing.TrimEnd("`r", "`n")
   if ($out) { $out += "`n" }
 
-  if ($openai -and ($existing -notmatch "(?m)^\\s*OPENAI_API_KEY\\s*=")) {
+  if ($openai -and ($existing -notmatch '(?m)^\s*OPENAI_API_KEY\s*=')) {
     $out += "OPENAI_API_KEY=$openai`n"
   }
-  if ($eleven -and ($existing -notmatch "(?m)^\\s*(ELEVENLABS_API_KEY|XI_API_KEY)\\s*=")) {
+  if ($eleven -and ($existing -notmatch '(?m)^\s*(ELEVENLABS_API_KEY|XI_API_KEY)\s*=')) {
     $out += "ELEVENLABS_API_KEY=$eleven`n"
   }
 

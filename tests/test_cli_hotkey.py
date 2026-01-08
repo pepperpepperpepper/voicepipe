@@ -20,12 +20,14 @@ def _combined_cli_output(result) -> str:
 
 
 def test_hotkey_install_errors_on_non_macos(isolated_home: Path) -> None:
-    if sys.platform == "darwin":
-        pytest.skip("macOS-only behavior")
+    if sys.platform in ("darwin", "win32"):
+        pytest.skip("Hotkey install is supported on macOS and Windows")
     runner = CliRunner()
     result = runner.invoke(main, ["hotkey", "install"])
     assert result.exit_code != 0
-    assert "macos" in _combined_cli_output(result).lower()
+    combined = _combined_cli_output(result).lower()
+    assert "macos" in combined
+    assert "windows" in combined
 
 
 def test_hotkey_install_writes_workflow(monkeypatch, isolated_home: Path) -> None:
@@ -65,4 +67,3 @@ def test_hotkey_uninstall_removes_workflow(monkeypatch, isolated_home: Path) -> 
     result = runner.invoke(main, ["hotkey", "uninstall", "--name", "Voicepipe Toggle"])
     assert result.exit_code == 0, result.output
     assert not wf_dir.exists()
-

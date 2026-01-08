@@ -83,11 +83,11 @@ def test_config_migrate_from_legacy_file_deletes_legacy_when_requested(
 
 
 def test_config_edit_uses_editor_env_var(isolated_home: Path, tmp_path: Path, monkeypatch) -> None:
-    # Fake editor that just exits 0.
-    editor = tmp_path / "editor"
-    editor.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    os.chmod(editor, 0o700)
-    monkeypatch.setenv("EDITOR", str(editor))
+    # Fake editor that just exits 0 (run via the current Python interpreter so it
+    # works cross-platform, including Windows).
+    editor_script = tmp_path / "editor.py"
+    editor_script.write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
+    monkeypatch.setenv("EDITOR", f'\"{sys.executable}\" \"{editor_script}\"')
 
     runner = CliRunner()
     result = runner.invoke(main, ["config", "edit"])

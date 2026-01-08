@@ -37,13 +37,32 @@ def _log(message: str) -> None:
 
 def _run_toggle() -> None:
     try:
-        from voicepipe.fast import toggle_main
+        from voicepipe.fast import toggle_inprocess_main
 
-        toggle_main()
+        toggle_inprocess_main()
     except SystemExit:
         return
     except Exception as e:
         _log(f"toggle failed: {e}")
+
+
+def _prewarm_audio() -> None:
+    try:
+        from voicepipe.audio import resolve_audio_input
+        from voicepipe.config import get_audio_channels, get_audio_sample_rate
+
+        res = resolve_audio_input(
+            preferred_samplerate=get_audio_sample_rate(),
+            preferred_channels=get_audio_channels(),
+        )
+        sel = res.selection
+        _log(
+            "audio prewarmed: "
+            f"device={sel.device_index} samplerate={sel.samplerate} channels={sel.channels} "
+            f"source={getattr(res, 'source', '')}"
+        )
+    except Exception as e:
+        _log(f"audio prewarm failed: {e}")
 
 
 def _parse_hotkey() -> tuple[int, int]:
@@ -92,6 +111,8 @@ def main() -> None:
         raise SystemExit(message)
 
     _log("registered Alt+F5")
+
+    threading.Thread(target=_prewarm_audio, daemon=True).start()
 
     msg = wintypes.MSG()
     try:

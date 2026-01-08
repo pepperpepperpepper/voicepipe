@@ -15,7 +15,7 @@ from typing import Optional
 
 from voicepipe.config import get_transcribe_model, load_environment
 from voicepipe.locks import LockHeld, PidFileLock
-from voicepipe.paths import logs_dir, preserved_audio_dir, runtime_app_dir
+from voicepipe.paths import audio_tmp_dir, logs_dir, preserved_audio_dir, runtime_app_dir
 from voicepipe.platform import is_linux, is_macos, is_windows
 from voicepipe.recording_backend import AutoRecorderBackend, RecordingError
 
@@ -23,6 +23,7 @@ from voicepipe.recording_backend import AutoRecorderBackend, RecordingError
 DEBOUNCE_MS = 500  # milliseconds
 
 _LOG_FH = None
+_INPROCESS_RECORDING: dict[str, object] = {}
 
 
 def _runtime_dir(*, create: bool) -> Path:
@@ -127,8 +128,13 @@ def send_transcribe_request(audio_file: str) -> str:
     """Transcribe audio using daemon when available."""
     # Keep imports out of the `start` hot path.
     from voicepipe.transcription import transcribe_audio_file
+    from voicepipe.wav import read_wav_duration_s
 
     try:
+        duration_s = read_wav_duration_s(audio_file)
+        if duration_s is not None and duration_s < 0.2:
+            fast_log(f"[TRANSCRIBE] Skipping transcription (audio too short: {duration_s:.3f}s)")
+            return ""
         model = get_transcribe_model()
         return transcribe_audio_file(
             audio_file,
@@ -248,6 +254,205 @@ def execute_toggle() -> None:
     except Exception as e:
         fast_log(f"[TOGGLE] Unexpected error: {e}")
         raise
+
+
+def _inprocess_is_recording() -> bool:
+    rec = _INPROCESS_RECORDING.get("recorder")
+    return bool(rec is not None and getattr(rec, "recording", False))
+
+
+def _inprocess_start() -> None:
+    import os
+    import tempfile
+
+    from voicepipe.audio import resolve_audio_input
+    from voicepipe.config import get_audio_channels, get_audio_sample_rate
+    from voicepipe.recorder import AudioRecorder
+
+    if _inprocess_is_recording():
+        return
+
+    tmp_dir = audio_tmp_dir(create=True)
+    fd, audio_file = tempfile.mkstemp(
+        suffix=".wav",
+        prefix="voicepipe_",
+        dir=str(tmp_dir),
+    )
+    os.close(fd)
+
+    resolution = resolve_audio_input(
+        preferred_samplerate=get_audio_sample_rate(),
+        preferred_channels=get_audio_channels(),
+    )
+    selection = resolution.selection
+    recorder = AudioRecorder(
+        device_index=selection.device_index,
+        sample_rate=selection.samplerate,
+        channels=selection.channels,
+        max_duration=None,
+    )
+
+    try:
+        recorder.start_recording(output_file=None)
+    except Exception:
+        try:
+            recorder.cleanup()
+        except Exception:
+            pass
+        try:
+            if os.path.exists(audio_file):
+                os.unlink(audio_file)
+        except Exception:
+            pass
+        raise
+
+    _INPROCESS_RECORDING.clear()
+    _INPROCESS_RECORDING.update(
+        {
+            "recorder": recorder,
+            "audio_file": str(audio_file),
+            "resolution_source": str(getattr(resolution, "source", "")),
+        }
+    )
+
+    fast_log(
+        "[TOGGLE] In-process recording started: "
+        f"device={selection.device_index} samplerate={selection.samplerate} channels={selection.channels} "
+        f"source={getattr(resolution, 'source', '')}"
+    )
+
+
+def _inprocess_stop() -> str:
+    import os
+
+    from voicepipe.recorder import AudioRecorder
+
+    recorder = _INPROCESS_RECORDING.get("recorder")
+    audio_file = str(_INPROCESS_RECORDING.get("audio_file") or "")
+    _INPROCESS_RECORDING.clear()
+
+    if not isinstance(recorder, AudioRecorder) or not audio_file:
+        raise RecordingError("No in-process recording in progress")
+
+    audio_data: bytes | None = None
+    try:
+        audio_data = recorder.stop_recording()
+    finally:
+        try:
+            recorder.cleanup()
+        except Exception:
+            pass
+
+    if not audio_data:
+        raise RecordingError("No audio data recorded (in-process)")
+
+    recorder.save_to_file(audio_data, audio_file)
+    if not os.path.exists(audio_file) or os.path.getsize(audio_file) <= 0:
+        raise RecordingError("In-process recording did not produce an audio file")
+    return audio_file
+
+
+def execute_toggle_inprocess() -> None:
+    """Windows hotkey path: record/stop in-process (avoids subprocess cold-start)."""
+    try:
+        fast_log("[TOGGLE] Starting toggle execution (in-process)")
+
+        if _inprocess_is_recording():
+            from voicepipe.typing import (
+                get_active_window_id,
+                resolve_typing_backend,
+                type_text,
+            )
+
+            typing_backend = resolve_typing_backend()
+            target_window = None
+            if typing_backend.supports_window_id:
+                target_window = get_active_window_id()
+                if target_window:
+                    fast_log(f"[TOGGLE] Target window: {target_window}")
+                else:
+                    fast_log("[TOGGLE] Target window: (unknown)")
+
+            fast_log("[TOGGLE] Recording active (in-process), stopping...")
+            audio_file = _inprocess_stop()
+            fast_log(f"[TOGGLE] Audio file: {audio_file}")
+
+            text = send_transcribe_request(audio_file)
+            transcription_ok = False
+            if text:
+                cleaned_text = text.rstrip()
+                fast_log(f"[TOGGLE] Transcription: {cleaned_text}")
+                try:
+                    (_runtime_dir(create=True) / "voicepipe-last.txt").write_text(
+                        cleaned_text + "\n", encoding="utf-8"
+                    )
+                except Exception:
+                    pass
+                typed_ok, type_err = type_text(
+                    cleaned_text,
+                    window_id=target_window,
+                    backend=typing_backend,
+                )
+                if not typed_ok:
+                    fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
+                transcription_ok = True
+            else:
+                fast_log("[TOGGLE] No transcription returned")
+
+            if transcription_ok:
+                try:
+                    if os.path.exists(audio_file):
+                        os.unlink(audio_file)
+                        fast_log(f"[TOGGLE] Cleaned up audio file: {audio_file}")
+                except Exception:
+                    pass
+            else:
+                try:
+                    dst_dir = preserved_audio_dir(create=True)
+                    dst = dst_dir / Path(audio_file).name
+                    shutil.move(audio_file, dst)
+                    audio_file = str(dst)
+                except Exception:
+                    pass
+                fast_log(f"[TOGGLE] Preserved audio file: {audio_file}")
+
+            return
+
+        fast_log("[TOGGLE] Starting recording (in-process)...")
+        _inprocess_start()
+
+    except RecordingError as e:
+        fast_log(f"[TOGGLE] Recording error: {e}")
+        raise SystemExit(1)
+    except Exception as e:
+        fast_log(f"[TOGGLE] Unexpected error: {e}")
+        raise
+
+
+def toggle_inprocess_main(argv: Optional[list[str]] = None) -> None:
+    """Entry point for the Windows hotkey runner.
+
+    This behaves like `voicepipe-fast toggle`, but keeps recording in-process to
+    avoid subprocess cold-start latency.
+    """
+    del argv
+
+    load_environment(load_cwd_dotenv=False)
+
+    try:
+        fast_log("[MAIN] Toggle command received (in-process)")
+        with PidFileLock(_lock_path(create_dir=True)):
+            fast_log("[MAIN] Lock acquired")
+            if not check_debounce():
+                fast_log("[MAIN] Debounced, exiting")
+                raise SystemExit(0)
+            fast_log("[MAIN] Executing toggle (in-process)")
+            execute_toggle_inprocess()
+            fast_log("[MAIN] Toggle completed")
+            return
+    except LockHeld:
+        fast_log("[MAIN] Lock already held, exiting")
+        raise SystemExit(0)
 
 
 def main(argv: Optional[list[str]] = None) -> None:

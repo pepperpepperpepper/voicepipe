@@ -40,8 +40,24 @@ def runtime_dir() -> Path:
     """Return the best-available per-user runtime base directory."""
     if is_windows():
         # Prefer LOCALAPPDATA when present, but don't rely on it (Scheduled Tasks
-        # and other non-shell launches can omit it).
+        # and other non-shell launches can omit it). We intentionally avoid
+        # `Path.home()` as the primary fallback because it can be slow/blocked
+        # early in logon on some systems.
         local_appdata = getenv_path("LOCALAPPDATA")
+        if not local_appdata:
+            roaming = getenv_path("APPDATA")
+            if roaming:
+                try:
+                    local_appdata = str(Path(roaming).parent / "Local")
+                except Exception:
+                    local_appdata = None
+        if not local_appdata:
+            user_profile = getenv_path("USERPROFILE")
+            if user_profile:
+                try:
+                    local_appdata = str(Path(user_profile) / "AppData" / "Local")
+                except Exception:
+                    local_appdata = None
         if not local_appdata:
             try:
                 local_appdata = str(Path.home() / "AppData" / "Local")

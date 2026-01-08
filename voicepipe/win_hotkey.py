@@ -121,13 +121,13 @@ def main() -> None:
         _log(f"voicepipe={getattr(voicepipe, '__file__', None)}")
         _log(f"cwd={os.getcwd()}")
         _log(f"env_file={env_path} exists={env_exists}")
-        _log(f"runtime_dir={runtime_app_dir(create=True)}")
         _log(
             "env: "
             f"LOCALAPPDATA={'set' if os.environ.get('LOCALAPPDATA') else 'missing'} "
             f"TEMP={'set' if os.environ.get('TEMP') else 'missing'} "
             f"USERPROFILE={'set' if os.environ.get('USERPROFILE') else 'missing'}"
         )
+        _log(f"runtime_dir={runtime_app_dir(create=False)}")
     except Exception as e:
         _log(f"diagnostics failed: {e}")
 

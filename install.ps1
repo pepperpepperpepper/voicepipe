@@ -60,7 +60,7 @@ function Require-SupportedPython {
     throw "Could not determine Python version (got: $verText)"
   }
   if ($ver.Major -ne 3 -or $ver.Minor -lt 9 -or $ver.Minor -gt 12) {
-    throw "Unsupported Python version $verText. Voicepipe currently supports Python 3.9–3.12."
+    throw "Unsupported Python version $verText. Voicepipe currently supports Python 3.9-3.12."
   }
   return $verText
 }

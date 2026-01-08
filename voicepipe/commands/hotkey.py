@@ -204,6 +204,11 @@ def _windows_shortcut_path(name: str) -> Path:
     return _windows_startup_dir() / safe
 
 
+def _windows_task_name(name: str) -> str:
+    safe = (name or "").strip() or "Voicepipe Toggle"
+    return safe[:-4] if safe.lower().endswith(".lnk") else safe
+
+
 def _windows_pythonw(python_path: str | None) -> str:
     raw = (python_path or sys.executable).strip() or sys.executable
     try:
@@ -262,6 +267,51 @@ def _windows_install_shortcut(*, name: str, python_path: str | None, force: bool
     return shortcut_path
 
 
+def _windows_install_task(*, name: str, python_path: str | None, force: bool) -> str:
+    """Install a Scheduled Task to start the hotkey runner at logon.
+
+    This is generally more reliable than a Startup-folder shortcut in managed /
+    locked-down environments.
+    """
+    task_name = _windows_task_name(name)
+    pythonw = _windows_pythonw(python_path)
+
+    ps = "\n".join(
+        [
+            "$ErrorActionPreference = 'Stop'",
+            f"$taskName = {_ps_quote(task_name)}",
+            f"$pythonw = {_ps_quote(pythonw)}",
+            "$userId = \"$env:USERDOMAIN\\$env:USERNAME\"",
+            "if (-not $userId -or $userId -eq '\\\\') { $userId = $env:USERNAME }",
+            "$existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue",
+            "if ($existing -and -not " + ("$true" if force else "$false") + ") {",
+            "  throw \"Scheduled Task already exists: $taskName (use --force to overwrite)\"",
+            "}",
+            "$action = New-ScheduledTaskAction -Execute $pythonw -Argument '-m voicepipe.win_hotkey' -WorkingDirectory $env:USERPROFILE",
+            "$trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId",
+            "$principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType InteractiveToken -RunLevel LeastPrivilege",
+            "Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null",
+            # Start now so Alt+F5 works immediately.
+            "Start-ScheduledTask -TaskName $taskName | Out-Null",
+        ]
+    )
+
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError as e:
+        raise click.ClickException("powershell not found (required for Windows task install)") from e
+    except subprocess.CalledProcessError as e:
+        detail = ((e.stderr or "") + "\n" + (e.stdout or "")).strip()
+        raise click.ClickException(f"Failed to create Scheduled Task: {detail}") from e
+
+    return task_name
+
+
 @hotkey_group.command("install")
 @click.option("--name", default="Voicepipe Toggle", show_default=True)
 @click.option(
@@ -270,13 +320,29 @@ def _windows_install_shortcut(*, name: str, python_path: str | None, force: bool
     default=None,
     help="Python executable to use (default: current interpreter)",
 )
+@click.option(
+    "--method",
+    type=click.Choice(["task", "startup"], case_sensitive=False),
+    default="task",
+    show_default=True,
+    help="Install via Scheduled Task (recommended) or Startup folder shortcut.",
+)
 @click.option("--force", is_flag=True, help="Overwrite existing workflow if present")
-def hotkey_install(name: str, python_path: str | None, force: bool) -> None:
-    """Install a hotkey helper (macOS Quick Action or Windows Startup shortcut)."""
+def hotkey_install(name: str, python_path: str | None, method: str, force: bool) -> None:
+    """Install a hotkey helper (macOS Quick Action or Windows Alt+F5)."""
     if is_windows():
-        shortcut_path = _windows_install_shortcut(name=name, python_path=python_path, force=force)
-        click.echo(f"Installed Startup shortcut: {shortcut_path}")
-        click.echo("Next: log out/in (or reboot), then press Alt+F5.")
+        if method.lower() == "startup":
+            shortcut_path = _windows_install_shortcut(
+                name=name, python_path=python_path, force=force
+            )
+            click.echo(f"Installed Startup shortcut: {shortcut_path}")
+            click.echo("Next: log out/in (or reboot), then press Alt+F5.")
+            click.echo("Log: %LOCALAPPDATA%\\voicepipe\\logs\\voicepipe-fast.log")
+            return
+
+        task_name = _windows_install_task(name=name, python_path=python_path, force=force)
+        click.echo(f"Installed Scheduled Task: {task_name}")
+        click.echo("Started it (Alt+F5 should work immediately).")
         click.echo("Log: %LOCALAPPDATA%\\voicepipe\\logs\\voicepipe-fast.log")
         return
 
@@ -315,15 +381,39 @@ def hotkey_install(name: str, python_path: str | None, force: bool) -> None:
 def hotkey_uninstall(name: str) -> None:
     """Remove the installed hotkey helper."""
     if is_windows():
+        task_name = _windows_task_name(name)
+        ps = "\n".join(
+            [
+                "$ErrorActionPreference = 'Stop'",
+                f"$taskName = {_ps_quote(task_name)}",
+                "$task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue",
+                "if ($task) {",
+                "  Unregister-ScheduledTask -TaskName $taskName -Confirm:$false | Out-Null",
+                "  Write-Output \"Removed Scheduled Task: $taskName\"",
+                "} else {",
+                "  Write-Output \"No Scheduled Task found: $taskName\"",
+                "}",
+            ]
+        )
+        try:
+            subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except Exception:
+            # Best-effort; continue to shortcut cleanup.
+            pass
+
         shortcut_path = _windows_shortcut_path(name)
         try:
             shortcut_path.unlink()
+            click.echo(f"Removed Startup shortcut: {shortcut_path}")
         except FileNotFoundError:
             click.echo(f"No Startup shortcut found at: {shortcut_path}")
-            return
         except Exception as e:
             raise click.ClickException(f"Failed to remove {shortcut_path}: {e}") from e
-        click.echo(f"Removed: {shortcut_path}")
         return
 
     if not is_macos():

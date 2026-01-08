@@ -24,6 +24,31 @@ macOS-specific gaps: paths, typing, hotkey binding, and service messaging.
 - Prefer **stdlib** (avoid `pyobjc`) unless it materially reduces bugs/maintenance.
 - Assume **no shell init**: Shortcuts/Automator/LaunchAgents won’t load `.zshrc`/`.bashrc`.
 
+## Appendix — Windows hotkey / agent architecture notes
+
+Constraint: on Windows, a global hotkey (e.g. Alt+F5) requires a resident process to register/listen for it.
+
+Current behavior (Windows hotkey runner):
+- Startup launches `pythonw -m voicepipe.win_hotkey` and it stays running.
+- First use after boot/login may be slower (cold Python start/import + first audio init + first network/TLS).
+- Subsequent hotkey presses are faster because the runner is already warm.
+- There is no separate “Voicepipe server/daemon” in this design; the hotkey runner is the long-lived process.
+
+Better next-step architecture (recommended):
+- Split into two processes:
+  - **Hotkey shim**: tiny, stable process that only does `RegisterHotKey` and sends an IPC message.
+  - **Voicepipe agent**: long-lived per-user process that owns record/stop/transcribe/type and exposes an IPC API.
+- Use **Windows Named Pipes** for IPC (Windows-native; conceptually similar to Unix sockets on Linux).
+- Benefits: hotkey reliability (shim stays simple), agent can keep expensive state warm (audio selection/client),
+  and the agent can be restarted independently if it crashes.
+
+Alternative (most native + fastest cold start, but more work):
+- Ship a single native tray app (Rust/C++/.NET) that does hotkey + audio + STT + typing.
+
+Usually not recommended:
+- A Windows Service (Session 0) for this use-case; it cannot reliably interact with the user desktop for typing,
+  so you still need a per-user desktop component.
+
 ## Known macOS pitfalls (design for these explicitly)
 
 - **TCC permissions**:

@@ -138,7 +138,7 @@ if (-not $SkipApiKeysImport) {
 }
 
 if ($Hotkey) {
-  Write-Host "Installing hotkey startup shortcut (Alt+F5) ..."
+  Write-Host "Installing hotkey helper (Alt+F5) ..."
   & $py -m voicepipe.cli hotkey install --force
 }
 

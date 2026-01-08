@@ -265,7 +265,7 @@ def _inprocess_start() -> None:
     import os
     import tempfile
 
-    from voicepipe.audio import resolve_audio_input
+    from voicepipe.audio import resolve_audio_input_for_recording
     from voicepipe.config import get_audio_channels, get_audio_sample_rate
     from voicepipe.recorder import AudioRecorder
 
@@ -280,10 +280,12 @@ def _inprocess_start() -> None:
     )
     os.close(fd)
 
-    resolution = resolve_audio_input(
+    t0 = time.monotonic()
+    resolution = resolve_audio_input_for_recording(
         preferred_samplerate=get_audio_sample_rate(),
         preferred_channels=get_audio_channels(),
     )
+    t1 = time.monotonic()
     selection = resolution.selection
     recorder = AudioRecorder(
         device_index=selection.device_index,
@@ -293,7 +295,9 @@ def _inprocess_start() -> None:
     )
 
     try:
+        t2 = time.monotonic()
         recorder.start_recording(output_file=None)
+        t3 = time.monotonic()
     except Exception:
         try:
             recorder.cleanup()
@@ -319,6 +323,10 @@ def _inprocess_start() -> None:
         "[TOGGLE] In-process recording started: "
         f"device={selection.device_index} samplerate={selection.samplerate} channels={selection.channels} "
         f"source={getattr(resolution, 'source', '')}"
+    )
+    fast_log(
+        "[TOGGLE] In-process timing: "
+        f"resolve_ms={int((t1 - t0) * 1000)} start_ms={int((t3 - t2) * 1000)}"
     )
 
 

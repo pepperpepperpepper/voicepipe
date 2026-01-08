@@ -48,10 +48,10 @@ def _run_toggle() -> None:
 
 def _prewarm_audio() -> None:
     try:
-        from voicepipe.audio import resolve_audio_input
+        from voicepipe.audio import resolve_audio_input_for_recording
         from voicepipe.config import get_audio_channels, get_audio_sample_rate
 
-        res = resolve_audio_input(
+        res = resolve_audio_input_for_recording(
             preferred_samplerate=get_audio_sample_rate(),
             preferred_channels=get_audio_channels(),
         )

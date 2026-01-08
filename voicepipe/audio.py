@@ -625,3 +625,93 @@ def resolve_audio_input(
         source="fallback",
         device_name=name,
     )
+
+
+def resolve_audio_input_for_recording(
+    *,
+    preferred_samplerate: int | None = None,
+    preferred_channels: int | None = None,
+) -> AudioInputResolution:
+    """Resolve an audio input selection quickly for recording.
+
+    Unlike `resolve_audio_input`, this avoids the (slow) signal probe used for
+    auto-detect loudness. It prefers:
+      - explicit device config (VOICEPIPE_DEVICE / config file)
+      - cached device selection (device_cache.json), verified with a quick stream probe
+      - otherwise `select_audio_input`
+    """
+    load_environment()
+    _require_sounddevice()
+    assert sd is not None
+
+    apply_pulse_source_preference()
+
+    env_device_raw = (os.environ.get("VOICEPIPE_DEVICE") or "").strip()
+    device_pref = read_device_preference()
+    if device_pref is not None:
+        device_index, device_err = resolve_device_index(device_pref)
+        if device_err:
+            raise RuntimeError(device_err)
+        if device_index is None:
+            raise RuntimeError("Configured device did not resolve to an input index")
+        selection = select_audio_input(
+            preferred_device_index=int(device_index),
+            preferred_samplerate=preferred_samplerate,
+            preferred_channels=preferred_channels,
+            strict_device_index=True,
+        )
+        return AudioInputResolution(
+            selection=selection,
+            source="config-env" if env_device_raw else "config-file",
+            device_name=_device_name(selection.device_index),
+        )
+
+    cached = read_device_cache()
+    if cached is not None:
+        selection = AudioInputSelection(
+            device_index=int(cached.device_index),
+            samplerate=int(cached.samplerate),
+            channels=int(cached.channels),
+        )
+        try:
+            _probe_input_stream(
+                device_index=int(selection.device_index),
+                samplerate=int(selection.samplerate),
+                channels=int(selection.channels),
+            )
+        except Exception:
+            selection = select_audio_input(
+                preferred_device_index=int(selection.device_index),
+                preferred_samplerate=preferred_samplerate,
+                preferred_channels=preferred_channels,
+                strict_device_index=False,
+            )
+
+        name = str(getattr(cached, "device_name", "") or "")
+        if not name or int(selection.device_index) != int(cached.device_index):
+            name = _device_name(selection.device_index)
+
+        if (
+            int(selection.device_index) != int(cached.device_index)
+            or int(selection.samplerate) != int(cached.samplerate)
+            or int(selection.channels) != int(cached.channels)
+        ):
+            try:
+                write_device_cache(selection, device_name=name, source=str(cached.source or "auto"))
+            except Exception:
+                pass
+        return AudioInputResolution(
+            selection=selection,
+            source="cache",
+            device_name=name,
+        )
+
+    selection = select_audio_input(
+        preferred_samplerate=preferred_samplerate,
+        preferred_channels=preferred_channels,
+    )
+    return AudioInputResolution(
+        selection=selection,
+        source="fallback",
+        device_name=None,
+    )

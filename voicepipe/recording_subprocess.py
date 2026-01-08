@@ -75,11 +75,11 @@ def run_recording_subprocess() -> None:
         except Exception:
             pass
 
-        from voicepipe.audio import resolve_audio_input
+        from voicepipe.audio import resolve_audio_input_for_recording
         from voicepipe.config import get_audio_channels, get_audio_sample_rate
         from voicepipe.recorder import AudioRecorder
 
-        resolution = resolve_audio_input(
+        resolution = resolve_audio_input_for_recording(
             preferred_samplerate=get_audio_sample_rate(),
             preferred_channels=get_audio_channels(),
         )

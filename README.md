@@ -26,7 +26,7 @@ pipx install voicepipe
 
 ### From source with systemd services (recommended for performance)
 ```bash
-git clone https://github.com/yourusername/voicepipe.git
+git clone https://github.com/pepperpepperpepper/voicepipe.git
 cd voicepipe
 ./install.sh
 
@@ -67,6 +67,15 @@ Install it to start at login:
 voicepipe hotkey install
 ```
 
+### From source (Windows)
+
+```powershell
+choco install -y git python312
+git clone https://github.com/pepperpepperpepper/voicepipe.git
+cd voicepipe
+.\install.ps1 -Hotkey
+```
+
 ### AutoHotkey (optional)
 
 ```ahk
@@ -92,7 +101,7 @@ If `voicepipe-fast` is not on PATH, use `python -m voicepipe.fast toggle` instea
 
 ## Dependencies
 
-- Python 3.9+
+- Python 3.9–3.12
 - sounddevice (for recording; requires PortAudio)
 - OpenAI Python SDK (for the OpenAI backend)
 - Click (for CLI)

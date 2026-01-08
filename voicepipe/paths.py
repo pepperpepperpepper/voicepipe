@@ -78,8 +78,25 @@ def runtime_app_dir(*, create: bool = False) -> Path:
 
     if create:
         try:
+            existed = path.exists()
+        except Exception:
+            existed = True
+
+        try:
             path.mkdir(parents=True, exist_ok=True, mode=_PRIVATE_DIR_MODE)
             _ensure_private_dir(path)
+
+            # Windows quirk: stale directories under %TEMP% can be created by an
+            # elevated process and end up not writable by the normal desktop
+            # token, causing hotkey tools to fail with EACCES when creating the
+            # lock/session files. Detect this and fall back.
+            if is_windows() and existed:
+                try:
+                    fd, probe = tempfile.mkstemp(prefix="voicepipe_probe_", dir=str(path))
+                    os.close(fd)
+                    os.unlink(probe)
+                except Exception:
+                    raise PermissionError("runtime dir not writable")
         except Exception:
             if is_windows():
                 # If %TEMP% is misconfigured/unwritable, fall back to LOCALAPPDATA.

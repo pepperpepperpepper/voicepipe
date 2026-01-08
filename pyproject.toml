@@ -27,7 +27,7 @@ packages = [{include = "voicepipe"}]
 include = ["voicepipe/assets/*"]
 
 [tool.poetry.dependencies]
-python = "^3.9"
+python = ">=3.9,<3.13"
 click = "^8.0"
 openai = "^1.0"
 python-dotenv = "^1.0"

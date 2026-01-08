@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 import sys
 from pathlib import Path
 
@@ -94,6 +95,25 @@ def test_read_env_file_parses_basic_dotenv(tmp_path: Path, monkeypatch) -> None:
     assert values["FOO"] == "bar"
     assert values["QUOTED"] == "baz"
     assert values["EMPTY"] == ""
+
+
+def test_read_env_file_strips_utf8_bom(tmp_path: Path, monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+    env_path = config.env_file_path()
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Simulate a UTF-8 BOM file (common when created with PowerShell/Notepad).
+    env_path.write_bytes(b"\xef\xbb\xbfOPENAI_API_KEY=from-bom\n")
+
+    values = config.read_env_file(env_path)
+    assert values["OPENAI_API_KEY"] == "from-bom"
+
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    config.load_environment(load_cwd_dotenv=False)
+    assert os.environ.get("OPENAI_API_KEY") == "from-bom"
 
 
 def test_ensure_env_file_creates_template(tmp_path: Path, monkeypatch) -> None:

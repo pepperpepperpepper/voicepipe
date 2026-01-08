@@ -144,21 +144,24 @@ def load_environment(*, load_cwd_dotenv: bool = True) -> None:
         return
     _ENV_LOADED = True
 
-    if load_dotenv is None:
-        return
-
+    # Load the canonical env file ourselves so we don't depend on python-dotenv
+    # (and so UTF-8 BOM files created by PowerShell/Notepad still work).
     try:
         env_path = env_file_path()
-        if env_path.exists():
-            load_dotenv(dotenv_path=env_path, override=False)
+        values = read_env_file(env_path)
+        for key, value in values.items():
+            if key in os.environ:
+                continue
+            os.environ[key] = value
     except Exception:
         pass
 
     if load_cwd_dotenv:
-        try:
-            load_dotenv(override=False)
-        except Exception:
-            pass
+        if load_dotenv is not None:
+            try:
+                load_dotenv(override=False)
+            except Exception:
+                pass
 
 
 def get_transcribe_model(
@@ -409,7 +412,8 @@ def read_env_file(path: Optional[Path] = None) -> dict[str, str]:
 
     out: dict[str, str] = {}
     try:
-        for raw in env_path.read_text(encoding="utf-8").splitlines():
+        # Use utf-8-sig so UTF-8 BOM files (common on Windows) are accepted.
+        for raw in env_path.read_text(encoding="utf-8-sig").splitlines():
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue
@@ -488,7 +492,8 @@ def upsert_env_var(
     lines: list[str] = []
     if env_path.exists():
         try:
-            lines = env_path.read_text(encoding="utf-8").splitlines(True)
+            # Accept UTF-8 BOM files (common on Windows) and preserve newlines.
+            lines = env_path.read_text(encoding="utf-8-sig").splitlines(True)
         except Exception:
             lines = []
 

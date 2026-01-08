@@ -23,6 +23,7 @@ def test_pidfilelock_allows_existing_file(tmp_path: Path) -> None:
 def test_pidfilelock_blocks_other_process(tmp_path: Path) -> None:
     lock_path = tmp_path / "voicepipe.lock"
     ready_path = tmp_path / "ready.txt"
+    script_path = tmp_path / "child_lock.py"
     repo_root = Path(__file__).resolve().parents[1]
 
     code = textwrap.dedent(
@@ -44,12 +45,13 @@ def test_pidfilelock_blocks_other_process(tmp_path: Path) -> None:
             sys.stdin.read(1)
         """
     ).strip()
+    script_path.write_text(code, encoding="utf-8")
 
     env = dict(os.environ)
     env["PYTHONPATH"] = f"{repo_root}{os.pathsep}{env.get('PYTHONPATH', '')}"
 
     proc = subprocess.Popen(
-        [sys.executable, "-c", code, str(lock_path), str(ready_path)],
+        [sys.executable, str(script_path), str(lock_path), str(ready_path)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -87,4 +89,3 @@ def test_pidfilelock_blocks_other_process(tmp_path: Path) -> None:
 
     with PidFileLock(lock_path):
         pass
-

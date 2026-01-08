@@ -82,7 +82,7 @@ class PidFileLock:
     """
 
     path: Path
-    fd: int | None = None
+    fd: Optional[int] = None
 
     def __enter__(self) -> "PidFileLock":
         self.acquire()

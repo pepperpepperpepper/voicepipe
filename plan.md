@@ -11,6 +11,19 @@ macOS-specific gaps: paths, typing, hotkey binding, and service messaging.
 - macOS: `voicepipe config …` + `voicepipe setup` use macOS-appropriate paths and messaging.
 - Offline `pytest` suite passes on macOS CI by default (no mic/network/API keys required).
 
+## Top Priority (P0) — In-memory audio capture/transcribe
+
+Goal: eliminate temp WAV file I/O on hotkey/dictation paths while staying cross-platform (no tmpfs requirement on Windows).
+
+Approach:
+- Record audio into memory (PCM/WAV bytes) and send bytes to STT (OpenAI supports `file=bytes` / tuple upload).
+- Use `tempfile.SpooledTemporaryFile` as a safety valve (RAM-first, auto-spill to disk for large recordings).
+- Keep a debug fallback to “preserve last audio to disk” on transcription failure.
+
+Acceptance:
+- 5-minute recordings work without requiring tmpfs on Windows/macOS/Linux.
+- Hotkey path avoids writing temp WAVs in the common case.
+
 ## Non-goals (initial)
 
 - Shipping a signed `.app` bundle or menubar UI by default.

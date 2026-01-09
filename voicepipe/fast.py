@@ -29,6 +29,8 @@ _INPROCESS_RECORDING: dict[str, object] = {}
 _RUNTIME_DIR: Path | None = None
 _RUNTIME_DIR_CREATED = False
 _RUNTIME_DIR_LOCK = threading.Lock()
+_INPROCESS_TOGGLE_LOCK = threading.Lock()
+_INPROCESS_LAST_DEBOUNCE_MS: int | None = None
 
 
 def _runtime_dir(*, create: bool) -> Path:
@@ -588,17 +590,31 @@ def toggle_inprocess_main(argv: Optional[list[str]] = None) -> None:
 
     try:
         fast_log("[MAIN] Toggle command received (in-process)")
-        lock_path = _lock_path(create_dir=True)
-        fast_log(f"[MAIN] Lock path: {lock_path}")
-        with PidFileLock(lock_path):
-            fast_log("[MAIN] Lock acquired")
-            if not check_debounce():
-                fast_log("[MAIN] Debounced, exiting")
+        if not _INPROCESS_TOGGLE_LOCK.acquire(blocking=False):
+            fast_log("[MAIN] Toggle lock already held, exiting")
+            raise SystemExit(0)
+        try:
+            global _INPROCESS_LAST_DEBOUNCE_MS
+            now = int(time.time() * 1000)
+            last = _INPROCESS_LAST_DEBOUNCE_MS
+            if last is not None and now - int(last) < DEBOUNCE_MS:
+                fast_log(
+                    f"[DEBOUNCE] Skipping (in-process) - last: {last}, current: {now}, "
+                    f"diff: {now - int(last)}ms"
+                )
                 raise SystemExit(0)
+            _INPROCESS_LAST_DEBOUNCE_MS = now
+            fast_log(f"[DEBOUNCE] Allowing (in-process) - current: {now}")
+
             fast_log("[MAIN] Executing toggle (in-process)")
             execute_toggle_inprocess()
             fast_log("[MAIN] Toggle completed")
             return
+        finally:
+            try:
+                _INPROCESS_TOGGLE_LOCK.release()
+            except Exception:
+                pass
     except LockHeld as e:
         fast_log(f"[MAIN] {e}")
         raise SystemExit(0)

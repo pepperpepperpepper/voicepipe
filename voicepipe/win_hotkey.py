@@ -141,6 +141,13 @@ def main() -> None:
     import ctypes
     from ctypes import wintypes
 
+    # Some Python builds omit less-common wintypes aliases. Keep our usage
+    # defensive so the hotkey runner still works.
+    LRESULT = getattr(wintypes, "LRESULT", ctypes.c_ssize_t)
+    HHOOK = getattr(wintypes, "HHOOK", wintypes.HANDLE)
+    HINSTANCE = getattr(wintypes, "HINSTANCE", wintypes.HANDLE)
+    HMODULE = getattr(wintypes, "HMODULE", wintypes.HANDLE)
+
     user32 = ctypes.WinDLL("user32", use_last_error=True)
 
     user32.RegisterHotKey.argtypes = [wintypes.HWND, wintypes.INT, wintypes.UINT, wintypes.UINT]
@@ -154,18 +161,18 @@ def main() -> None:
     user32.SetWindowsHookExW.argtypes = [
         ctypes.c_int,
         ctypes.c_void_p,
-        wintypes.HINSTANCE,
+        HINSTANCE,
         wintypes.DWORD,
     ]
-    user32.SetWindowsHookExW.restype = wintypes.HHOOK
-    user32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
+    user32.SetWindowsHookExW.restype = HHOOK
+    user32.UnhookWindowsHookEx.argtypes = [HHOOK]
     user32.UnhookWindowsHookEx.restype = wintypes.BOOL
-    user32.CallNextHookEx.argtypes = [wintypes.HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM]
-    user32.CallNextHookEx.restype = wintypes.LRESULT
+    user32.CallNextHookEx.argtypes = [HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM]
+    user32.CallNextHookEx.restype = LRESULT
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
-    kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+    kernel32.GetModuleHandleW.restype = HMODULE
 
     try:
         modifiers, vk = _parse_hotkey()
@@ -190,7 +197,7 @@ def main() -> None:
                 ("dwExtraInfo", ULONG_PTR),
             ]
 
-        HOOKPROC = ctypes.WINFUNCTYPE(wintypes.LRESULT, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+        HOOKPROC = ctypes.WINFUNCTYPE(LRESULT, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
 
         def _proc(nCode: int, wParam: int, lParam: int) -> int:  # type: ignore[override]
             if nCode == 0 and int(wParam) in (WM_KEYDOWN, WM_SYSKEYDOWN):

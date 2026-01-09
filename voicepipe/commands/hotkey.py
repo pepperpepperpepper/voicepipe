@@ -341,6 +341,17 @@ def hotkey_install(name: str, python_path: str | None, method: str, force: bool)
             return
 
         task_name = _windows_install_task(name=name, python_path=python_path, force=force)
+        if force:
+            # Avoid duplicate hotkey runners at login: if an older Startup-folder
+            # shortcut exists, remove it so only the Scheduled Task remains.
+            shortcut_path = _windows_shortcut_path(name)
+            try:
+                shortcut_path.unlink()
+            except FileNotFoundError:
+                pass
+            except Exception:
+                # Best-effort only; keep install successful.
+                pass
         click.echo(f"Installed Scheduled Task: {task_name}")
         click.echo("Started it (Alt+F5 should work immediately).")
         click.echo("Log: %LOCALAPPDATA%\\voicepipe\\logs\\voicepipe-fast.log")

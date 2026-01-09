@@ -19,8 +19,15 @@ from voicepipe.platform import is_windows
 WM_HOTKEY: Final[int] = 0x0312
 MOD_ALT: Final[int] = 0x0001
 VK_F5: Final[int] = 0x74
+VK_MENU: Final[int] = 0x12  # Alt
+
+WH_KEYBOARD_LL: Final[int] = 13
+WM_KEYDOWN: Final[int] = 0x0100
+WM_SYSKEYDOWN: Final[int] = 0x0104
 
 _TOGGLE_FN = None
+_HOOK_HANDLE = None
+_HOOK_PROC = None
 
 
 def _hotkey_id() -> int:
@@ -141,22 +148,83 @@ def main() -> None:
     user32.UnregisterHotKey.argtypes = [wintypes.HWND, wintypes.INT]
     user32.UnregisterHotKey.restype = wintypes.BOOL
 
+    user32.GetAsyncKeyState.argtypes = [wintypes.INT]
+    user32.GetAsyncKeyState.restype = wintypes.SHORT
+
+    user32.SetWindowsHookExW.argtypes = [
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.HINSTANCE,
+        wintypes.DWORD,
+    ]
+    user32.SetWindowsHookExW.restype = wintypes.HHOOK
+    user32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
+    user32.UnhookWindowsHookEx.restype = wintypes.BOOL
+    user32.CallNextHookEx.argtypes = [wintypes.HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM]
+    user32.CallNextHookEx.restype = wintypes.LRESULT
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+    kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+
     try:
         modifiers, vk = _parse_hotkey()
     except SystemExit as e:
         _log(str(e))
         raise
     hotkey_id = _hotkey_id()
-    if not user32.RegisterHotKey(None, hotkey_id, modifiers, vk):
-        err = ctypes.get_last_error()
-        message = (
-            f"Failed to register hotkey (Alt+F5). Error={err}. "
-            "Is something else already using this hotkey?"
-        )
-        _log(message)
-        raise SystemExit(message)
+    registered = False
 
-    _log("registered Alt+F5")
+    def _install_low_level_hook() -> None:
+        global _HOOK_HANDLE
+        global _HOOK_PROC
+
+        ULONG_PTR = getattr(wintypes, "ULONG_PTR", ctypes.c_size_t)
+
+        class KBDLLHOOKSTRUCT(ctypes.Structure):
+            _fields_ = [
+                ("vkCode", wintypes.DWORD),
+                ("scanCode", wintypes.DWORD),
+                ("flags", wintypes.DWORD),
+                ("time", wintypes.DWORD),
+                ("dwExtraInfo", ULONG_PTR),
+            ]
+
+        HOOKPROC = ctypes.WINFUNCTYPE(wintypes.LRESULT, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
+
+        def _proc(nCode: int, wParam: int, lParam: int) -> int:  # type: ignore[override]
+            if nCode == 0 and int(wParam) in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                try:
+                    info = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                    if int(info.vkCode) == int(vk):
+                        alt_down = bool(user32.GetAsyncKeyState(VK_MENU) & 0x8000)
+                        if alt_down:
+                            _log("hotkey pressed")
+                            threading.Thread(target=_run_toggle, daemon=True).start()
+                            return 1
+                except Exception:
+                    pass
+
+            return int(user32.CallNextHookEx(_HOOK_HANDLE, nCode, wParam, lParam))
+
+        _HOOK_PROC = HOOKPROC(_proc)
+        hmod = kernel32.GetModuleHandleW(None)
+        _HOOK_HANDLE = user32.SetWindowsHookExW(WH_KEYBOARD_LL, _HOOK_PROC, hmod, 0)
+        if not _HOOK_HANDLE:
+            err = ctypes.get_last_error()
+            raise SystemExit(f"Failed to install keyboard hook (Alt+F5). Error={err}")
+
+    if user32.RegisterHotKey(None, hotkey_id, modifiers, vk):
+        registered = True
+        _log("registered Alt+F5")
+    else:
+        err = ctypes.get_last_error()
+        _log(
+            "RegisterHotKey failed for Alt+F5 (will fall back to keyboard hook). "
+            f"Error={err}"
+        )
+        _install_low_level_hook()
+        _log("installed Alt+F5 keyboard hook")
 
     threading.Thread(target=_prewarm_audio, daemon=True).start()
     threading.Thread(target=_prewarm_fast, daemon=True).start()
@@ -170,12 +238,18 @@ def main() -> None:
             if rc == -1:
                 err = ctypes.get_last_error()
                 raise SystemExit(f"GetMessageW failed: {err}")
-            if msg.message == WM_HOTKEY and int(msg.wParam) == hotkey_id:
+            if registered and msg.message == WM_HOTKEY and int(msg.wParam) == hotkey_id:
                 _log("hotkey pressed")
                 threading.Thread(target=_run_toggle, daemon=True).start()
     finally:
+        if registered:
+            try:
+                user32.UnregisterHotKey(None, hotkey_id)
+            except Exception:
+                pass
         try:
-            user32.UnregisterHotKey(None, hotkey_id)
+            if _HOOK_HANDLE:
+                user32.UnhookWindowsHookEx(_HOOK_HANDLE)
         except Exception:
             pass
 

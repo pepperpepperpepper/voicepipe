@@ -24,6 +24,8 @@ VK_MENU: Final[int] = 0x12  # Alt
 WH_KEYBOARD_LL: Final[int] = 13
 WM_KEYDOWN: Final[int] = 0x0100
 WM_SYSKEYDOWN: Final[int] = 0x0104
+WM_KEYUP: Final[int] = 0x0101
+WM_SYSKEYUP: Final[int] = 0x0105
 
 _TOGGLE_FN = None
 _HOOK_HANDLE = None
@@ -186,6 +188,10 @@ def main() -> None:
         global _HOOK_HANDLE
         global _HOOK_PROC
 
+        # Prevent key-repeat from firing multiple toggles while the user holds
+        # Alt+F5 down. (Key repeat produces multiple WM_KEYDOWN events.)
+        hotkey_down = False
+
         ULONG_PTR = getattr(wintypes, "ULONG_PTR", ctypes.c_size_t)
 
         class KBDLLHOOKSTRUCT(ctypes.Structure):
@@ -200,14 +206,28 @@ def main() -> None:
         HOOKPROC = ctypes.WINFUNCTYPE(LRESULT, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
 
         def _proc(nCode: int, wParam: int, lParam: int) -> int:  # type: ignore[override]
-            if nCode == 0 and int(wParam) in (WM_KEYDOWN, WM_SYSKEYDOWN):
+            nonlocal hotkey_down
+
+            msg = int(wParam)
+            if nCode == 0 and msg in (WM_KEYUP, WM_SYSKEYUP):
+                try:
+                    info = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                    if int(info.vkCode) in (int(vk), VK_MENU):
+                        hotkey_down = False
+                except Exception:
+                    hotkey_down = False
+
+            if nCode == 0 and msg in (WM_KEYDOWN, WM_SYSKEYDOWN):
                 try:
                     info = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
                     if int(info.vkCode) == int(vk):
                         alt_down = bool(user32.GetAsyncKeyState(VK_MENU) & 0x8000)
                         if alt_down:
-                            _log("hotkey pressed (hook)")
-                            threading.Thread(target=_run_toggle, daemon=True).start()
+                            if not hotkey_down:
+                                hotkey_down = True
+                                _log("hotkey pressed (hook)")
+                                threading.Thread(target=_run_toggle, daemon=True).start()
+                            # Always swallow the hotkey keydown so it doesn't leak into apps.
                             return 1
                 except Exception:
                     pass

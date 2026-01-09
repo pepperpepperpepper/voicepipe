@@ -20,11 +20,16 @@
 .EXAMPLE
   # Use a specific python executable
   .\install.ps1 -Python C:\Python312\python.exe -Hotkey
+
+.EXAMPLE
+  # Install hotkey runner elevated (so it can type into admin terminals)
+  .\install.ps1 -Hotkey -HotkeyElevated
 #>
 
 param(
   [string]$Python = "",
   [switch]$Hotkey,
+  [switch]$HotkeyElevated,
   [switch]$SkipApiKeysImport,
   [switch]$SkipCleanup
 )
@@ -193,7 +198,11 @@ if (-not $SkipApiKeysImport) {
 
 if ($Hotkey) {
   Write-Host "Installing hotkey helper (Alt+F5) ..."
-  & $py -m voicepipe.cli hotkey install --force
+  if ($HotkeyElevated) {
+    & $py -m voicepipe.cli hotkey install --force --elevated
+  } else {
+    & $py -m voicepipe.cli hotkey install --force
+  }
 }
 
 Write-Host ""

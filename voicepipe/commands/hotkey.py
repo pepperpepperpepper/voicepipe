@@ -267,7 +267,13 @@ def _windows_install_shortcut(*, name: str, python_path: str | None, force: bool
     return shortcut_path
 
 
-def _windows_install_task(*, name: str, python_path: str | None, force: bool) -> str:
+def _windows_install_task(
+    *,
+    name: str,
+    python_path: str | None,
+    force: bool,
+    elevated: bool,
+) -> str:
     """Install a Scheduled Task to start the hotkey runner at logon.
 
     This is generally more reliable than a Startup-folder shortcut in managed /
@@ -293,7 +299,8 @@ def _windows_install_task(*, name: str, python_path: str | None, force: bool) ->
             "}",
             "$action = New-ScheduledTaskAction -Execute $pythonw -Argument '-m voicepipe.win_hotkey' -WorkingDirectory $env:USERPROFILE",
             "$trigger = New-ScheduledTaskTrigger -AtLogOn -User $userId",
-            "$principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel Limited",
+            "$principal = New-ScheduledTaskPrincipal -UserId $userId -LogonType Interactive -RunLevel "
+            + ("Highest" if elevated else "Limited"),
             # Important: don't block on laptops (battery power), and don't time-limit a long-lived hotkey runner.
             "$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)",
             "Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null",
@@ -333,11 +340,26 @@ def _windows_install_task(*, name: str, python_path: str | None, force: bool) ->
     show_default=True,
     help="Install via Scheduled Task (recommended) or Startup folder shortcut.",
 )
+@click.option(
+    "--elevated",
+    is_flag=True,
+    help="(Windows task) Run the hotkey runner with highest privileges (so it can type into admin apps).",
+)
 @click.option("--force", is_flag=True, help="Overwrite existing workflow if present")
-def hotkey_install(name: str, python_path: str | None, method: str, force: bool) -> None:
+def hotkey_install(
+    name: str,
+    python_path: str | None,
+    method: str,
+    elevated: bool,
+    force: bool,
+) -> None:
     """Install a hotkey helper (macOS Quick Action or Windows Alt+F5)."""
     if is_windows():
         if method.lower() == "startup":
+            if elevated:
+                raise click.ClickException(
+                    "--elevated is only supported with --method task (Scheduled Task)."
+                )
             shortcut_path = _windows_install_shortcut(
                 name=name, python_path=python_path, force=force
             )
@@ -346,7 +368,12 @@ def hotkey_install(name: str, python_path: str | None, method: str, force: bool)
             click.echo("Log: %LOCALAPPDATA%\\voicepipe\\logs\\voicepipe-fast.log")
             return
 
-        task_name = _windows_install_task(name=name, python_path=python_path, force=force)
+        task_name = _windows_install_task(
+            name=name,
+            python_path=python_path,
+            force=force,
+            elevated=elevated,
+        )
         if force:
             # Avoid duplicate hotkey runners at login: if an older Startup-folder
             # shortcut exists, remove it so only the Scheduled Task remains.
@@ -359,6 +386,8 @@ def hotkey_install(name: str, python_path: str | None, method: str, force: bool)
                 # Best-effort only; keep install successful.
                 pass
         click.echo(f"Installed Scheduled Task: {task_name}")
+        if elevated:
+            click.echo("Run level: highest (can type into elevated/admin apps).")
         click.echo("Started it (Alt+F5 should work immediately).")
         click.echo("Log: %LOCALAPPDATA%\\voicepipe\\logs\\voicepipe-fast.log")
         return

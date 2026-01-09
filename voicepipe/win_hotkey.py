@@ -189,8 +189,9 @@ def main() -> None:
         global _HOOK_PROC
 
         # Prevent key-repeat from firing multiple toggles while the user holds
-        # Alt+F5 down. (Key repeat produces multiple WM_KEYDOWN events.)
-        hotkey_down = False
+        # Alt+F5 down. Some environments emit key-repeat as down/up pairs, so we
+        # consult GetAsyncKeyState before clearing the latch.
+        hotkey_latched = False
 
         ULONG_PTR = getattr(wintypes, "ULONG_PTR", ctypes.c_size_t)
 
@@ -206,16 +207,21 @@ def main() -> None:
         HOOKPROC = ctypes.WINFUNCTYPE(LRESULT, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM)
 
         def _proc(nCode: int, wParam: int, lParam: int) -> int:  # type: ignore[override]
-            nonlocal hotkey_down
+            nonlocal hotkey_latched
 
             msg = int(wParam)
             if nCode == 0 and msg in (WM_KEYUP, WM_SYSKEYUP):
                 try:
                     info = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
                     if int(info.vkCode) in (int(vk), VK_MENU):
-                        hotkey_down = False
+                        # Clear the latch only when the hotkey key is *actually*
+                        # up. This avoids spurious repeats from drivers that
+                        # generate synthetic up/down pairs while the key is held.
+                        f5_down = bool(user32.GetAsyncKeyState(int(vk)) & 0x8000)
+                        if not f5_down:
+                            hotkey_latched = False
                 except Exception:
-                    hotkey_down = False
+                    hotkey_latched = False
 
             if nCode == 0 and msg in (WM_KEYDOWN, WM_SYSKEYDOWN):
                 try:
@@ -223,8 +229,8 @@ def main() -> None:
                     if int(info.vkCode) == int(vk):
                         alt_down = bool(user32.GetAsyncKeyState(VK_MENU) & 0x8000)
                         if alt_down:
-                            if not hotkey_down:
-                                hotkey_down = True
+                            if not hotkey_latched:
+                                hotkey_latched = True
                                 _log("hotkey pressed (hook)")
                                 threading.Thread(target=_run_toggle, daemon=True).start()
                             # Always swallow the hotkey keydown so it doesn't leak into apps.

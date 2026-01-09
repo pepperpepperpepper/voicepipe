@@ -213,6 +213,7 @@ def main() -> None:
 
         def _proc(nCode: int, wParam: int, lParam: int) -> int:  # type: ignore[override]
             nonlocal hotkey_latched
+            nonlocal ignore_wm_hotkey_until
 
             msg = int(wParam)
             if nCode == 0 and msg in (WM_KEYUP, WM_SYSKEYUP):

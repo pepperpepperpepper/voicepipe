@@ -113,6 +113,13 @@ def runtime_app_dir(*, create: bool = False) -> Path:
             path.mkdir(parents=True, exist_ok=True, mode=_PRIVATE_DIR_MODE)
             _ensure_private_dir(path)
 
+            if is_windows():
+                try:
+                    if not os.access(path, os.W_OK):
+                        raise PermissionError("runtime dir not writable")
+                except Exception:
+                    raise PermissionError("runtime dir not writable")
+
             # Windows quirk: stale directories under %TEMP% can be created by an
             # elevated process and end up not writable by the normal desktop
             # token, causing hotkey tools to fail with EACCES when creating the

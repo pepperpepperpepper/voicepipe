@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import Callable, Literal, Mapping, Optional, Tuple
 
@@ -382,15 +383,21 @@ def _sendinput_type_text(text: str, *, window_id: Optional[str]) -> tuple[bool, 
         # Basic interactive-session check.
         user32.GetForegroundWindow.argtypes = []
         user32.GetForegroundWindow.restype = wintypes.HWND
-        if not user32.GetForegroundWindow():
+        hwnd_foreground = user32.GetForegroundWindow()
+        if not hwnd_foreground:
             return False, "No interactive desktop session available (no foreground window)"
 
         if window_id:
             _sendinput_focus_window(window_id)
+            hwnd_foreground = user32.GetForegroundWindow() or hwnd_foreground
+
+        user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        user32.GetWindowThreadProcessId.restype = wintypes.DWORD
 
         INPUT_KEYBOARD = 1
         KEYEVENTF_KEYUP = 0x0002
         KEYEVENTF_UNICODE = 0x0004
+        VK_ESCAPE = 0x1B
         VK_RETURN = 0x0D
 
         class MOUSEINPUT(ctypes.Structure):
@@ -427,6 +434,8 @@ def _sendinput_type_text(text: str, *, window_id: Optional[str]) -> tuple[bool, 
 
         user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
         user32.SendInput.restype = wintypes.UINT
+        user32.GetGUIThreadInfo.argtypes = [wintypes.DWORD, ctypes.c_void_p]
+        user32.GetGUIThreadInfo.restype = wintypes.BOOL
 
         def _send_inputs(inputs: list[INPUT]) -> bool:
             if not inputs:
@@ -438,6 +447,97 @@ def _sendinput_type_text(text: str, *, window_id: Optional[str]) -> tuple[bool, 
             # Preserve the most useful signal for debugging.
             err = ctypes.get_last_error()
             raise RuntimeError(f"SendInput sent {sent}/{len(arr)} events (GetLastError={err})")
+
+        class RECT(ctypes.Structure):
+            _fields_ = [
+                ("left", wintypes.LONG),
+                ("top", wintypes.LONG),
+                ("right", wintypes.LONG),
+                ("bottom", wintypes.LONG),
+            ]
+
+        class GUITHREADINFO(ctypes.Structure):
+            _fields_ = [
+                ("cbSize", wintypes.DWORD),
+                ("flags", wintypes.DWORD),
+                ("hwndActive", wintypes.HWND),
+                ("hwndFocus", wintypes.HWND),
+                ("hwndCapture", wintypes.HWND),
+                ("hwndMenuOwner", wintypes.HWND),
+                ("hwndMoveSize", wintypes.HWND),
+                ("hwndCaret", wintypes.HWND),
+                ("rcCaret", RECT),
+            ]
+
+        user32.GetGUIThreadInfo.argtypes = [wintypes.DWORD, ctypes.POINTER(GUITHREADINFO)]
+
+        def _vk_input(vk: int, *, keyup: bool = False) -> INPUT:
+            flags = KEYEVENTF_KEYUP if keyup else 0
+            return INPUT(
+                type=INPUT_KEYBOARD,
+                union=_INPUT_UNION(
+                    ki=KEYBDINPUT(wVk=wintypes.WORD(vk), wScan=0, dwFlags=flags, time=0, dwExtraInfo=0)
+                ),
+            )
+
+        def _clear_modifiers() -> None:
+            # When invoked from an Alt-based hotkey, the target app can end up
+            # with its menu activated, and modifier state can interfere with
+            # subsequent input. Best-effort release common modifiers before we
+            # type.
+            VK_SHIFT = 0x10
+            VK_CONTROL = 0x11
+            VK_MENU = 0x12
+            VK_LSHIFT = 0xA0
+            VK_RSHIFT = 0xA1
+            VK_LCONTROL = 0xA2
+            VK_RCONTROL = 0xA3
+            VK_LMENU = 0xA4
+            VK_RMENU = 0xA5
+            VK_LWIN = 0x5B
+            VK_RWIN = 0x5C
+
+            inputs = [
+                _vk_input(VK_LSHIFT, keyup=True),
+                _vk_input(VK_RSHIFT, keyup=True),
+                _vk_input(VK_SHIFT, keyup=True),
+                _vk_input(VK_LCONTROL, keyup=True),
+                _vk_input(VK_RCONTROL, keyup=True),
+                _vk_input(VK_CONTROL, keyup=True),
+                _vk_input(VK_LMENU, keyup=True),
+                _vk_input(VK_RMENU, keyup=True),
+                _vk_input(VK_MENU, keyup=True),
+                _vk_input(VK_LWIN, keyup=True),
+                _vk_input(VK_RWIN, keyup=True),
+            ]
+            try:
+                _send_inputs(inputs)
+            except Exception:
+                pass
+
+        def _close_menu_if_active(hwnd: wintypes.HWND) -> None:
+            try:
+                pid = wintypes.DWORD()
+                tid = user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                if not tid:
+                    return
+                info = GUITHREADINFO()
+                info.cbSize = ctypes.sizeof(GUITHREADINFO)
+                if not user32.GetGUIThreadInfo(tid, ctypes.byref(info)):
+                    return
+                if not info.hwndMenuOwner:
+                    return
+            except Exception:
+                return
+
+            try:
+                _send_inputs([_vk_input(VK_ESCAPE), _vk_input(VK_ESCAPE, keyup=True)])
+                time.sleep(0.01)
+            except Exception:
+                pass
+
+        _clear_modifiers()
+        _close_menu_if_active(hwnd_foreground)
 
         # Convert to UTF-16 code units so we can handle surrogate pairs.
         units = text.replace("\r\n", "\n").encode("utf-16-le", errors="surrogatepass")

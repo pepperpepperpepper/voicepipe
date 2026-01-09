@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from typing import Final
 
 from voicepipe.platform import is_windows
@@ -18,6 +19,7 @@ from voicepipe.platform import is_windows
 
 WM_HOTKEY: Final[int] = 0x0312
 MOD_ALT: Final[int] = 0x0001
+MOD_NOREPEAT: Final[int] = 0x4000
 VK_F5: Final[int] = 0x74
 VK_MENU: Final[int] = 0x12  # Alt
 
@@ -183,10 +185,13 @@ def main() -> None:
         raise
     hotkey_id = _hotkey_id()
     registered = False
+    ignore_wm_hotkey_until = 0.0
 
     def _install_low_level_hook() -> None:
         global _HOOK_HANDLE
         global _HOOK_PROC
+
+        nonlocal ignore_wm_hotkey_until
 
         # Prevent key-repeat from firing multiple toggles while the user holds
         # Alt+F5 down. Some environments emit key-repeat as down/up pairs, so we
@@ -231,10 +236,15 @@ def main() -> None:
                         if alt_down:
                             if not hotkey_latched:
                                 hotkey_latched = True
+                                # If RegisterHotKey is working, WM_HOTKEY will
+                                # fire too. Ignore it so we only toggle once.
+                                ignore_wm_hotkey_until = time.monotonic() + 0.75
                                 _log("hotkey pressed (hook)")
                                 threading.Thread(target=_run_toggle, daemon=True).start()
-                            # Always swallow the hotkey keydown so it doesn't leak into apps.
-                            return 1
+                            # Swallow the hotkey only when RegisterHotKey failed
+                            # (otherwise the system will suppress it for us).
+                            if not registered:
+                                return 1
                 except Exception:
                     pass
 
@@ -247,15 +257,20 @@ def main() -> None:
             err = ctypes.get_last_error()
             raise SystemExit(f"Failed to install keyboard hook (Alt+F5). Error={err}")
 
-    if user32.RegisterHotKey(None, hotkey_id, modifiers, vk):
+    if user32.RegisterHotKey(None, hotkey_id, modifiers | MOD_NOREPEAT, vk):
         registered = True
         _log("registered Alt+F5 (RegisterHotKey)")
     else:
-        err = ctypes.get_last_error()
-        _log(
-            "RegisterHotKey failed for Alt+F5 (will fall back to keyboard hook). "
-            f"Error={err}"
-        )
+        # MOD_NOREPEAT is not supported on very old systems; try again without it.
+        if user32.RegisterHotKey(None, hotkey_id, modifiers, vk):
+            registered = True
+            _log("registered Alt+F5 (RegisterHotKey)")
+        else:
+            err = ctypes.get_last_error()
+            _log(
+                "RegisterHotKey failed for Alt+F5 (will fall back to keyboard hook). "
+                f"Error={err}"
+            )
     # Always install the low-level hook as a reliability fallback: some
     # environments intercept hotkeys in a way that prevents WM_HOTKEY delivery.
     try:
@@ -280,6 +295,8 @@ def main() -> None:
                 err = ctypes.get_last_error()
                 raise SystemExit(f"GetMessageW failed: {err}")
             if registered and msg.message == WM_HOTKEY and int(msg.wParam) == hotkey_id:
+                if time.monotonic() < ignore_wm_hotkey_until:
+                    continue
                 _log("hotkey pressed (wm_hotkey)")
                 threading.Thread(target=_run_toggle, daemon=True).start()
     finally:

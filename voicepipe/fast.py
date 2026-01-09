@@ -272,9 +272,23 @@ def execute_toggle() -> None:
                 fast_log(f"[TOGGLE] Transcription: {cleaned_text}")
                 # Always persist the last transcript for debugging/recovery.
                 try:
-                    (_runtime_dir(create=True) / "voicepipe-last.txt").write_text(
-                        cleaned_text + "\n", encoding="utf-8"
-                    )
+                    last_path = _runtime_dir(create=True) / "voicepipe-last.txt"
+                    try:
+                        last_path.write_text(cleaned_text + "\n", encoding="utf-8")
+                    except PermissionError:
+                        # On Windows, a previous elevated run can leave behind a
+                        # file that's not writable by the normal desktop token.
+                        # If we can delete it, recreate it; otherwise, fall back
+                        # to a unique filename in the same directory.
+                        try:
+                            last_path.unlink()
+                        except Exception:
+                            pass
+                        try:
+                            last_path.write_text(cleaned_text + "\n", encoding="utf-8")
+                        except Exception:
+                            alt_path = _runtime_dir(create=True) / f"voicepipe-last-{int(time.time() * 1000)}.txt"
+                            alt_path.write_text(cleaned_text + "\n", encoding="utf-8")
                 except Exception:
                     pass
                 typed_ok, type_err = type_text(
@@ -569,6 +583,28 @@ def execute_toggle_inprocess() -> None:
                                 fast_log(f"[TOGGLE] Writing last transcript: {last_path}")
                                 last_path.write_text(cleaned_text + "\n", encoding="utf-8")
                                 fast_log("[TOGGLE] Wrote last transcript")
+                            except PermissionError:
+                                # Stale file created by an elevated process.
+                                try:
+                                    last_path.unlink()
+                                except Exception:
+                                    pass
+                                try:
+                                    last_path.write_text(
+                                        cleaned_text + "\n", encoding="utf-8"
+                                    )
+                                    fast_log("[TOGGLE] Wrote last transcript (recreated)")
+                                except Exception:
+                                    try:
+                                        alt = last_path.with_name(
+                                            f"voicepipe-last-{int(time.time() * 1000)}.txt"
+                                        )
+                                        alt.write_text(cleaned_text + "\n", encoding="utf-8")
+                                        fast_log(f"[TOGGLE] Wrote last transcript: {alt}")
+                                    except Exception as e:
+                                        fast_log(
+                                            f"[TOGGLE] Warning: could not write last transcript: {e}"
+                                        )
                             except Exception as e:
                                 fast_log(f"[TOGGLE] Warning: could not write last transcript: {e}")
                     except Exception as e:

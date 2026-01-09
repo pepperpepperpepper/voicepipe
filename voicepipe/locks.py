@@ -100,6 +100,20 @@ class PidFileLock:
 
         try:
             fd = os.open(str(self.path), flags, mode)
+        except PermissionError as e:
+            # Windows quirk: a previous elevated run can create the lock file
+            # with restrictive ACLs, making it unreadable to the normal desktop
+            # token. If it's truly stale, we can delete and recreate it.
+            try:
+                if self.path.exists():
+                    self.path.unlink()
+                    fd = os.open(str(self.path), flags, mode)
+                else:
+                    raise LockHeld(f"could not open lock file {self.path}: {e}") from e
+            except LockHeld:
+                raise
+            except Exception as e2:
+                raise LockHeld(f"could not open lock file {self.path}: {e2}") from e2
         except Exception as e:
             raise LockHeld(f"could not open lock file {self.path}: {e}") from e
 

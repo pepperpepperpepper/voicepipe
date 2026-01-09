@@ -76,6 +76,12 @@ cd voicepipe
 .\install.ps1 -Hotkey
 ```
 
+If PowerShell blocks the script due to execution policy, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Hotkey
+```
+
 ### AutoHotkey (optional)
 
 ```ahk
@@ -95,8 +101,8 @@ If `voicepipe-fast` is not on PATH, use `python -m voicepipe.fast toggle` instea
 
 ### Run at login (Windows)
 
-- **Startup folder**: use `voicepipe hotkey install` (recommended), or add a shortcut that runs `pythonw -m voicepipe.win_hotkey`
-- **Task Scheduler**: create a task triggered “At log on” that runs `pythonw -m voicepipe.win_hotkey` (for typing to work, set it to run only when the user is logged on)
+- **Scheduled Task (recommended)**: `voicepipe hotkey install`
+- **Startup folder shortcut**: `voicepipe hotkey install --method startup` (or add a shortcut that runs `pythonw -m voicepipe.win_hotkey`)
 - Smoke test checklist: `WINDOWS_SMOKE_TEST.md`
 
 ## Dependencies

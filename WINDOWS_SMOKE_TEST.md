@@ -49,8 +49,12 @@ Notes:
 
 Voicepipe includes a stdlib-only hotkey runner that registers **Alt+F5** and triggers `voicepipe-fast toggle`:
 
-- Install at login (Startup folder shortcut):
-  - `voicepipe hotkey install`
+- Install at login (Scheduled Task, recommended):
+  - `voicepipe hotkey install` (default method is `task`)
+  - It starts immediately; Alt+F5 should work without reboot.
+
+- Install at login (Startup folder shortcut, alternative):
+  - `voicepipe hotkey install --method startup`
   - Log out/in (or reboot), then press Alt+F5 twice.
 - Or run it manually (no console):
   - `pythonw -m voicepipe.win_hotkey`
@@ -58,6 +62,27 @@ Voicepipe includes a stdlib-only hotkey runner that registers **Alt+F5** and tri
 Then:
 - Press Alt+F5 once (start recording), then again (stop/transcribe/preserve).
 - Check `%LOCALAPPDATA%\\voicepipe\\logs\\voicepipe-fast.log` for `[HOTKEY]` lines.
+
+## Hotkey → transcription → typing (live desktop)
+
+This is the end-to-end behavior most people want: press the hotkey, speak, press again, and the transcript gets typed into the focused app.
+
+1. Ensure the Windows desktop is **unlocked** and you’re in a normal (non-admin) app.
+2. Open Notepad and click into it.
+3. Press **Alt+F5** once (start recording).
+4. Say: `hello hello hello hello hello`
+5. Press **Alt+F5** again (stop + transcribe + type).
+
+Expected:
+- The text appears in Notepad.
+- `%LOCALAPPDATA%\\voicepipe\\logs\\voicepipe-fast.log` contains:
+  - `[HOTKEY] hotkey pressed (...)`
+  - `[TOGGLE] Transcription: ...`
+  - `[TOGGLE] Typed transcription (ok) ...`
+
+If you see the mic indicator but no typing:
+- Confirm the log has a `Transcription:` line. If it does and typing still doesn’t happen, it’s usually an interactive-session/focus/elevation issue.
+- Typing into elevated apps usually requires running Voicepipe elevated too (UIPI).
 
 ## Optional: API key smoke
 

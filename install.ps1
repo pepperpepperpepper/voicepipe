@@ -10,6 +10,8 @@
   - Imports `OPENAI_API_KEY` / `ELEVENLABS_API_KEY` from `$env:USERPROFILE\.api-keys`
     into the canonical Voicepipe env file `%APPDATA%\voicepipe\voicepipe.env`.
   - Installs the native-ish Alt+F5 hotkey runner to start at login.
+  - Performs a best-effort cleanup (remove old Scheduled Task + stale lock files)
+    to keep reinstalls reliable (use `-SkipCleanup` to disable).
 
 .EXAMPLE
   # Install + import keys (if .api-keys exists) + install hotkey startup shortcut
@@ -23,7 +25,8 @@
 param(
   [string]$Python = "",
   [switch]$Hotkey,
-  [switch]$SkipApiKeysImport
+  [switch]$SkipApiKeysImport,
+  [switch]$SkipCleanup
 )
 
 Set-StrictMode -Version Latest
@@ -110,6 +113,54 @@ function Import-ApiKeysIfPresent {
   Write-Host "Updated $EnvFilePath (openai=$([bool]$openai) eleven=$([bool]$eleven))"
 }
 
+function Cleanup-VoicepipeInstall {
+  # Best-effort cleanup to prevent stale hotkey runners / lock files from
+  # breaking a reinstall.
+  if ($SkipCleanup) { return }
+
+  $taskName = "Voicepipe Toggle"
+  try {
+    $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($task) {
+      Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue | Out-Null
+      Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+      Write-Host "Removed Scheduled Task: $taskName"
+    }
+  } catch {
+    # Ignore - the Task Scheduler module may be unavailable.
+  }
+
+  $startupDir = $null
+  try { $startupDir = [Environment]::GetFolderPath("Startup") } catch { $startupDir = $null }
+  if (-not $startupDir) {
+    try { $startupDir = Join-Path $env:APPDATA "Microsoft\\Windows\\Start Menu\\Programs\\Startup" } catch { $startupDir = $null }
+  }
+  if ($startupDir) {
+    foreach ($name in @(
+      "Voicepipe Toggle.lnk",
+      "voicepipe-hotkey.ahk",
+      "voicepipe-hotkey.ahk.lnk",
+      "voicepipe-hotkey.lnk"
+    )) {
+      try {
+        $p = Join-Path $startupDir $name
+        Remove-Item -Force -LiteralPath $p -ErrorAction SilentlyContinue
+      } catch { }
+    }
+  }
+
+  foreach ($p in @(
+    (Join-Path $env:LOCALAPPDATA "voicepipe\\run\\voicepipe-fast.lock"),
+    (Join-Path $env:LOCALAPPDATA "voicepipe\\run\\voicepipe-fast.time"),
+    (Join-Path $env:LOCALAPPDATA "voicepipe\\run\\voicepipe-last.txt"),
+    (Join-Path $env:TEMP "voicepipe\\voicepipe-fast.lock"),
+    (Join-Path $env:TEMP "voicepipe\\voicepipe-fast.time"),
+    (Join-Path $env:TEMP "voicepipe\\voicepipe-last.txt")
+  )) {
+    try { Remove-Item -Force -LiteralPath $p -ErrorAction SilentlyContinue } catch { }
+  }
+}
+
 if (-not (Test-Path -LiteralPath "pyproject.toml") -or -not (Test-Path -LiteralPath "voicepipe")) {
   throw "Run this from the voicepipe repo root (expected pyproject.toml and voicepipe/)."
 }
@@ -118,8 +169,11 @@ $py = Resolve-PythonExecutable -Preferred $Python
 $verText = Require-SupportedPython -PythonExe $py
 Write-Host "Using Python: $py ($verText)"
 
+Cleanup-VoicepipeInstall
+
 Write-Host "Installing Voicepipe ..."
 & $py -m pip install -U pip
+& $py -m pip uninstall -y voicepipe 2>$null | Out-Null
 & $py -m pip install -U .
 if ($LASTEXITCODE -ne 0) {
   Write-Host "pip install failed (exit=$LASTEXITCODE). Retrying with --user ..."

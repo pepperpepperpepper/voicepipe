@@ -9,7 +9,6 @@ from __future__ import annotations
 import os
 import shutil
 import sys
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -178,6 +177,24 @@ def send_transcribe_request_fileobj(fh: BinaryIO, *, filename: str) -> str:
         model = get_transcribe_model()
         return transcribe_audio_fileobj(
             fh,
+            filename=str(filename or "audio.wav"),
+            model=model,
+            temperature=0.0,
+        )
+    except Exception as e:
+        fast_log(f"[TRANSCRIBE] Error: {e}")
+        return ""
+
+
+def send_transcribe_request_bytes(audio_bytes: bytes, *, filename: str) -> str:
+    """Transcribe audio bytes (e.g. WAV) without writing a temp file."""
+    # Keep imports out of hot paths.
+    from voicepipe.transcription import transcribe_audio_bytes
+
+    try:
+        model = get_transcribe_model()
+        return transcribe_audio_bytes(
+            audio_bytes,
             filename=str(filename or "audio.wav"),
             model=model,
             temperature=0.0,
@@ -509,7 +526,10 @@ def execute_toggle_inprocess() -> None:
                     f"Invalid audio params (in-process): samplerate={samplerate} channels={channels}"
                 )
 
-            wav_fh = tempfile.SpooledTemporaryFile(max_size=20 * 1024 * 1024, mode="w+b")
+            import io
+
+            wav_fh = io.BytesIO()
+            wav_bytes: bytes = b""
             try:
                 try:
                     write_wav_pcm(
@@ -519,8 +539,16 @@ def execute_toggle_inprocess() -> None:
                         channels=channels,
                         sample_width=2,
                     )
-                    wav_fh.seek(0)
-                    text = send_transcribe_request_fileobj(wav_fh, filename="audio.wav")
+                    wav_bytes = wav_fh.getvalue()
+                    fast_log(
+                        "[TOGGLE] In-process audio: "
+                        f"pcm_bytes={len(pcm)} wav_bytes={len(wav_bytes)} "
+                        f"duration_s={(f'{duration_s:.3f}' if duration_s is not None else 'unknown')} "
+                        f"samplerate={samplerate} channels={channels}"
+                    )
+                    t_tr0 = time.monotonic()
+                    text = send_transcribe_request_bytes(wav_bytes, filename="audio.wav")
+                    fast_log(f"[TRANSCRIBE] Completed in {int((time.monotonic() - t_tr0) * 1000)}ms")
                 except Exception as e:
                     fast_log(f"[TRANSCRIBE] Error: {e}")
                     text = ""
@@ -567,14 +595,10 @@ def execute_toggle_inprocess() -> None:
 
                 if not transcription_ok:
                     try:
-                        try:
-                            wav_fh.seek(0)
-                        except Exception:
-                            pass
                         dst_dir = preserved_audio_dir(create=True)
                         dst = dst_dir / f"voicepipe_{recording_id}.wav"
                         with open(dst, "wb") as out:
-                            shutil.copyfileobj(wav_fh, out)
+                            out.write(wav_bytes)
                         fast_log(f"[TOGGLE] Preserved audio file: {dst}")
                     except Exception as e:
                         fast_log(f"[TOGGLE] Failed to preserve audio: {e}")
@@ -582,7 +606,7 @@ def execute_toggle_inprocess() -> None:
                 return
             finally:
                 try:
-                    wav_fh.close()
+                    wav_fh.close()  # type: ignore[attr-defined]
                 except Exception:
                     pass
 

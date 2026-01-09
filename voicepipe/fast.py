@@ -10,6 +10,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import BinaryIO, Optional
@@ -25,10 +26,29 @@ DEBOUNCE_MS = 500  # milliseconds
 
 _LOG_FH = None
 _INPROCESS_RECORDING: dict[str, object] = {}
+_RUNTIME_DIR: Path | None = None
+_RUNTIME_DIR_CREATED = False
+_RUNTIME_DIR_LOCK = threading.Lock()
 
 
 def _runtime_dir(*, create: bool) -> Path:
-    return runtime_app_dir(create=create)
+    global _RUNTIME_DIR
+    global _RUNTIME_DIR_CREATED
+
+    cached = _RUNTIME_DIR
+    if cached is not None and (not create or _RUNTIME_DIR_CREATED):
+        return cached
+
+    with _RUNTIME_DIR_LOCK:
+        cached = _RUNTIME_DIR
+        if cached is not None and (not create or _RUNTIME_DIR_CREATED):
+            return cached
+
+        resolved = runtime_app_dir(create=create)
+        _RUNTIME_DIR = resolved
+        if create:
+            _RUNTIME_DIR_CREATED = True
+        return resolved
 
 
 def _debounce_path(*, create_dir: bool) -> Path:

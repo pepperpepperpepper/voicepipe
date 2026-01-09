@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 from pathlib import Path
 
 from voicepipe.platform import getenv_path, is_macos, is_windows
@@ -113,13 +114,6 @@ def runtime_app_dir(*, create: bool = False) -> Path:
             path.mkdir(parents=True, exist_ok=True, mode=_PRIVATE_DIR_MODE)
             _ensure_private_dir(path)
 
-            if is_windows():
-                try:
-                    if not os.access(path, os.W_OK):
-                        raise PermissionError("runtime dir not writable")
-                except Exception:
-                    raise PermissionError("runtime dir not writable")
-
             # Windows quirk: stale directories under %TEMP% can be created by an
             # elevated process and end up not writable by the normal desktop
             # token, causing hotkey tools to fail with EACCES when creating the
@@ -131,18 +125,27 @@ def runtime_app_dir(*, create: bool = False) -> Path:
             # we never want the hotkey path to block indefinitely.
             if is_windows() and existed:
                 try:
-                    tmp_root = Path(tempfile.gettempdir())
-                    is_temp_backed = False
-                    try:
-                        path.resolve().relative_to(tmp_root.resolve())
-                        is_temp_backed = True
-                    except Exception:
-                        is_temp_backed = False
+                    # Use a short-lived worker thread so a pathological FS
+                    # filter can't hang the caller.
+                    ok = False
 
-                    if is_temp_backed:
-                        fd, probe = tempfile.mkstemp(prefix="voicepipe_probe_", dir=str(path))
-                        os.close(fd)
-                        os.unlink(probe)
+                    def _probe() -> None:
+                        nonlocal ok
+                        try:
+                            fd, probe = tempfile.mkstemp(
+                                prefix="voicepipe_probe_", dir=str(path)
+                            )
+                            os.close(fd)
+                            os.unlink(probe)
+                            ok = True
+                        except Exception:
+                            ok = False
+
+                    t = threading.Thread(target=_probe, daemon=True)
+                    t.start()
+                    t.join(0.25)
+                    if not ok:
+                        raise PermissionError("runtime dir not writable")
                 except Exception:
                     raise PermissionError("runtime dir not writable")
         except Exception:

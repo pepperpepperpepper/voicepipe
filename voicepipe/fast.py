@@ -530,18 +530,37 @@ def execute_toggle_inprocess() -> None:
                     cleaned_text = text.rstrip()
                     fast_log(f"[TOGGLE] Transcription: {cleaned_text}")
                     try:
-                        (_runtime_dir(create=True) / "voicepipe-last.txt").write_text(
-                            cleaned_text + "\n", encoding="utf-8"
-                        )
-                    except Exception:
-                        pass
+                        try:
+                            last_path = _runtime_dir(create=True) / "voicepipe-last.txt"
+                        except Exception as e:
+                            last_path = None
+                            fast_log(f"[TOGGLE] Warning: could not resolve last transcript path: {e}")
+
+                        if last_path is not None:
+                            try:
+                                fast_log(f"[TOGGLE] Writing last transcript: {last_path}")
+                                last_path.write_text(cleaned_text + "\n", encoding="utf-8")
+                                fast_log("[TOGGLE] Wrote last transcript")
+                            except Exception as e:
+                                fast_log(f"[TOGGLE] Warning: could not write last transcript: {e}")
+                    except Exception as e:
+                        fast_log(f"[TOGGLE] Warning: unexpected error persisting last transcript: {e}")
+
+                    fast_log(
+                        "[TOGGLE] Typing transcription: "
+                        f"backend={typing_backend.name} window_id={target_window or ''} chars={len(cleaned_text)}"
+                    )
+                    t_type0 = time.monotonic()
                     typed_ok, type_err = type_text(
                         cleaned_text,
                         window_id=target_window,
                         backend=typing_backend,
                     )
+                    t_type_ms = int((time.monotonic() - t_type0) * 1000)
                     if not typed_ok:
                         fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
+                    else:
+                        fast_log(f"[TOGGLE] Typed transcription (ok) in {t_type_ms}ms")
                     transcription_ok = True
                 else:
                     fast_log("[TOGGLE] No transcription returned")
@@ -594,6 +613,18 @@ def toggle_inprocess_main(argv: Optional[list[str]] = None) -> None:
             fast_log("[MAIN] Toggle lock already held, exiting")
             raise SystemExit(0)
         try:
+            try:
+                import faulthandler
+
+                fh = _open_log()
+                if fh is not None:
+                    # If the hotkey runner hangs (common failure mode on Windows
+                    # desktops), dump thread stacks into the log to pinpoint
+                    # the blocking call.
+                    faulthandler.dump_traceback_later(30.0, repeat=False, file=fh)
+            except Exception:
+                faulthandler = None  # type: ignore[assignment]
+
             global _INPROCESS_LAST_DEBOUNCE_MS
             now = int(time.time() * 1000)
             last = _INPROCESS_LAST_DEBOUNCE_MS
@@ -611,6 +642,14 @@ def toggle_inprocess_main(argv: Optional[list[str]] = None) -> None:
             fast_log("[MAIN] Toggle completed")
             return
         finally:
+            try:
+                if "faulthandler" in locals() and faulthandler is not None:
+                    try:
+                        faulthandler.cancel_dump_traceback_later()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             try:
                 _INPROCESS_TOGGLE_LOCK.release()
             except Exception:

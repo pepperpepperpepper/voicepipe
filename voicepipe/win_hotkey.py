@@ -206,7 +206,7 @@ def main() -> None:
                     if int(info.vkCode) == int(vk):
                         alt_down = bool(user32.GetAsyncKeyState(VK_MENU) & 0x8000)
                         if alt_down:
-                            _log("hotkey pressed")
+                            _log("hotkey pressed (hook)")
                             threading.Thread(target=_run_toggle, daemon=True).start()
                             return 1
                 except Exception:
@@ -223,15 +223,23 @@ def main() -> None:
 
     if user32.RegisterHotKey(None, hotkey_id, modifiers, vk):
         registered = True
-        _log("registered Alt+F5")
+        _log("registered Alt+F5 (RegisterHotKey)")
     else:
         err = ctypes.get_last_error()
         _log(
             "RegisterHotKey failed for Alt+F5 (will fall back to keyboard hook). "
             f"Error={err}"
         )
+    # Always install the low-level hook as a reliability fallback: some
+    # environments intercept hotkeys in a way that prevents WM_HOTKEY delivery.
+    try:
         _install_low_level_hook()
         _log("installed Alt+F5 keyboard hook")
+    except SystemExit as e:
+        # Best-effort: keep running if RegisterHotKey succeeded.
+        _log(str(e))
+        if not registered:
+            raise
 
     threading.Thread(target=_prewarm_audio, daemon=True).start()
     threading.Thread(target=_prewarm_fast, daemon=True).start()
@@ -246,7 +254,7 @@ def main() -> None:
                 err = ctypes.get_last_error()
                 raise SystemExit(f"GetMessageW failed: {err}")
             if registered and msg.message == WM_HOTKEY and int(msg.wParam) == hotkey_id:
-                _log("hotkey pressed")
+                _log("hotkey pressed (wm_hotkey)")
                 threading.Thread(target=_run_toggle, daemon=True).start()
     finally:
         if registered:

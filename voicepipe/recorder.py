@@ -6,6 +6,7 @@ import logging
 import queue
 import subprocess
 import threading
+import time
 import wave
 
 try:
@@ -276,8 +277,6 @@ class AudioRecorder:
         if not self.recording:
             return None
 
-        self.recording = False
-
         if self.timeout_timer:
             try:
                 self.timeout_timer.cancel()
@@ -285,6 +284,8 @@ class AudioRecorder:
                 pass
             self.timeout_timer = None
 
+        # Keep `self.recording` True until the stream is fully stopped/closed so
+        # in-flight callbacks can enqueue their final chunk(s) before we drain.
         if self.stream:
             try:
                 self.stream.stop()
@@ -296,13 +297,39 @@ class AudioRecorder:
                 pass
             self.stream = None
 
+        self.recording = False
+
         if self.ffmpeg_process:
             self._stop_ffmpeg()
             return None
 
         frames: list[bytes] = []
-        while not self.audio_queue.empty():
-            frames.append(self.audio_queue.get())
+
+        def _drain() -> bool:
+            got = False
+            while True:
+                try:
+                    frames.append(self.audio_queue.get_nowait())
+                    got = True
+                except queue.Empty:
+                    break
+                except Exception:
+                    break
+            return got
+
+        _drain()
+        # Best-effort: give any in-flight callback a moment to enqueue its last
+        # buffer. This avoids truncation in some PortAudio/Windows environments.
+        for _ in range(5):
+            if not self.audio_queue.empty():
+                _drain()
+                continue
+            try:
+                time.sleep(0.01)
+            except Exception:
+                break
+            if not _drain():
+                break
         if not frames:
             raise RuntimeError("No audio data recorded")
         return b"".join(frames)

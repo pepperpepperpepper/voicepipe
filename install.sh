@@ -93,6 +93,19 @@ EOF
     chmod 600 "$VOICEPIPE_ENV_FILE" 2>/dev/null || true
 fi
 
+# Ensure GUI env is present for systray in user services (best-effort).
+if [ -f "$VOICEPIPE_ENV_FILE" ]; then
+    if [ -n "$DISPLAY" ] && ! grep -q '^DISPLAY=' "$VOICEPIPE_ENV_FILE"; then
+        printf 'DISPLAY=%s\n' "$DISPLAY" >> "$VOICEPIPE_ENV_FILE"
+    fi
+    if [ -n "$XAUTHORITY" ] && ! grep -q '^XAUTHORITY=' "$VOICEPIPE_ENV_FILE"; then
+        printf 'XAUTHORITY=%s\n' "$XAUTHORITY" >> "$VOICEPIPE_ENV_FILE"
+    fi
+    if [ -n "$DISPLAY" ] && ! grep -q '^PYSTRAY_BACKEND=' "$VOICEPIPE_ENV_FILE"; then
+        printf 'PYSTRAY_BACKEND=xorg\n' >> "$VOICEPIPE_ENV_FILE"
+    fi
+fi
+
 # Setup systemd service
 if command -v systemctl &> /dev/null; then
     echo "Setting up systemd user services..."

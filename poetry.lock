@@ -1173,5 +1173,5 @@ systray = ["pillow", "pystray"]
 
 [metadata]
 lock-version = "2.1"
-python-versions = "^3.9"
-content-hash = "2c7ffdd8e9edf02a483afca320c24a87ea8a88dae5f211c44dda7358007c7ade"
+python-versions = ">=3.9,<3.13"
+content-hash = "b091ddaa62e9670bf1c148a2efd0843f892408d3490ac0c69ede3ec98c40d5f6"

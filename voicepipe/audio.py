@@ -21,7 +21,12 @@ except Exception:  # pragma: no cover
 
 import numpy as np
 
-from voicepipe.audio_device import apply_pulse_source_preference, read_device_preference, resolve_device_index
+from voicepipe.audio_device import (
+    apply_pulse_source_preference,
+    get_default_pulse_source,
+    read_device_preference,
+    resolve_device_index,
+)
 from voicepipe.config import device_cache_path, load_environment
 logger = logging.getLogger(__name__)
 
@@ -29,7 +34,15 @@ _SILENCE_THRESHOLD_INT16 = 50
 _SIGNAL_PROBE_SECONDS = 0.3
 
 
-AudioSelectionSource = Literal["config-env", "config-file", "cache", "auto", "fallback"]
+AudioSelectionSource = Literal[
+    "config-env",
+    "config-file",
+    "config-pulse",
+    "default",
+    "cache",
+    "auto",
+    "fallback",
+]
 
 
 @dataclass(frozen=True)
@@ -520,7 +533,7 @@ def resolve_audio_input(
     _require_sounddevice()
     assert sd is not None
 
-    apply_pulse_source_preference()
+    preferred_pulse = apply_pulse_source_preference()
     env_device_raw = (os.environ.get("VOICEPIPE_DEVICE") or "").strip()
     device_pref = read_device_preference()
     if device_pref is not None:
@@ -540,6 +553,37 @@ def resolve_audio_input(
             source="config-env" if env_device_raw else "config-file",
             device_name=_device_name(selection.device_index),
         )
+
+    if preferred_pulse:
+        device_index, device_err = resolve_device_index(f"pulse:{preferred_pulse}")
+        if device_err is None and device_index is not None:
+            selection = select_audio_input(
+                preferred_device_index=int(device_index),
+                preferred_samplerate=preferred_samplerate,
+                preferred_channels=preferred_channels,
+                strict_device_index=True,
+            )
+            return AudioInputResolution(
+                selection=selection,
+                source="config-pulse",
+                device_name=_device_name(selection.device_index),
+            )
+
+    default_pulse = get_default_pulse_source() if not preferred_pulse else None
+    if default_pulse:
+        device_index, device_err = resolve_device_index(f"pulse:{default_pulse}")
+        if device_err is None and device_index is not None:
+            selection = select_audio_input(
+                preferred_device_index=int(device_index),
+                preferred_samplerate=preferred_samplerate,
+                preferred_channels=preferred_channels,
+                strict_device_index=True,
+            )
+            return AudioInputResolution(
+                selection=selection,
+                source="default",
+                device_name=_device_name(selection.device_index),
+            )
 
     cached = read_device_cache()
     if cached is not None:
@@ -644,7 +688,7 @@ def resolve_audio_input_for_recording(
     _require_sounddevice()
     assert sd is not None
 
-    apply_pulse_source_preference()
+    preferred_pulse = apply_pulse_source_preference()
 
     env_device_raw = (os.environ.get("VOICEPIPE_DEVICE") or "").strip()
     device_pref = read_device_preference()
@@ -666,6 +710,37 @@ def resolve_audio_input_for_recording(
             source="config-env" if env_device_raw else "config-file",
             device_name=None,
         )
+
+    if preferred_pulse:
+        device_index, device_err = resolve_device_index(f"pulse:{preferred_pulse}")
+        if device_err is None and device_index is not None:
+            samplerate = int(preferred_samplerate) if isinstance(preferred_samplerate, int) else 16000
+            channels = int(preferred_channels) if isinstance(preferred_channels, int) else 1
+            return AudioInputResolution(
+                selection=AudioInputSelection(
+                    device_index=int(device_index),
+                    samplerate=samplerate,
+                    channels=channels,
+                ),
+                source="config-pulse",
+                device_name=None,
+            )
+
+    default_pulse = get_default_pulse_source() if not preferred_pulse else None
+    if default_pulse:
+        device_index, device_err = resolve_device_index(f"pulse:{default_pulse}")
+        if device_err is None and device_index is not None:
+            samplerate = int(preferred_samplerate) if isinstance(preferred_samplerate, int) else 16000
+            channels = int(preferred_channels) if isinstance(preferred_channels, int) else 1
+            return AudioInputResolution(
+                selection=AudioInputSelection(
+                    device_index=int(device_index),
+                    samplerate=samplerate,
+                    channels=channels,
+                ),
+                source="default",
+                device_name=None,
+            )
 
     cached = read_device_cache()
     if cached is not None:

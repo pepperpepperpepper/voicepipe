@@ -109,6 +109,7 @@ def test_resolve_audio_input_autodetect_uses_signal_probe_and_cache(
         allowed_samplerates={0: {16000, 48000}, 1: {48000}},
     )
     monkeypatch.setattr(audio, "sd", fake)
+    monkeypatch.setattr(audio, "get_default_pulse_source", lambda: None)
 
     # First call: should reject silent pulse and choose hw:0,6, writing cache.
     res1 = audio.resolve_audio_input(
@@ -149,6 +150,7 @@ def test_resolve_audio_input_env_override_is_strict(isolated_home: Path, monkeyp
         allowed_samplerates={0: {16000, 48000}, 1: {48000}},
     )
     monkeypatch.setattr(audio, "sd", fake)
+    monkeypatch.setattr(audio, "get_default_pulse_source", lambda: None)
     monkeypatch.setenv("VOICEPIPE_DEVICE", "0")
 
     res = audio.resolve_audio_input(

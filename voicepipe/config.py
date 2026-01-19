@@ -54,7 +54,10 @@ DEFAULT_ENV_FILE_TEMPLATE = """# Voicepipe environment config (used by systemd s
 # VOICEPIPE_AUDIO_CHANNELS=1
 # VOICEPIPE_TRANSCRIBE_BACKEND=openai
 # VOICEPIPE_TRANSCRIBE_MODEL=gpt-4o-transcribe
-# VOICEPIPE_TYPE_BACKEND=auto  # Linux: wtype|xdotool, macOS: osascript, Windows: sendinput, or: none
+# VOICEPIPE_TYPE_BACKEND=auto  # typing backend override (optional)
+#   Linux: auto|wayland|x11|wtype|xdotool|none
+#   macOS: auto|osascript|none
+#   Windows: auto|sendinput|none
 # VOICEPIPE_DAEMON_MODE=auto  # auto|never|always
 """
 

@@ -6,6 +6,7 @@ stderr visibility matter.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import os
 import shutil
 import sys
@@ -30,6 +31,13 @@ _RUNTIME_DIR_CREATED = False
 _RUNTIME_DIR_LOCK = threading.Lock()
 _INPROCESS_TOGGLE_LOCK = threading.Lock()
 _INPROCESS_LAST_DEBOUNCE_MS: int | None = None
+
+
+@dataclass(frozen=True)
+class _TogglePostStop:
+    audio_file: str
+    target_window: str | None
+    typing_backend: object
 
 
 def _runtime_dir(*, create: bool) -> Path:
@@ -233,6 +241,10 @@ def check_debounce() -> bool:
 
 def execute_toggle() -> None:
     """Execute toggle command logic."""
+    execute_toggle_split(perform_transcribe=True)
+
+
+def execute_toggle_split(*, perform_transcribe: bool) -> _TogglePostStop | None:
     try:
         fast_log("[TOGGLE] Starting toggle execution")
 
@@ -245,7 +257,6 @@ def execute_toggle() -> None:
             from voicepipe.typing import (
                 get_active_window_id,
                 resolve_typing_backend,
-                type_text,
             )
 
             typing_backend = resolve_typing_backend()
@@ -264,68 +275,86 @@ def execute_toggle() -> None:
             stop_result = backend.stop()
             audio_file = stop_result.audio_file
             fast_log(f"[TOGGLE] Audio file: {audio_file}")
+            post = _TogglePostStop(
+                audio_file=audio_file,
+                target_window=target_window,
+                typing_backend=typing_backend,
+            )
+            if not perform_transcribe:
+                return post
 
-            text = send_transcribe_request(audio_file)
-            transcription_ok = False
-            if text:
-                cleaned_text = text.rstrip()
-                fast_log(f"[TOGGLE] Transcription: {cleaned_text}")
-                # Always persist the last transcript for debugging/recovery.
-                try:
-                    last_path = _runtime_dir(create=True) / "voicepipe-last.txt"
-                    try:
-                        last_path.write_text(cleaned_text + "\n", encoding="utf-8")
-                    except PermissionError:
-                        # On Windows, a previous elevated run can leave behind a
-                        # file that's not writable by the normal desktop token.
-                        # If we can delete it, recreate it; otherwise, fall back
-                        # to a unique filename in the same directory.
-                        try:
-                            last_path.unlink()
-                        except Exception:
-                            pass
-                        try:
-                            last_path.write_text(cleaned_text + "\n", encoding="utf-8")
-                        except Exception:
-                            alt_path = _runtime_dir(create=True) / f"voicepipe-last-{int(time.time() * 1000)}.txt"
-                            alt_path.write_text(cleaned_text + "\n", encoding="utf-8")
-                except Exception:
-                    pass
-                typed_ok, type_err = type_text(
-                    cleaned_text,
-                    window_id=target_window,
-                    backend=typing_backend,
-                )
-                if not typed_ok:
-                    fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
-                transcription_ok = True
-            else:
-                fast_log("[TOGGLE] No transcription returned")
-
-            # Clean up
-            if transcription_ok:
-                if os.path.exists(audio_file):
-                    os.unlink(audio_file)
-                    fast_log(f"[TOGGLE] Cleaned up audio file: {audio_file}")
-            else:
-                try:
-                    dst_dir = preserved_audio_dir(create=True)
-                    dst = dst_dir / Path(audio_file).name
-                    shutil.move(audio_file, dst)
-                    audio_file = str(dst)
-                except Exception:
-                    pass
-                fast_log(f"[TOGGLE] Preserved audio file: {audio_file}")
+            _perform_toggle_post_stop(post)
         else:
             fast_log("[TOGGLE] Starting recording...")
             # Start recording
             backend.start(device=None)
+            return None
+
+        return None
     except RecordingError as e:
         fast_log(f"[TOGGLE] Recording error: {e}")
         raise SystemExit(1)
     except Exception as e:
         fast_log(f"[TOGGLE] Unexpected error: {e}")
         raise
+
+
+def _perform_toggle_post_stop(post: _TogglePostStop) -> None:
+    # Keep imports out of hot paths; the toggle lock has already been released.
+    from voicepipe.typing import type_text
+
+    audio_file = post.audio_file
+    target_window = post.target_window
+    typing_backend = post.typing_backend
+
+    text = send_transcribe_request(audio_file)
+    transcription_ok = False
+    if text:
+        cleaned_text = text.rstrip()
+        fast_log(f"[TOGGLE] Transcription: {cleaned_text}")
+        # Always persist the last transcript for debugging/recovery.
+        try:
+            last_path = _runtime_dir(create=True) / "voicepipe-last.txt"
+            try:
+                last_path.write_text(cleaned_text + "\n", encoding="utf-8")
+            except PermissionError:
+                try:
+                    last_path.unlink()
+                except Exception:
+                    pass
+                try:
+                    last_path.write_text(cleaned_text + "\n", encoding="utf-8")
+                except Exception:
+                    alt_path = _runtime_dir(create=True) / f"voicepipe-last-{int(time.time() * 1000)}.txt"
+                    alt_path.write_text(cleaned_text + "\n", encoding="utf-8")
+        except Exception:
+            pass
+
+        typed_ok, type_err = type_text(
+            cleaned_text,
+            window_id=target_window,
+            backend=typing_backend,  # type: ignore[arg-type]
+        )
+        if not typed_ok:
+            fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
+        transcription_ok = True
+    else:
+        fast_log("[TOGGLE] No transcription returned")
+
+    if transcription_ok:
+        if os.path.exists(audio_file):
+            os.unlink(audio_file)
+            fast_log(f"[TOGGLE] Cleaned up audio file: {audio_file}")
+        return
+
+    try:
+        dst_dir = preserved_audio_dir(create=True)
+        dst = dst_dir / Path(audio_file).name
+        shutil.move(audio_file, dst)
+        audio_file = str(dst)
+    except Exception:
+        pass
+    fast_log(f"[TOGGLE] Preserved audio file: {audio_file}")
 
 
 def _inprocess_is_recording() -> bool:
@@ -741,6 +770,7 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     # For toggle command, use file locking to prevent concurrent execution
     if cmd == "toggle":
+        post = None
         try:
             fast_log("[MAIN] Toggle command received")
             with PidFileLock(_lock_path(create_dir=True)):
@@ -750,13 +780,18 @@ def main(argv: Optional[list[str]] = None) -> None:
                     fast_log("[MAIN] Debounced, exiting")
                     raise SystemExit(0)  # Exit silently if debounced
                 fast_log("[MAIN] Executing toggle")
-                execute_toggle()
-                fast_log("[MAIN] Toggle completed")
-                return
+                post = execute_toggle_split(perform_transcribe=False)
         except LockHeld as e:
             fast_log(f"[MAIN] {e}")
             # Another instance is running, exit silently
             raise SystemExit(0)
+
+        # Release the toggle lock before transcription so hotkeys don't feel "down"
+        # when OpenAI requests take a long time.
+        if post is not None:
+            _perform_toggle_post_stop(post)
+        fast_log("[MAIN] Toggle completed")
+        return
 
     try:
         backend = AutoRecorderBackend()

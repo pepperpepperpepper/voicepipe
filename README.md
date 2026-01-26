@@ -19,9 +19,19 @@ Voice recording and transcription CLI for Linux (systemd optional) and Windows 1
 pip install voicepipe
 ```
 
+For the recording systray icon on Linux (Waybar/KDE tray hosts), install:
+```bash
+pip install 'voicepipe[systray]'
+```
+
 ### Using pipx (recommended)
 ```bash
 pipx install voicepipe
+```
+
+For the recording systray icon on Linux (Waybar/KDE tray hosts), install:
+```bash
+pipx install 'voicepipe[systray]'
 ```
 
 ### From source with systemd services (recommended for performance)

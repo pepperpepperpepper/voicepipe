@@ -25,6 +25,7 @@ def test_systray_import_exception_is_caught(monkeypatch) -> None:
     # runtime failure at import time (e.g. Xlib DisplayNameError).
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.setattr(systray_mod, "_can_use_sni", lambda: False)
 
     real_import = builtins.__import__
 
@@ -36,3 +37,12 @@ def test_systray_import_exception_is_caught(monkeypatch) -> None:
     monkeypatch.setattr(builtins, "__import__", fake_import)
     manager = SystrayManager()
     assert manager.available is False
+
+
+def test_systray_can_be_available_without_pystray_when_sni_is_enabled(monkeypatch) -> None:
+    systray_mod._systray = None
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-1")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.setattr(systray_mod, "_can_use_sni", lambda: True)
+    manager = SystrayManager()
+    assert manager.available is True

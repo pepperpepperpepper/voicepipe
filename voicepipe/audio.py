@@ -23,7 +23,6 @@ import numpy as np
 
 from voicepipe.audio_device import (
     apply_pulse_source_preference,
-    get_default_pulse_source,
     read_device_preference,
     resolve_device_index,
 )
@@ -569,10 +568,14 @@ def resolve_audio_input(
                 device_name=_device_name(selection.device_index),
             )
 
-    default_pulse = get_default_pulse_source() if not preferred_pulse else None
-    if default_pulse:
-        device_index, device_err = resolve_device_index(f"pulse:{default_pulse}")
-        if device_err is None and device_index is not None:
+    # Default behavior (Linux): prefer the Pulse/PipeWire input so we track the
+    # system default microphone. This intentionally does *not* require a loud
+    # signal at selection time (the user may not be speaking yet).
+    for spec in ("pulse", "pipewire"):
+        device_index, device_err = resolve_device_index(spec)
+        if device_err is not None or device_index is None:
+            continue
+        try:
             selection = select_audio_input(
                 preferred_device_index=int(device_index),
                 preferred_samplerate=preferred_samplerate,
@@ -584,6 +587,8 @@ def resolve_audio_input(
                 source="default",
                 device_name=_device_name(selection.device_index),
             )
+        except Exception:
+            continue
 
     cached = read_device_cache()
     if cached is not None:
@@ -726,21 +731,24 @@ def resolve_audio_input_for_recording(
                 device_name=None,
             )
 
-    default_pulse = get_default_pulse_source() if not preferred_pulse else None
-    if default_pulse:
-        device_index, device_err = resolve_device_index(f"pulse:{default_pulse}")
-        if device_err is None and device_index is not None:
-            samplerate = int(preferred_samplerate) if isinstance(preferred_samplerate, int) else 16000
-            channels = int(preferred_channels) if isinstance(preferred_channels, int) else 1
-            return AudioInputResolution(
-                selection=AudioInputSelection(
-                    device_index=int(device_index),
-                    samplerate=samplerate,
-                    channels=channels,
-                ),
-                source="default",
-                device_name=None,
-            )
+    # Default behavior (Linux): prefer the Pulse/PipeWire input so we track the
+    # system default microphone. Keep the preferred samplerate/channels for
+    # performance when possible.
+    for spec in ("pulse", "pipewire"):
+        device_index, device_err = resolve_device_index(spec)
+        if device_err is not None or device_index is None:
+            continue
+        samplerate = int(preferred_samplerate) if isinstance(preferred_samplerate, int) else 16000
+        channels = int(preferred_channels) if isinstance(preferred_channels, int) else 1
+        return AudioInputResolution(
+            selection=AudioInputSelection(
+                device_index=int(device_index),
+                samplerate=samplerate,
+                channels=channels,
+            ),
+            source="default",
+            device_name=None,
+        )
 
     cached = read_device_cache()
     if cached is not None:

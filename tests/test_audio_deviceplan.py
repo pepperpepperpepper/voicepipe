@@ -99,7 +99,7 @@ def test_resolve_audio_input_autodetect_uses_signal_probe_and_cache(
     import voicepipe.audio as audio
 
     devices = [
-        {"name": "pulse", "max_input_channels": 2, "default_samplerate": 48000},
+        {"name": "dev0", "max_input_channels": 2, "default_samplerate": 48000},
         {"name": "hw:0,6", "max_input_channels": 2, "default_samplerate": 48000},
     ]
     fake = FakeSoundDevice(
@@ -109,7 +109,6 @@ def test_resolve_audio_input_autodetect_uses_signal_probe_and_cache(
         allowed_samplerates={0: {16000, 48000}, 1: {48000}},
     )
     monkeypatch.setattr(audio, "sd", fake)
-    monkeypatch.setattr(audio, "get_default_pulse_source", lambda: None)
 
     # First call: should reject silent pulse and choose hw:0,6, writing cache.
     res1 = audio.resolve_audio_input(
@@ -150,7 +149,6 @@ def test_resolve_audio_input_env_override_is_strict(isolated_home: Path, monkeyp
         allowed_samplerates={0: {16000, 48000}, 1: {48000}},
     )
     monkeypatch.setattr(audio, "sd", fake)
-    monkeypatch.setattr(audio, "get_default_pulse_source", lambda: None)
     monkeypatch.setenv("VOICEPIPE_DEVICE", "0")
 
     res = audio.resolve_audio_input(
@@ -198,3 +196,75 @@ def test_config_audio_wizard_writes_env_and_cache(isolated_home: Path, monkeypat
     cache = _load_cache()
     assert cache["device_index"] == 1
     assert cache["source"] == "manual"
+
+
+def test_resolve_audio_input_prefers_pulse_default_over_cache(
+    isolated_home: Path, monkeypatch
+) -> None:
+    import voicepipe.audio as audio
+
+    devices = [
+        {"name": "pulse", "max_input_channels": 2, "default_samplerate": 48000},
+        {"name": "hw:0,6", "max_input_channels": 2, "default_samplerate": 48000},
+    ]
+    fake = FakeSoundDevice(
+        devices,
+        default_in=0,
+        amp_by_device={0: 0, 1: 200},
+        allowed_samplerates={0: {16000, 48000}, 1: {48000}},
+    )
+    monkeypatch.setattr(audio, "sd", fake)
+    monkeypatch.setitem(sys.modules, "sounddevice", fake)
+
+    # Seed a cache that points at the "loud" hardware device.
+    device_cache_path().parent.mkdir(parents=True, exist_ok=True)
+    device_cache_path().write_text(
+        json.dumps(
+            {
+                "device_index": 1,
+                "device_name": "hw:0,6",
+                "samplerate": 48000,
+                "channels": 1,
+                "source": "auto",
+                "last_ok": "2026-01-01T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    res = audio.resolve_audio_input(
+        preferred_samplerate=16000,
+        preferred_channels=1,
+        probe_seconds=0.05,
+        silence_threshold=50,
+    )
+    assert res.source == "default"
+    assert res.selection.device_index == 0
+
+
+def test_apply_pulse_source_preference_clears_stale_pulse_source_env(
+    isolated_home: Path, monkeypatch
+) -> None:
+    import os
+
+    from voicepipe.audio_device import apply_pulse_source_preference
+
+    monkeypatch.delenv("VOICEPIPE_PULSE_SOURCE", raising=False)
+    monkeypatch.setenv("PULSE_SOURCE", "stale-source")
+
+    assert apply_pulse_source_preference() is None
+    assert os.environ.get("PULSE_SOURCE") is None
+
+
+def test_apply_pulse_source_preference_respects_voicepipe_pulse_source_env(
+    isolated_home: Path, monkeypatch
+) -> None:
+    import os
+
+    from voicepipe.audio_device import apply_pulse_source_preference
+
+    monkeypatch.setenv("VOICEPIPE_PULSE_SOURCE", "alsa_input.example")
+    monkeypatch.setenv("PULSE_SOURCE", "stale-source")
+
+    assert apply_pulse_source_preference() == "alsa_input.example"
+    assert os.environ.get("PULSE_SOURCE") == "alsa_input.example"

@@ -67,6 +67,25 @@ def doctor_group(ctx: click.Context, verbose: bool) -> None:
         click.echo("  voicepipe doctor audio")
 
 
+def _wav_max_amp(path: Path) -> int | None:
+    try:
+        import wave
+
+        import numpy as np
+
+        with wave.open(str(path), "rb") as wf:
+            frames = wf.readframes(wf.getnframes())
+        if not frames:
+            return 0
+        arr = np.frombuffer(frames, dtype=np.int16)
+        if not arr.size:
+            return 0
+        # Avoid int16 abs(-32768) overflow by promoting to int32.
+        return int(np.max(np.abs(arr.astype(np.int32))))
+    except Exception:
+        return None
+
+
 def _doctor_summary(*, verbose: bool) -> None:
     click.echo("Voicepipe doctor (summary)")
 
@@ -486,6 +505,16 @@ def _doctor_daemon(
                                 if str(preserved) != str(recorded_file):
                                     click.echo(f"record-test preserved: {preserved}")
                                 recorded_file = str(preserved)
+
+                            # Help detect "it records but it's silent" issues.
+                            amp = _wav_max_amp(Path(recorded_file))
+                            if amp is not None:
+                                click.echo(f"record-test max_amp: {amp}")
+                                if int(amp) <= 0:
+                                    click.echo(
+                                        "record-test warning: audio appears silent (all zeros).",
+                                        err=True,
+                                    )
                         else:
                             click.echo(
                                 "record-test: no audio file produced", err=True
@@ -649,33 +678,47 @@ def _doctor_audio(seconds: float) -> None:
     """Record briefly and report microphone levels."""
     try:
         import numpy as np
-        import sounddevice as sd
-        from voicepipe.audio import resolve_audio_input
+
+        from voicepipe.audio import resolve_audio_input_for_recording
         from voicepipe.config import get_audio_channels, get_audio_sample_rate
+        from voicepipe.recorder import AudioRecorder
     except Exception as e:
         click.echo(f"audio-test error: {e}", err=True)
         return
 
     try:
-        resolution = resolve_audio_input(
+        resolution = resolve_audio_input_for_recording(
             preferred_samplerate=get_audio_sample_rate(),
             preferred_channels=get_audio_channels(),
         )
         selection = resolution.selection
-        fs = int(selection.samplerate)
-        frames = int(max(0.01, float(seconds)) * fs)
-        data = sd.rec(
-            frames,
-            samplerate=fs,
-            channels=int(selection.channels),
-            dtype="int16",
-            device=int(selection.device_index),
+        fs = int(selection.samplerate or 16000)
+
+        recorder = AudioRecorder(
+            device_index=int(selection.device_index),
+            sample_rate=fs,
+            channels=int(selection.channels or 1),
+            max_duration=None,
+            pre_open=False,
         )
-        sd.wait()
-        max_amp = int(np.max(np.abs(data))) if data.size else 0
+        try:
+            recorder.start_recording(output_file=None)
+            time.sleep(max(0.05, float(seconds)))
+            pcm = recorder.stop_recording()
+        finally:
+            try:
+                recorder.cleanup()
+            except Exception:
+                pass
+
+        if not pcm:
+            raise RuntimeError("No audio data recorded")
+
+        arr = np.frombuffer(pcm, dtype=np.int16)
+        max_amp = int(np.max(np.abs(arr.astype(np.int32)))) if arr.size else 0
         click.echo(
-            f"audio-test source={resolution.source} device={selection.device_index} samplerate={fs} "
-            f"channels={selection.channels} max_amp={max_amp}"
+            f"audio-test source={resolution.source} backend={getattr(recorder, 'backend', 'unknown')} "
+            f"device={selection.device_index} samplerate={fs} channels={selection.channels} max_amp={max_amp}"
         )
     except Exception as e:
         click.echo(f"audio-test error: {e}", err=True)

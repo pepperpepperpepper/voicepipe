@@ -62,9 +62,12 @@ def test_get_openai_api_key_reads_legacy_file(tmp_path: Path, monkeypatch) -> No
     assert config.get_openai_api_key() == "from-legacy"
 
 
-def test_get_openai_api_key_raises_helpful_error(monkeypatch) -> None:
+def test_get_openai_api_key_raises_helpful_error(tmp_path: Path, monkeypatch) -> None:
     config = _reload_config()
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
     with pytest.raises(config.VoicepipeConfigError) as exc:
         config.get_openai_api_key(load_env=False)
     assert "voicepipe.env" in str(exc.value)

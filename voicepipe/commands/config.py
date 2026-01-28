@@ -243,6 +243,48 @@ def _probe_pulse_source(
     samplerate: int,
     channels: int,
 ) -> int:
+    # Prefer `arecord` on Linux when available. It tracks Pulse/PipeWire sources
+    # reliably even on systems where PortAudio/sounddevice capture returns
+    # silent buffers (all zeros).
+    if not is_windows():
+        arecord = shutil.which("arecord")
+        if arecord:
+            try:
+                import numpy as np
+
+                samples = int(max(1, float(seconds) * float(samplerate)))
+                env = os.environ.copy()
+                env["PULSE_SOURCE"] = source
+                proc = subprocess.run(
+                    [
+                        arecord,
+                        "-q",
+                        "-D",
+                        "pulse",
+                        "-f",
+                        "S16_LE",
+                        "-r",
+                        str(int(samplerate)),
+                        "-c",
+                        str(int(channels)),
+                        "-t",
+                        "raw",
+                        "-s",
+                        str(int(samples)),
+                    ],
+                    capture_output=True,
+                    env=env,
+                    check=False,
+                    timeout=max(2.0, float(seconds) + 2.0),
+                )
+                if proc.returncode == 0:
+                    data = proc.stdout or b""
+                    arr = np.frombuffer(data, dtype=np.int16)
+                    return int(np.max(np.abs(arr.astype(np.int32)))) if arr.size else 0
+            except Exception:
+                pass
+
+    # Fallback: PortAudio via sounddevice.
     prev = os.environ.get("PULSE_SOURCE")
     os.environ["PULSE_SOURCE"] = source
     try:

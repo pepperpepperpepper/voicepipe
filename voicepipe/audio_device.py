@@ -88,7 +88,12 @@ def match_device_by_name(name: str) -> Optional[int]:
 
 
 def read_pulse_source_preference() -> Optional[str]:
-    """Return preferred PulseAudio source from env or config."""
+    """Return preferred PulseAudio source from Voicepipe env or config.
+
+    Note: We intentionally do not treat the global `PULSE_SOURCE` env var as a
+    Voicepipe preference. Voicepipe uses `VOICEPIPE_PULSE_SOURCE` (or config
+    files) to avoid accidentally pinning the daemon to a stale source.
+    """
     env = os.environ.get("VOICEPIPE_PULSE_SOURCE")
     if env:
         value = env.strip()
@@ -104,12 +109,6 @@ def read_pulse_source_preference() -> Optional[str]:
         except Exception:
             continue
 
-    env = os.environ.get("PULSE_SOURCE")
-    if env:
-        value = env.strip()
-        if value:
-            return value
-
     return None
 
 
@@ -119,6 +118,10 @@ def apply_pulse_source_preference() -> Optional[str]:
     if preferred:
         os.environ["PULSE_SOURCE"] = preferred
         return preferred
+    # Ensure we don't keep a stale PULSE_SOURCE from a previous run inside the
+    # daemon process; when no Voicepipe preference is set, let Pulse/PipeWire
+    # use the system default source.
+    os.environ.pop("PULSE_SOURCE", None)
     return None
 
 

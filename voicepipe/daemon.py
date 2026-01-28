@@ -18,7 +18,7 @@ except Exception:  # pragma: no cover
     sd = None  # type: ignore[assignment]
 
 from .audio import resolve_audio_input, select_audio_input
-from .audio_device import apply_pulse_source_preference
+from .audio_device import apply_pulse_source_preference, get_default_pulse_source
 from .config import get_audio_channels, get_audio_sample_rate
 from .device import parse_device_index
 from .logging_utils import configure_logging
@@ -45,7 +45,83 @@ class RecordingDaemon:
         self.default_samplerate = None
         self.default_channels = None
         self._timeout_triggered = False
+        self._pulse_default_source = None
         self._initialize_audio()
+
+    def _is_pulse_like_device(self, device_index: int | None) -> bool:
+        if sd is None:
+            return False
+        if device_index is None:
+            return False
+        try:
+            info = sd.query_devices(int(device_index))
+        except Exception:
+            return False
+        name = str(info.get("name", "")).lower()
+        return ("pulse" in name) or ("pipewire" in name)
+
+    def _update_pulse_default_source_snapshot(self) -> None:
+        """Track the Pulse default source at the time we open a Pulse-like stream.
+
+        This lets us recreate the pre-opened PortAudio stream when the system default
+        source changes, without requiring a daemon restart.
+        """
+        self._pulse_default_source = None
+        if self.recorder is None:
+            return
+        if os.environ.get("PULSE_SOURCE"):
+            return
+        if not self._is_pulse_like_device(getattr(self.recorder, "device_index", None)):
+            return
+        self._pulse_default_source = get_default_pulse_source()
+
+    def _refresh_pulse_stream_if_default_changed(self) -> None:
+        if self.recorder is None:
+            return
+        if os.environ.get("PULSE_SOURCE"):
+            # Explicit source pinning: don't follow the system default.
+            return
+        device_index = getattr(self.recorder, "device_index", None)
+        if not self._is_pulse_like_device(device_index):
+            return
+        current = get_default_pulse_source()
+        if not current:
+            return
+        previous = self._pulse_default_source
+        if previous is None:
+            self._pulse_default_source = current
+            return
+        if current == previous:
+            return
+
+        try:
+            rate = int(getattr(self.recorder, "rate", 16000))
+            channels = int(getattr(self.recorder, "channels", 1))
+            use_mp3 = bool(getattr(self.recorder, "use_mp3", False))
+            max_duration = getattr(self.recorder, "max_duration", None)
+        except Exception:
+            rate = 16000
+            channels = 1
+            use_mp3 = False
+            max_duration = None
+
+        logger.info(
+            "Pulse default source changed (%s -> %s); reopening audio stream",
+            previous,
+            current,
+        )
+        try:
+            self.recorder.cleanup()
+        except Exception:
+            pass
+        self.recorder = FastAudioRecorder(
+            device_index=int(device_index) if device_index is not None else None,
+            sample_rate=rate,
+            channels=channels,
+            use_mp3=use_mp3,
+            max_duration=max_duration,
+        )
+        self._pulse_default_source = current
     
     def _find_working_audio_device(self):
         """Find a working audio input configuration (device + samplerate + channels)."""
@@ -94,6 +170,7 @@ class RecordingDaemon:
                 use_mp3=False,
                 max_duration=None,
             )
+            self._update_pulse_default_source_snapshot()
             logger.info("Recorder pre-initialized for fast startup")
         except Exception as e:
             logger.warning("Could not pre-initialize audio: %s", e)
@@ -259,6 +336,7 @@ class RecordingDaemon:
                     use_mp3=False,
                     max_duration=None,
                 )
+                self._update_pulse_default_source_snapshot()
             elif not self.recorder:
                 # No pre-initialized recorder, create one (best-effort selection).
                 if self.default_device is None or self.default_samplerate is None or self.default_channels is None:
@@ -277,6 +355,11 @@ class RecordingDaemon:
                     use_mp3=False,
                     max_duration=None,
                 )
+                self._update_pulse_default_source_snapshot()
+
+            # If we're using a Pulse/PipeWire backend without an explicit source pin,
+            # refresh the pre-opened stream when the system default source changes.
+            self._refresh_pulse_stream_if_default_changed()
             
             # Start recording with existing recorder
             self.recorder.start_recording(output_file=self.audio_file)

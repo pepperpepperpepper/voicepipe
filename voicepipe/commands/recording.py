@@ -47,6 +47,13 @@ def _emit_transcription(
     payload = result.to_dict()
     payload["intent"] = intent.to_dict()
 
+    from voicepipe.transcript_triggers import apply_transcript_triggers
+
+    output_text, trigger_meta = apply_transcript_triggers(output_text)
+    payload["output_text"] = output_text
+    if trigger_meta is not None:
+        payload["transcript_trigger"] = trigger_meta
+
     strict_commands = os.environ.get("VOICEPIPE_COMMANDS_STRICT") == "1"
     if strict_commands and intent.mode == "command":
         if json_output:
@@ -363,6 +370,13 @@ def transcribe_file(
 
         payload = result.to_dict()
         payload["intent"] = intent.to_dict()
+
+        from voicepipe.transcript_triggers import apply_transcript_triggers
+
+        output_text, trigger_meta = apply_transcript_triggers(output_text)
+        payload["output_text"] = output_text
+        if trigger_meta is not None:
+            payload["transcript_trigger"] = trigger_meta
 
         strict_commands = os.environ.get("VOICEPIPE_COMMANDS_STRICT") == "1"
         if strict_commands and intent.mode == "command":

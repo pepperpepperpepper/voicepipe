@@ -330,8 +330,14 @@ def _perform_toggle_post_stop(post: _TogglePostStop) -> None:
         except Exception:
             pass
 
+        from voicepipe.transcript_triggers import apply_transcript_triggers
+
+        output_text, trigger_meta = apply_transcript_triggers(cleaned_text)
+        if trigger_meta is not None:
+            fast_log(f"[TOGGLE] Transcript trigger: {trigger_meta}")
+
         typed_ok, type_err = type_text(
-            cleaned_text,
+            output_text,
             window_id=target_window,
             backend=typing_backend,  # type: ignore[arg-type]
         )
@@ -639,13 +645,19 @@ def execute_toggle_inprocess() -> None:
                     except Exception as e:
                         fast_log(f"[TOGGLE] Warning: unexpected error persisting last transcript: {e}")
 
+                    from voicepipe.transcript_triggers import apply_transcript_triggers
+
+                    output_text, trigger_meta = apply_transcript_triggers(cleaned_text)
+                    if trigger_meta is not None:
+                        fast_log(f"[TOGGLE] Transcript trigger: {trigger_meta}")
+
                     fast_log(
                         "[TOGGLE] Typing transcription: "
-                        f"backend={typing_backend.name} window_id={target_window or ''} chars={len(cleaned_text)}"
+                        f"backend={typing_backend.name} window_id={target_window or ''} chars={len(output_text)}"
                     )
                     t_type0 = time.monotonic()
                     typed_ok, type_err = type_text(
-                        cleaned_text,
+                        output_text,
                         window_id=target_window,
                         backend=typing_backend,
                     )

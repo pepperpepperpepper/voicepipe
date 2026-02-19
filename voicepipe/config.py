@@ -48,6 +48,7 @@ DEFAULT_ENV_FILE_TEMPLATE = """# Voicepipe environment config (used by systemd s
 # OPENAI_API_KEY=sk-...
 # ELEVENLABS_API_KEY=...
 # or: XI_API_KEY=...
+# GROQ_API_KEY=...  # optional (for Groq/OpenAI-compatible chat endpoints)
 # VOICEPIPE_DEVICE=12  # or: pulse:alsa_input.pci-0000_00_1f.3-platform-...-input-6
 # VOICEPIPE_PULSE_SOURCE=alsa_input.pci-0000_00_1f.3-platform-...-input-6
 # VOICEPIPE_AUDIO_SAMPLE_RATE=16000
@@ -59,6 +60,19 @@ DEFAULT_ENV_FILE_TEMPLATE = """# Voicepipe environment config (used by systemd s
 #   macOS: auto|osascript|none
 #   Windows: auto|sendinput|none
 # VOICEPIPE_DAEMON_MODE=auto  # auto|never|always
+#
+# Transcript triggers (lightweight prefix match; only runs preprocessors when a trigger is present):
+# VOICEPIPE_TRANSCRIPT_TRIGGERS=zwingly=zwingli
+#   Format: comma-separated trigger=action pairs (e.g. "zwingly=zwingli,fix=...").
+#   Set to empty to disable: VOICEPIPE_TRANSCRIPT_TRIGGERS=
+#
+# Zwingli LLM preprocessor (trigger action name: "zwingli"):
+# VOICEPIPE_ZWINGLI_BACKEND=openai  # openai|groq
+# VOICEPIPE_ZWINGLI_MODEL=gpt-4o-mini
+# VOICEPIPE_ZWINGLI_TEMPERATURE=0.2
+# VOICEPIPE_ZWINGLI_SYSTEM_PROMPT=You are a dictation preprocessor. Output only the final text to type.
+# VOICEPIPE_ZWINGLI_USER_PROMPT=
+# VOICEPIPE_ZWINGLI_BASE_URL=  # optional (OpenAI-compatible base URL override)
 """
 
 DaemonMode = Literal["auto", "never", "always"]
@@ -564,3 +578,150 @@ def get_daemon_mode(*, default: DaemonMode = "auto", load_env: bool = True) -> D
             f"Got: {raw!r}"
         )
     return mode  # type: ignore[return-value]
+
+
+def _as_bool(value: object, *, default: bool = False) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return bool(value)
+    raw = str(value).strip().lower()
+    if not raw:
+        return bool(default)
+    if raw in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if raw in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    return bool(default)
+
+
+def get_intent_routing_enabled(*, default: bool = True, load_env: bool = True) -> bool:
+    if load_env:
+        load_environment()
+    if "VOICEPIPE_INTENT_ROUTING_ENABLED" not in os.environ:
+        return bool(default)
+    return _as_bool(os.environ.get("VOICEPIPE_INTENT_ROUTING_ENABLED"), default=bool(default))
+
+
+def get_intent_wake_prefixes(
+    *,
+    default: tuple[str, ...] = ("command", "computer"),
+    load_env: bool = True,
+) -> list[str]:
+    if load_env:
+        load_environment()
+    raw = (os.environ.get("VOICEPIPE_INTENT_WAKE_PREFIXES") or "").strip()
+    if not raw:
+        return list(default)
+    parts = [p.strip() for p in raw.split(",")]
+    return [p for p in parts if p]
+
+
+def get_groq_api_key(*, load_env: bool = True) -> str:
+    if load_env:
+        load_environment()
+    api_key = (os.environ.get("GROQ_API_KEY") or "").strip()
+    if api_key:
+        return api_key
+    raise VoicepipeConfigError(
+        "Groq API key not found.\n\n"
+        "Set GROQ_API_KEY in your environment or in your voicepipe.env file."
+    )
+
+
+def get_zwingli_backend(*, default: str = "openai", load_env: bool = True) -> str:
+    if load_env:
+        load_environment()
+    raw = (os.environ.get("VOICEPIPE_ZWINGLI_BACKEND") or "").strip().lower()
+    return raw or str(default)
+
+
+def get_zwingli_base_url(*, default: str = "", load_env: bool = True) -> str:
+    if load_env:
+        load_environment()
+    return (os.environ.get("VOICEPIPE_ZWINGLI_BASE_URL") or str(default) or "").strip()
+
+
+def get_zwingli_model(*, default: str = "gpt-4o-mini", load_env: bool = True) -> str:
+    if load_env:
+        load_environment()
+    return (os.environ.get("VOICEPIPE_ZWINGLI_MODEL") or str(default) or "").strip()
+
+
+def get_zwingli_temperature(*, default: float = 0.2, load_env: bool = True) -> float:
+    if load_env:
+        load_environment()
+    raw = (os.environ.get("VOICEPIPE_ZWINGLI_TEMPERATURE") or "").strip()
+    if not raw:
+        return float(default)
+    try:
+        return float(raw)
+    except Exception:
+        return float(default)
+
+
+def get_zwingli_system_prompt(
+    *,
+    default: str = "You are a dictation preprocessor. Output only the final text to type.",
+    load_env: bool = True,
+) -> str:
+    if load_env:
+        load_environment()
+    return (os.environ.get("VOICEPIPE_ZWINGLI_SYSTEM_PROMPT") or str(default) or "").strip()
+
+
+def get_zwingli_user_prompt(*, default: str = "", load_env: bool = True) -> str:
+    if load_env:
+        load_environment()
+    return (os.environ.get("VOICEPIPE_ZWINGLI_USER_PROMPT") or str(default) or "").strip()
+
+
+def get_transcript_triggers(
+    *,
+    default: dict[str, str] | None = None,
+    load_env: bool = True,
+) -> dict[str, str]:
+    """Return transcript trigger->action mapping.
+
+    These are lightweight text prefixes checked against the transcription result.
+    If a trigger matches, the corresponding action is invoked to produce the
+    final output text.
+
+    Env format (comma-separated pairs):
+      VOICEPIPE_TRANSCRIPT_TRIGGERS=zwingly=zwingli,fix=zwingli
+
+    If the variable is present but empty, triggers are disabled.
+    """
+    if load_env:
+        load_environment()
+
+    env_name = "VOICEPIPE_TRANSCRIPT_TRIGGERS"
+    raw = (os.environ.get(env_name) or "").strip()
+
+    if env_name in os.environ and not raw:
+        return {}
+
+    if not raw:
+        return dict(default or {"zwingly": "zwingli"})
+
+    out: dict[str, str] = {}
+    for entry in raw.split(","):
+        item = (entry or "").strip()
+        if not item:
+            continue
+        if "=" in item:
+            trigger, _sep, action = item.partition("=")
+        elif ":" in item:
+            trigger, _sep, action = item.partition(":")
+        else:
+            trigger, action = item, "zwingli"
+
+        trigger = (trigger or "").strip().lower()
+        action = (action or "").strip().lower()
+        if not trigger:
+            continue
+        if not action:
+            action = "zwingli"
+        out[trigger] = action
+
+    return out

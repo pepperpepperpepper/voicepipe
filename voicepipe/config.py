@@ -595,7 +595,7 @@ def _as_bool(value: object, *, default: bool = False) -> bool:
     return bool(default)
 
 
-def get_intent_routing_enabled(*, default: bool = True, load_env: bool = True) -> bool:
+def get_intent_routing_enabled(*, default: bool = False, load_env: bool = True) -> bool:
     if load_env:
         load_environment()
     if "VOICEPIPE_INTENT_ROUTING_ENABLED" not in os.environ:

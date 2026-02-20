@@ -15,10 +15,10 @@ from typing import BinaryIO
 
 import click
 
-from voicepipe.config import get_transcribe_model
+from voicepipe.config import get_intent_routing_enabled, get_intent_wake_prefixes, get_transcribe_model
 from voicepipe.logging_utils import configure_logging
 from voicepipe.paths import preserved_audio_dir
-from voicepipe.intent_router import route_intent
+from voicepipe.intent_router import IntentResult, route_intent
 from voicepipe.recording_backend import (
     AutoRecorderBackend,
     RecordingError,
@@ -37,12 +37,19 @@ def _emit_transcription(
     type_: bool,
     json_output: bool,
 ) -> None:
-    intent = route_intent(result)
+    routing_enabled = get_intent_routing_enabled()
+    if routing_enabled:
+        intent = route_intent(result, wake_prefixes=get_intent_wake_prefixes())
+    else:
+        intent = IntentResult(mode="dictation", dictation_text=(result.text or "").strip(), reason="disabled")
+
     output_text = result.text
     if intent.mode == "dictation" and intent.dictation_text is not None:
         output_text = intent.dictation_text
     elif intent.mode == "command" and intent.command_text is not None:
         output_text = intent.command_text
+    else:
+        output_text = (result.text or "").strip()
 
     payload = result.to_dict()
     payload["intent"] = intent.to_dict()
@@ -361,42 +368,7 @@ def transcribe_file(
             prefer_daemon=True,
             source="transcribe-file",
         )
-        intent = route_intent(result)
-        output_text = result.text
-        if intent.mode == "dictation" and intent.dictation_text is not None:
-            output_text = intent.dictation_text
-        elif intent.mode == "command" and intent.command_text is not None:
-            output_text = intent.command_text
-
-        payload = result.to_dict()
-        payload["intent"] = intent.to_dict()
-
-        from voicepipe.transcript_triggers import apply_transcript_triggers
-
-        output_text, trigger_meta = apply_transcript_triggers(output_text)
-        payload["output_text"] = output_text
-        if trigger_meta is not None:
-            payload["transcript_trigger"] = trigger_meta
-
-        strict_commands = os.environ.get("VOICEPIPE_COMMANDS_STRICT") == "1"
-        if strict_commands and intent.mode == "command":
-            if json_:
-                click.echo(json.dumps(payload, ensure_ascii=False))
-            click.echo(
-                "Command-mode detected but commands are not implemented yet.",
-                err=True,
-            )
-            raise SystemExit(2)
-
-        if json_:
-            click.echo(json.dumps(payload, ensure_ascii=False))
-        else:
-            click.echo(output_text)
-
-        if type_:
-            ok, err = type_text(output_text)
-            if not ok:
-                click.echo(f"Error typing text: {err}", err=True)
+        _emit_transcription(result, type_=bool(type_), json_output=bool(json_))
 
     except SystemExit:
         raise

@@ -119,6 +119,19 @@ def serve(
         "Transcriber ready (backend=%s model=%s)", default_backend, default_model
     )
 
+    from voicepipe.config import get_transcript_triggers
+    from voicepipe.transcript_triggers import apply_transcript_triggers
+
+    transcript_triggers = get_transcript_triggers(load_env=False)
+    if transcript_triggers:
+        preview = ", ".join(
+            f"{k}={v}" for k, v in list(transcript_triggers.items())[:6]
+        )
+        more = "" if len(transcript_triggers) <= 6 else f" (+{len(transcript_triggers) - 6} more)"
+        logger.info("Transcript triggers enabled: %s%s", preview, more)
+    else:
+        logger.info("Transcript triggers disabled")
+
     _unlink_if_exists(socket_file)
 
     running = True
@@ -161,6 +174,7 @@ def serve(
                 request_language = request.get("language")
                 request_prompt = request.get("prompt")
                 request_temperature = request.get("temperature")
+                request_apply_triggers = request.get("apply_triggers")
 
                 language = (
                     str(request_language)
@@ -173,6 +187,9 @@ def serve(
                     else None
                 )
                 temp = float(request_temperature) if request_temperature is not None else 0.0
+                apply_triggers = True
+                if request_apply_triggers is not None:
+                    apply_triggers = bool(request_apply_triggers)
                 req_model_raw = (
                     str(request_model)
                     if isinstance(request_model, str) and request_model.strip()
@@ -209,6 +226,21 @@ def serve(
                             temperature=temp,
                             model=req_model,
                         )
+                        if apply_triggers:
+                            out, meta = apply_transcript_triggers(
+                                text,
+                                triggers=transcript_triggers,
+                            )
+                            if meta is not None:
+                                try:
+                                    conn.sendall(
+                                        (json.dumps({"type": "postprocess", "meta": meta}) + "\n").encode(
+                                            "utf-8"
+                                        )
+                                    )
+                                except Exception:
+                                    pass
+                            text = out
                         logger.info(
                             "Transcribed hex audio in %.2fs (%s) backend=%s model=%s",
                             time.time() - start_time,
@@ -231,6 +263,21 @@ def serve(
                         temperature=temp,
                         model=req_model,
                     )
+                    if apply_triggers:
+                        out, meta = apply_transcript_triggers(
+                            text,
+                            triggers=transcript_triggers,
+                        )
+                        if meta is not None:
+                            try:
+                                conn.sendall(
+                                    (json.dumps({"type": "postprocess", "meta": meta}) + "\n").encode(
+                                        "utf-8"
+                                    )
+                                )
+                            except Exception:
+                                pass
+                        text = out
                     logger.info(
                         "Transcribed file in %.2fs (%s) backend=%s model=%s",
                         time.time() - start_time,

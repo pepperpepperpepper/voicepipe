@@ -143,3 +143,26 @@ def test_ensure_env_file_does_not_overwrite(tmp_path: Path, monkeypatch) -> None
     env_path.write_text("OPENAI_API_KEY=existing\n", encoding="utf-8")
     config.ensure_env_file()
     assert env_path.read_text(encoding="utf-8") == "OPENAI_API_KEY=existing\n"
+
+
+def test_get_transcript_triggers_default(monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    triggers = config.get_transcript_triggers(load_env=False)
+    assert triggers.get("zwingli") == "strip"
+
+
+def test_get_transcript_triggers_empty_disables(monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.setenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", "")
+    triggers = config.get_transcript_triggers(load_env=False)
+    assert triggers == {}
+
+
+def test_get_transcript_triggers_parses_mapping(monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.setenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", "zwingli=zwingli,fix=strip,raw")
+    triggers = config.get_transcript_triggers(load_env=False)
+    assert triggers["zwingli"] == "zwingli"
+    assert triggers["fix"] == "strip"
+    assert triggers["raw"] == "strip"

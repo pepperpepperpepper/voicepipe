@@ -59,6 +59,18 @@ DEFAULT_ENV_FILE_TEMPLATE = """# Voicepipe environment config (used by systemd s
 #   macOS: auto|osascript|none
 #   Windows: auto|sendinput|none
 # VOICEPIPE_DAEMON_MODE=auto  # auto|never|always
+#
+# Transcript triggers (prefix-based; checked after transcription):
+# VOICEPIPE_TRANSCRIPT_TRIGGERS=zwingli=strip,zwingly=strip
+#   Actions: strip|zwingli
+#
+# Zwingli LLM preprocessing (action=zwingli):
+# VOICEPIPE_ZWINGLI_MODEL=gpt-4o-mini
+# VOICEPIPE_ZWINGLI_TEMPERATURE=0.2
+# VOICEPIPE_ZWINGLI_SYSTEM_PROMPT=You are a dictation preprocessor. Output only the final text to type.
+# VOICEPIPE_ZWINGLI_USER_PROMPT=
+# VOICEPIPE_ZWINGLI_BASE_URL=
+# VOICEPIPE_ZWINGLI_API_KEY=  # defaults to OPENAI_API_KEY when unset
 """
 
 DaemonMode = Literal["auto", "never", "always"]
@@ -564,3 +576,104 @@ def get_daemon_mode(*, default: DaemonMode = "auto", load_env: bool = True) -> D
             f"Got: {raw!r}"
         )
     return mode  # type: ignore[return-value]
+
+
+def get_transcript_triggers(
+    *,
+    default: dict[str, str] | None = None,
+    load_env: bool = True,
+) -> dict[str, str]:
+    """Return transcript trigger->action mapping.
+
+    These are lightweight text prefixes checked against the transcription result.
+    If a trigger matches, the corresponding action is invoked to produce the
+    final output text.
+
+    Env format (comma-separated pairs):
+      VOICEPIPE_TRANSCRIPT_TRIGGERS=zwingli=strip,zwingly=zwingli
+
+    If the variable is present but empty, triggers are disabled.
+    """
+    if load_env:
+        load_environment()
+
+    env_name = "VOICEPIPE_TRANSCRIPT_TRIGGERS"
+    raw = (os.environ.get(env_name) or "").strip()
+
+    if env_name in os.environ and not raw:
+        return {}
+
+    if not raw:
+        return dict(default or {"zwingli": "strip", "zwingly": "strip"})
+
+    out: dict[str, str] = {}
+    for entry in raw.split(","):
+        item = (entry or "").strip()
+        if not item:
+            continue
+        if "=" in item:
+            trigger, _sep, action = item.partition("=")
+        elif ":" in item:
+            trigger, _sep, action = item.partition(":")
+        else:
+            trigger, action = item, "strip"
+
+        trigger = (trigger or "").strip().lower()
+        action = (action or "").strip().lower()
+        if not trigger:
+            continue
+        if not action:
+            action = "strip"
+        out[trigger] = action
+
+    return out
+
+
+def get_zwingli_model(*, default: str = "gpt-4o-mini", load_env: bool = True) -> str:
+    if load_env:
+        load_environment()
+    return (os.environ.get("VOICEPIPE_ZWINGLI_MODEL") or str(default) or "").strip()
+
+
+def get_zwingli_temperature(*, default: float = 0.2, load_env: bool = True) -> float:
+    if load_env:
+        load_environment()
+    raw = (os.environ.get("VOICEPIPE_ZWINGLI_TEMPERATURE") or "").strip()
+    if not raw:
+        return float(default)
+    try:
+        return float(raw)
+    except Exception:
+        return float(default)
+
+
+def get_zwingli_system_prompt(
+    *,
+    default: str = "You are a dictation preprocessor. Output only the final text to type.",
+    load_env: bool = True,
+) -> str:
+    if load_env:
+        load_environment()
+    return (os.environ.get("VOICEPIPE_ZWINGLI_SYSTEM_PROMPT") or str(default) or "").strip()
+
+
+def get_zwingli_user_prompt(*, default: str = "", load_env: bool = True) -> str:
+    if load_env:
+        load_environment()
+    return (os.environ.get("VOICEPIPE_ZWINGLI_USER_PROMPT") or str(default) or "").strip()
+
+
+def get_zwingli_base_url(*, default: str = "", load_env: bool = True) -> str:
+    if load_env:
+        load_environment()
+    return (os.environ.get("VOICEPIPE_ZWINGLI_BASE_URL") or str(default) or "").strip()
+
+
+def get_zwingli_api_key(*, default: str = "", load_env: bool = True) -> str:
+    if load_env:
+        load_environment()
+    raw = (os.environ.get("VOICEPIPE_ZWINGLI_API_KEY") or "").strip()
+    if raw:
+        return raw
+    # Default to OpenAI key if present (common case).
+    return (os.environ.get("OPENAI_API_KEY") or str(default) or "").strip()

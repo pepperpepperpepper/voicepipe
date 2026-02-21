@@ -351,6 +351,19 @@ voicepipe stop --model whisper-1
 voicepipe stop --model elevenlabs:scribe_v1
 ```
 
+#### Transcript Triggers (Postprocessing)
+Voicepipe can apply lightweight *prefix-based* triggers after transcription (this is not an always-listening audio wake word).
+
+Configure in your `voicepipe.env` file:
+```bash
+# Comma-separated trigger=action pairs. If set but empty, disables triggers.
+VOICEPIPE_TRANSCRIPT_TRIGGERS=zwingli=strip,zwingly=strip
+```
+
+Built-in actions:
+- `strip`: remove the trigger word and output the remainder
+- `zwingli`: run the remainder through an LLM and output only the final text (see `VOICEPIPE_ZWINGLI_*`)
+
 #### Shell Scripting
 ```bash
 # Save to file

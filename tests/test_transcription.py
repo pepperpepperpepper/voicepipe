@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import socket
 import threading
 import tempfile
@@ -195,3 +196,24 @@ def test_transcribe_audio_file_model_prefix_overrides_backend(monkeypatch) -> No
 
     out = transcribe_audio_file("a.wav", model="openai:whisper-1", prefer_daemon=False)
     assert out == "ok-openai:a.wav:whisper-1"
+
+
+def test_transcribe_audio_file_sends_abs_path_and_backend_prefixed_model_to_daemon(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("VOICEPIPE_DAEMON_MODE", "always")
+    monkeypatch.setenv("VOICEPIPE_TRANSCRIBE_BACKEND", "openai")
+
+    captured: dict[str, object] = {}
+
+    def _fake_daemon(audio_file: str, *, model: str, **_kwargs) -> str:
+        captured["audio_file"] = audio_file
+        captured["model"] = model
+        return "ok"
+
+    monkeypatch.setattr("voicepipe.transcription._transcribe_via_daemon", _fake_daemon)
+
+    out = transcribe_audio_file("a.wav", model="gpt-4o-transcribe", prefer_daemon=True)
+    assert out == "ok"
+    assert captured["audio_file"] == os.path.abspath(os.path.expanduser("a.wav"))
+    assert captured["model"] == "openai:gpt-4o-transcribe"

@@ -173,3 +173,53 @@ Acceptance:
 
 - Add macOS classifiers to `pyproject.toml` once CI passes.
 - Keep macOS-only features behind optional extras if we end up needing non-stdlib deps.
+
+---
+
+## Zwingli transcript-trigger preprocessing (manual fixtures)
+
+Goal: keep transcript trigger handling **passive/lightweight** unless a trigger word is present (“just a grep”),
+then optionally run extra LLM processing before the final destination (typing, etc).
+
+### Fixtures (created 2026-02-21)
+
+- `zwingli1.wav`: `https://tmp.uh-oh.wtf/2026/02/21/c809d90e-zwingli1.wav`
+- `zwingli2.wav`: `https://tmp.uh-oh.wtf/2026/02/21/867b7c44-zwingli2.wav`
+- `zwingli_advanced.wav`: `https://tmp.uh-oh.wtf/2026/02/21/9d7a7250-zwingli_advanced.wav`
+
+### Suggested local workflow
+
+- Download:
+  - `mkdir -p /tmp/voicepipe_zwingli_tests && cd /tmp/voicepipe_zwingli_tests`
+  - `curl -fsSL -o zwingli1.wav https://tmp.uh-oh.wtf/2026/02/21/c809d90e-zwingli1.wav`
+  - `curl -fsSL -o zwingli2.wav https://tmp.uh-oh.wtf/2026/02/21/867b7c44-zwingli2.wav`
+  - `curl -fsSL -o zwingli_advanced.wav https://tmp.uh-oh.wtf/2026/02/21/9d7a7250-zwingli_advanced.wav`
+- Transcribe:
+  - `poetry run voicepipe transcribe-file --json /tmp/voicepipe_zwingli_tests/zwingli1.wav`
+  - `poetry run voicepipe transcribe-file --json /tmp/voicepipe_zwingli_tests/zwingli2.wav`
+  - `poetry run voicepipe transcribe-file --json /tmp/voicepipe_zwingli_tests/zwingli_advanced.wav`
+- If the trigger word is mis-transcribed, retry with a vocabulary hint:
+  - `poetry run voicepipe transcribe-file --json --prompt "The speaker may start by saying the command word 'zwingly'." /tmp/voicepipe_zwingli_tests/zwingli2.wav`
+
+### Expected behavior
+
+- `zwingli1.wav`:
+  - Transcription is normal dictation (no trigger).
+  - `output_text == text`
+  - `transcript_trigger` is absent.
+- `zwingli2.wav`:
+  - Transcription begins with `Zwingly, ...`
+  - `transcript_trigger.action == "zwingli"`
+  - `output_text` is the LLM-processed result (should not include the trigger word).
+- `zwingli_advanced.wav` (example of “more processing”):
+  - Transcription resembles: `Zwingly, execute this command: curl asdf.us/python.`
+  - `output_text` is the extracted/cleaned command (e.g. `curl asdf.us/python`).
+
+### Next refactor (after `zwingli1.wav` + `zwingli2.wav` are reliable)
+
+- Make trigger words more reliably recognized by STT:
+  - Add a config/default for a transcription prompt (e.g. `VOICEPIPE_TRANSCRIBE_PROMPT`).
+  - Automatically append known trigger words from `VOICEPIPE_TRANSCRIPT_TRIGGERS` to the STT prompt so `zwingly` is less likely to become `swinging`.
+- Extend transcript triggers beyond “single pass text rewrite”:
+  - Allow trigger actions to return structured output (e.g. `{destination: "type"|"clipboard"|"shell", text: ...}`).
+  - Support multi-step LLM processing for advanced workflows (e.g. command extraction + safety pass) using `zwingli_advanced.wav` as the first regression fixture.

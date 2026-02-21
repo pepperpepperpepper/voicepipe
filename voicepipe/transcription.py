@@ -8,6 +8,7 @@ This centralizes the logic for:
 from __future__ import annotations
 
 import json
+import os
 import socket
 from pathlib import Path
 from typing import BinaryIO, Optional
@@ -44,7 +45,11 @@ def _resolve_backend_and_model(model: str) -> tuple[str, str, str]:
             return backend, model_id, raw
 
     backend = _normalize_backend(get_transcribe_backend(load_env=True))
-    return backend, raw, raw
+    model_id = raw
+    model_for_daemon = raw
+    if backend in {"openai", "elevenlabs"} and model_id:
+        model_for_daemon = f"{backend}:{model_id}"
+    return backend, model_id, model_for_daemon
 
 
 def _transcribe_via_daemon(
@@ -166,7 +171,7 @@ def transcribe_audio_file(
     if effective_prefer_daemon:
         try:
             return _transcribe_via_daemon(
-                audio_file,
+                os.path.abspath(os.path.expanduser(audio_file)),
                 model=model_for_daemon,
                 language=language,
                 prompt=prompt,

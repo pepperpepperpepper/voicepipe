@@ -25,7 +25,7 @@ class IntentResult:
         }
 
 
-DEFAULT_WAKE_PREFIXES: tuple[str, ...] = ("command", "computer", "zwingli", "zwingly")
+DEFAULT_WAKE_PREFIXES: tuple[str, ...] = ("zwingli", "zwingly")
 
 
 def route_intent(

@@ -25,6 +25,7 @@ from voicepipe.recording_backend import (
 )
 from voicepipe.session import RecordingSession
 from voicepipe.transcription import transcribe_audio_file_result, transcribe_audio_fileobj_result
+from voicepipe.transcription_result import TranscriptionResult
 from voicepipe.typing import type_text
 from voicepipe.platform import is_windows
 
@@ -93,6 +94,7 @@ def _transcribe_and_finalize(
     temperature: float,
     type_: bool,
     json_output: bool,
+    keep_audio: bool,
     source: str,
     prefer_daemon: bool = True,
 ) -> None:
@@ -130,6 +132,9 @@ def _transcribe_and_finalize(
 
         if audio_file and os.path.exists(audio_file):
             if transcription_ok:
+                if keep_audio:
+                    click.echo(f"Kept audio file: {audio_file}", err=True)
+                    return
                 try:
                     os.unlink(audio_file)
                 except Exception:
@@ -156,6 +161,7 @@ def _transcribe_and_finalize_fileobj(
     temperature: float,
     type_: bool,
     json_output: bool,
+    keep_audio: bool,
     source: str,
 ) -> None:
     transcription_ok = False
@@ -170,6 +176,29 @@ def _transcribe_and_finalize_fileobj(
             recording_id=recording_id,
             source=source,
         )
+        if keep_audio:
+            try:
+                try:
+                    wav_fh.seek(0)
+                except Exception:
+                    pass
+                dst_dir = preserved_audio_dir(create=True)
+                rid = str(recording_id or int(time.time() * 1000))
+                dst = dst_dir / f"voicepipe_{rid}.wav"
+                with open(dst, "wb") as out:
+                    shutil.copyfileobj(wav_fh, out)
+                click.echo(f"Kept audio file: {dst}", err=True)
+                result = TranscriptionResult(
+                    text=result.text,
+                    backend=result.backend,
+                    model=result.model,
+                    audio_file=str(dst),
+                    recording_id=result.recording_id,
+                    source=result.source,
+                    warnings=list(result.warnings),
+                )
+            except Exception:
+                pass
         transcription_ok = True
         _emit_transcription(result, type_=bool(type_), json_output=bool(json_output))
     except SystemExit:
@@ -253,6 +282,11 @@ def start(device: str | None) -> None:
     type=float,
     help="Temperature for transcription (0.0 for deterministic, default: 0.0)",
 )
+@click.option(
+    "--keep-audio",
+    is_flag=True,
+    help="Keep the recorded audio file after transcription (prevents deletion).",
+)
 @click.option("--json", "json_", is_flag=True, help="Output structured JSON (default: plain text)")
 def stop(
     type_: bool,
@@ -260,6 +294,7 @@ def stop(
     prompt: str | None,
     model: str | None,
     temperature: float,
+    keep_audio: bool,
     json_: bool,
 ) -> None:
     """Stop recording and transcribe the audio."""
@@ -277,6 +312,7 @@ def stop(
             temperature=float(temperature),
             type_=bool(type_),
             json_output=bool(json_),
+            keep_audio=bool(keep_audio),
             source="stop",
             prefer_daemon=True,
         )
@@ -425,6 +461,11 @@ def transcribe_file(
     show_default=True,
     help="Prefer the daemon backend when available (falls back automatically).",
 )
+@click.option(
+    "--keep-audio",
+    is_flag=True,
+    help="Keep the recorded audio file after transcription (prevents deletion).",
+)
 @click.option("--json", "json_", is_flag=True, help="Output structured JSON (default: plain text)")
 def dictate(
     seconds: float | None,
@@ -435,6 +476,7 @@ def dictate(
     model: str | None,
     temperature: float,
     prefer_daemon: bool,
+    keep_audio: bool,
     json_: bool,
 ) -> None:
     """Record from the mic, transcribe, and optionally type (one command)."""
@@ -478,6 +520,7 @@ def dictate(
                 temperature=float(temperature),
                 type_=bool(type_),
                 json_output=bool(json_),
+                keep_audio=bool(keep_audio),
                 source="dictate",
                 prefer_daemon=True,
             )
@@ -643,6 +686,7 @@ def dictate(
             temperature=float(temperature),
             type_=bool(type_),
             json_output=bool(json_),
+            keep_audio=bool(keep_audio),
             source="dictate",
         )
     finally:

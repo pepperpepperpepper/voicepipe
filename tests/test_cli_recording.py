@@ -68,6 +68,50 @@ def test_stop_deletes_audio_file_on_success(tmp_path: Path, monkeypatch, isolate
     assert cleaned == [session_dict]
 
 
+def test_stop_keep_audio_flag_keeps_audio_file_on_success(
+    tmp_path: Path, monkeypatch, isolated_home: Path
+) -> None:
+    import voicepipe.commands.recording as recording_cmd
+
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"abc")
+
+    session_dict = {"pid": 1, "audio_file": str(audio)}
+
+    class _FakeBackend:
+        def stop(self):
+            return _StopResult(audio_file=str(audio), session=session_dict)
+
+    cleaned: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(recording_cmd, "AutoRecorderBackend", lambda: _FakeBackend())
+    monkeypatch.setattr(
+        recording_cmd,
+        "transcribe_audio_file_result",
+        lambda *_a, **_k: TranscriptionResult(
+            text="hello",
+            backend="openai",
+            model="gpt-test",
+            audio_file=str(audio),
+            recording_id=None,
+            source="stop",
+            warnings=[],
+        ),
+    )
+    monkeypatch.setattr(
+        recording_cmd.RecordingSession, "cleanup_session", lambda s: cleaned.append(s)
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["stop", "--keep-audio"])
+    assert result.exit_code == 0, _combined_cli_output(result)
+    combined = _combined_cli_output(result)
+    assert "hello" in combined
+    assert "Kept audio file:" in combined
+    assert audio.exists()
+    assert cleaned == [session_dict]
+
+
 def test_stop_preserves_audio_file_on_transcription_error(
     tmp_path: Path, monkeypatch, isolated_home: Path
 ) -> None:

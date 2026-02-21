@@ -28,6 +28,18 @@ def test_intent_router_routes_command_prefix_with_punctuation() -> None:
     assert intent.command_text == "open the browser"
 
 
+def test_intent_router_routes_zwingli_prefix() -> None:
+    tr = TranscriptionResult(
+        text="Zwingli ps aux | grep -v codex",
+        backend="openai",
+        model="gpt-test",
+        audio_file="a.wav",
+    )
+    intent = route_intent(tr)
+    assert intent.mode == "command"
+    assert intent.command_text == "ps aux | grep -v codex"
+
+
 def test_intent_router_defaults_to_dictation() -> None:
     tr = TranscriptionResult(
         text="hello world",
@@ -38,4 +50,3 @@ def test_intent_router_defaults_to_dictation() -> None:
     intent = route_intent(tr)
     assert intent.mode == "dictation"
     assert intent.dictation_text == "hello world"
-

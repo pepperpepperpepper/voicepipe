@@ -221,6 +221,16 @@ def service_restart(recorder: bool, transcriber: bool) -> None:
     raise SystemExit(run_systemctl(["restart", *units], check=False).returncode)
 
 
+@service_group.command("reload")
+def service_reload() -> None:
+    """Reload the transcriber daemon configuration (SIGHUP)."""
+    if not systemctl_path():
+        raise click.ClickException("systemctl not found (is systemd installed?)")
+    raise SystemExit(
+        run_systemctl(["kill", "-s", "HUP", TRANSCRIBER_UNIT], check=False).returncode
+    )
+
+
 def _format_unit_line(unit: str) -> tuple[str, bool, bool]:
     props_wanted = ["LoadState", "ActiveState", "SubState", "UnitFileState"]
     props = systemctl_show_properties(unit, props_wanted)

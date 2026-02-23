@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "created": "2026-02-23",
+  "notes": "Round 3 Zwingli audio fixtures. These focus on the `execute` verb enable path and shell timeout semantics. Execution tests remain opt-in and require explicit environment flags.",
+  "samples": [
+    {
+      "file": "zwingli_execute_echo_hello_world.wav",
+      "url": "https://tmp.uh-oh.wtf/2026/02/23/1e29af13-zwingli_execute_echo_hello_world.wav",
+      "spoken_text": "Zwingli execute echo hello world.",
+      "status": "done"
+    },
+    {
+      "file": "zwingli_execute_sleep_2.wav",
+      "url": "",
+      "spoken_text": "Zwingli execute sleep 2.",
+      "status": "todo"
+    }
+  ]
+}

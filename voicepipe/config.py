@@ -14,12 +14,14 @@ You can override it everywhere with `VOICEPIPE_ENV_FILE`.
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 import sys
 import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 try:
     from dotenv import load_dotenv
@@ -61,18 +63,22 @@ DEFAULT_ENV_FILE_TEMPLATE = """# Voicepipe environment config (used by systemd s
 #   Windows: auto|sendinput|none
 # VOICEPIPE_DAEMON_MODE=auto  # auto|never|always
 #
-# Transcript triggers (lightweight prefix match; only runs preprocessors when a trigger is present):
-# VOICEPIPE_TRANSCRIPT_TRIGGERS=zwingly=zwingli
-#   Format: comma-separated trigger=action pairs (e.g. "zwingly=zwingli,fix=...").
-#   Set to empty to disable: VOICEPIPE_TRANSCRIPT_TRIGGERS=
+# Transcript triggers (prefix-based; checked after transcription):
+# VOICEPIPE_TRANSCRIPT_TRIGGERS=zwingli=strip,zwingly=strip
+#   Actions: strip|dispatch|zwingli|shell
 #
-# Zwingli LLM preprocessor (trigger action name: "zwingli"):
+# Shell trigger action (action=shell):
+# VOICEPIPE_SHELL_ALLOW=1
+# VOICEPIPE_SHELL_TIMEOUT_SECONDS=10
+#
+# Zwingli LLM preprocessing (action=zwingli):
 # VOICEPIPE_ZWINGLI_BACKEND=openai  # openai|groq
-# VOICEPIPE_ZWINGLI_MODEL=gpt-4o-mini
+# VOICEPIPE_ZWINGLI_MODEL=gpt-5.2
 # VOICEPIPE_ZWINGLI_TEMPERATURE=0.2
 # VOICEPIPE_ZWINGLI_SYSTEM_PROMPT=You are a dictation preprocessor. Output only the final text to type.
 # VOICEPIPE_ZWINGLI_USER_PROMPT=
-# VOICEPIPE_ZWINGLI_BASE_URL=  # optional (OpenAI-compatible base URL override)
+# VOICEPIPE_ZWINGLI_BASE_URL=
+# VOICEPIPE_ZWINGLI_API_KEY=  # defaults to OPENAI_API_KEY when unset
 """
 
 DaemonMode = Literal["auto", "never", "always"]
@@ -321,6 +327,18 @@ def detect_openai_api_key(*, load_env: bool = True) -> bool:
         return True
     except Exception:
         return False
+
+
+def get_groq_api_key(*, load_env: bool = True) -> str:
+    if load_env:
+        load_environment()
+    api_key = (os.environ.get("GROQ_API_KEY") or "").strip()
+    if api_key:
+        return api_key
+    raise VoicepipeConfigError(
+        "Groq API key not found.\n\n"
+        "Set GROQ_API_KEY in your environment or in your voicepipe.env file."
+    )
 
 
 def legacy_elevenlabs_key_paths() -> list[Path]:
@@ -617,16 +635,482 @@ def get_intent_wake_prefixes(
     return [p for p in parts if p]
 
 
-def get_groq_api_key(*, load_env: bool = True) -> str:
+def get_transcript_triggers(
+    *,
+    default: dict[str, str] | None = None,
+    load_env: bool = True,
+) -> dict[str, str]:
+    """Return transcript trigger->action mapping.
+
+    These are lightweight text prefixes checked against the transcription result.
+    If a trigger matches, the corresponding action is invoked to produce the
+    final output text.
+
+    Env format (comma-separated pairs):
+      VOICEPIPE_TRANSCRIPT_TRIGGERS=zwingli=strip,zwingly=zwingli
+
+    If the variable is present but empty, triggers are disabled.
+    """
     if load_env:
         load_environment()
-    api_key = (os.environ.get("GROQ_API_KEY") or "").strip()
-    if api_key:
-        return api_key
-    raise VoicepipeConfigError(
-        "Groq API key not found.\n\n"
-        "Set GROQ_API_KEY in your environment or in your voicepipe.env file."
+
+    env_name = "VOICEPIPE_TRANSCRIPT_TRIGGERS"
+    raw = (os.environ.get(env_name) or "").strip()
+
+    if env_name in os.environ and not raw:
+        return {}
+
+    if not raw:
+        try:
+            from_file = _load_transcript_triggers_json()
+        except Exception:
+            # If a triggers config exists but is invalid, fail closed: disable
+            # triggers instead of applying unexpected defaults.
+            from_file = {}
+        if from_file is not None:
+            return from_file
+        return dict(default or {"zwingli": "strip", "zwingly": "strip"})
+
+    out: dict[str, str] = {}
+    for entry in raw.split(","):
+        item = (entry or "").strip()
+        if not item:
+            continue
+        if "=" in item:
+            trigger, _sep, action = item.partition("=")
+        elif ":" in item:
+            trigger, _sep, action = item.partition(":")
+        else:
+            trigger, action = item, "strip"
+
+        trigger = (trigger or "").strip().lower()
+        action = (action or "").strip().lower()
+        if not trigger:
+            continue
+        if not action:
+            action = "strip"
+        out[trigger] = action
+
+    return out
+
+
+@dataclass(frozen=True)
+class TranscriptDispatchConfig:
+    unknown_verb: str = "strip"
+
+
+@dataclass(frozen=True)
+class TranscriptPluginConfig:
+    module: str | None = None
+    path: str | None = None
+    callable: str | None = None
+
+
+@dataclass(frozen=True)
+class TranscriptVerbConfig:
+    action: str
+    enabled: bool = True
+    type: str = "action"
+    profile: str | None = None
+    timeout_seconds: float | None = None
+    plugin: TranscriptPluginConfig | None = None
+
+
+@dataclass(frozen=True)
+class TranscriptLLMProfileConfig:
+    model: str | None = None
+    temperature: float | None = None
+    system_prompt: str | None = None
+    user_prompt: str | None = None
+    user_prompt_template: str | None = None
+
+
+@dataclass(frozen=True)
+class TranscriptCommandsConfig:
+    triggers: dict[str, str] = field(default_factory=dict)
+    dispatch: TranscriptDispatchConfig = field(default_factory=TranscriptDispatchConfig)
+    verbs: dict[str, TranscriptVerbConfig] = field(default_factory=dict)
+    llm_profiles: dict[str, TranscriptLLMProfileConfig] = field(default_factory=dict)
+
+
+_TRANSCRIPT_COMMANDS_JSON_CACHE: tuple[
+    float,
+    tuple[
+        TranscriptDispatchConfig,
+        dict[str, TranscriptVerbConfig],
+        dict[str, TranscriptLLMProfileConfig],
+    ],
+] | None = None
+
+
+def invalidate_transcript_commands_cache() -> None:
+    """Clear cached triggers/verbs/profiles config (forces disk re-read on next load)."""
+    global _TRANSCRIPT_COMMANDS_JSON_CACHE
+    global _TRIGGERS_JSON_CACHE
+    _TRANSCRIPT_COMMANDS_JSON_CACHE = None
+    _TRIGGERS_JSON_CACHE = None
+
+
+def _parse_transcript_dispatch_json_obj(obj: dict[str, Any]) -> TranscriptDispatchConfig:
+    section = obj.get("dispatch")
+    if section is None:
+        return TranscriptDispatchConfig()
+    if not isinstance(section, dict):
+        raise VoicepipeConfigError("Invalid triggers.json: 'dispatch' must be an object")
+
+    raw_unknown = section.get("unknown_verb", "strip")
+    unknown: str | None = None
+    if isinstance(raw_unknown, str):
+        unknown = raw_unknown
+    elif isinstance(raw_unknown, dict):
+        raw_action = raw_unknown.get("action")
+        if isinstance(raw_action, str):
+            unknown = raw_action
+    else:
+        raise VoicepipeConfigError("Invalid triggers.json: 'dispatch.unknown_verb' must be a string")
+
+    resolved = (unknown or "").strip().lower() or "strip"
+    return TranscriptDispatchConfig(unknown_verb=resolved)
+
+
+def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, TranscriptVerbConfig]:
+    section = obj.get("verbs")
+    if section is None:
+        return {}
+    if not isinstance(section, dict):
+        raise VoicepipeConfigError("Invalid triggers.json: 'verbs' must be an object mapping verb->config")
+
+    out: dict[str, TranscriptVerbConfig] = {}
+    for raw_verb, raw_value in section.items():
+        if not isinstance(raw_verb, str):
+            continue
+        verb = raw_verb.strip().lower()
+        if not verb:
+            continue
+
+        plugin: TranscriptPluginConfig | None = None
+        if isinstance(raw_value, str):
+            action = raw_value
+            enabled = True
+            verb_type = "action"
+            profile = None
+            timeout_seconds = None
+        elif isinstance(raw_value, dict):
+            raw_type = raw_value.get("type", "action")
+            verb_type = raw_type.strip().lower() if isinstance(raw_type, str) else "action"
+            if not verb_type:
+                verb_type = "action"
+
+            default_enabled = False if verb_type in ("shell", "execute", "plugin") else True
+            enabled_value = raw_value.get("enabled", default_enabled)
+            if not isinstance(enabled_value, bool):
+                raise VoicepipeConfigError(
+                    f"Invalid triggers.json: verb {raw_verb!r} has non-boolean 'enabled'"
+                )
+            enabled = bool(enabled_value)
+
+            profile = None
+            raw_profile = raw_value.get("profile")
+            if isinstance(raw_profile, str):
+                candidate = raw_profile.strip().lower()
+                profile = candidate or None
+
+            timeout_seconds = None
+            raw_timeout = raw_value.get("timeout_seconds")
+            if isinstance(raw_timeout, (int, float)) and not isinstance(raw_timeout, bool):
+                timeout_seconds = float(raw_timeout)
+
+            if verb_type == "plugin":
+                raw_plugin = raw_value.get("plugin")
+                if not isinstance(raw_plugin, dict):
+                    raise VoicepipeConfigError(
+                        f"Invalid triggers.json: verb {raw_verb!r} 'plugin' must be an object"
+                    )
+
+                raw_callable = raw_plugin.get("callable")
+                callable_name = raw_callable.strip() if isinstance(raw_callable, str) else ""
+
+                raw_module = raw_plugin.get("module")
+                module_name = raw_module.strip() if isinstance(raw_module, str) else ""
+
+                raw_path = raw_plugin.get("path")
+                plugin_path = raw_path.strip() if isinstance(raw_path, str) else ""
+
+                if not callable_name:
+                    raise VoicepipeConfigError(
+                        f"Invalid triggers.json: verb {raw_verb!r} plugin missing 'callable'"
+                    )
+                if bool(module_name) == bool(plugin_path):
+                    raise VoicepipeConfigError(
+                        f"Invalid triggers.json: verb {raw_verb!r} plugin must set exactly one of 'module' or 'path'"
+                    )
+                plugin = TranscriptPluginConfig(
+                    module=module_name or None,
+                    path=plugin_path or None,
+                    callable=callable_name,
+                )
+
+            raw_action = raw_value.get("action")
+            action: str
+            if verb_type == "plugin":
+                action = "plugin"
+            elif isinstance(raw_action, str) and raw_action.strip():
+                action = raw_action
+            elif verb_type == "builtin":
+                action = verb
+            elif verb_type == "llm":
+                action = "zwingli"
+            elif verb_type in ("shell", "execute"):
+                action = "shell"
+            else:
+                action = verb
+        else:
+            raise VoicepipeConfigError(
+                f"Invalid triggers.json: verb {raw_verb!r} must map to a string or an object"
+            )
+
+        resolved_action = (action or "").strip().lower() or "strip"
+        out[verb] = TranscriptVerbConfig(
+            action=resolved_action,
+            enabled=bool(enabled),
+            type=str(verb_type),
+            profile=profile,
+            timeout_seconds=timeout_seconds,
+            plugin=plugin,
+        )
+
+    return out
+
+
+def _parse_transcript_llm_profiles_json_obj(
+    obj: dict[str, Any],
+) -> dict[str, TranscriptLLMProfileConfig]:
+    section = obj.get("llm_profiles")
+    if section is None:
+        return {}
+    if not isinstance(section, dict):
+        raise VoicepipeConfigError(
+            "Invalid triggers.json: 'llm_profiles' must be an object mapping profile->config"
+        )
+
+    out: dict[str, TranscriptLLMProfileConfig] = {}
+    for raw_name, raw_value in section.items():
+        if not isinstance(raw_name, str):
+            continue
+        name = raw_name.strip().lower()
+        if not name:
+            continue
+        if not isinstance(raw_value, dict):
+            raise VoicepipeConfigError(
+                f"Invalid triggers.json: llm profile {raw_name!r} must be an object"
+            )
+
+        model = raw_value.get("model") if isinstance(raw_value.get("model"), str) else None
+        model = (model or "").strip() or None
+
+        temperature = None
+        raw_temperature = raw_value.get("temperature")
+        if isinstance(raw_temperature, (int, float)) and not isinstance(raw_temperature, bool):
+            temperature = float(raw_temperature)
+
+        system_prompt = (
+            raw_value.get("system_prompt") if isinstance(raw_value.get("system_prompt"), str) else None
+        )
+        system_prompt = (system_prompt or "").strip() or None
+
+        user_prompt = raw_value.get("user_prompt") if isinstance(raw_value.get("user_prompt"), str) else None
+        user_prompt = (user_prompt or "").strip() or None
+
+        user_prompt_template = (
+            raw_value.get("user_prompt_template")
+            if isinstance(raw_value.get("user_prompt_template"), str)
+            else None
+        )
+        user_prompt_template = (user_prompt_template or "").strip() or None
+
+        out[name] = TranscriptLLMProfileConfig(
+            model=model,
+            temperature=temperature,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            user_prompt_template=user_prompt_template,
+        )
+
+    return out
+
+
+def _load_transcript_commands_json(
+    *,
+    path: Path | None = None,
+) -> tuple[
+    TranscriptDispatchConfig, dict[str, TranscriptVerbConfig], dict[str, TranscriptLLMProfileConfig]
+] | None:
+    config_path = triggers_json_path() if path is None else Path(path)
+    try:
+        st = config_path.stat()
+    except FileNotFoundError:
+        return None
+
+    global _TRANSCRIPT_COMMANDS_JSON_CACHE
+    try:
+        mtime = float(st.st_mtime)
+    except Exception:
+        mtime = 0.0
+
+    if _TRANSCRIPT_COMMANDS_JSON_CACHE is not None and _TRANSCRIPT_COMMANDS_JSON_CACHE[0] == mtime:
+        cached_dispatch, cached_verbs, cached_profiles = _TRANSCRIPT_COMMANDS_JSON_CACHE[1]
+        return cached_dispatch, dict(cached_verbs), dict(cached_profiles)
+
+    try:
+        raw = config_path.read_text(encoding="utf-8-sig")
+    except Exception as e:
+        raise VoicepipeConfigError(f"Failed to read triggers config: {config_path} ({e})") from e
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise VoicepipeConfigError(f"Invalid JSON in triggers config: {config_path} ({e})") from e
+
+    if not isinstance(payload, dict):
+        raise VoicepipeConfigError(
+            f"Invalid triggers config: {config_path} must contain a JSON object"
+        )
+
+    # Reuse the triggers parser for version validation (and legacy key support).
+    _parse_transcript_triggers_json_obj(payload)
+
+    dispatch = _parse_transcript_dispatch_json_obj(payload)
+    verbs = _parse_transcript_verbs_json_obj(payload)
+    profiles = _parse_transcript_llm_profiles_json_obj(payload)
+    _TRANSCRIPT_COMMANDS_JSON_CACHE = (mtime, (dispatch, dict(verbs), dict(profiles)))
+    return dispatch, dict(verbs), dict(profiles)
+
+
+def get_transcript_commands_config(
+    *,
+    default_triggers: dict[str, str] | None = None,
+    load_env: bool = True,
+) -> TranscriptCommandsConfig:
+    triggers = get_transcript_triggers(default=default_triggers, load_env=load_env)
+
+    # Load dispatch/verbs from triggers.json (best-effort). If the file is invalid,
+    # triggers will already be disabled by `get_transcript_triggers()` (fail closed).
+    dispatch = TranscriptDispatchConfig()
+    verbs: dict[str, TranscriptVerbConfig] = {}
+    llm_profiles: dict[str, TranscriptLLMProfileConfig] = {}
+    try:
+        loaded = _load_transcript_commands_json()
+    except Exception:
+        loaded = None
+    if loaded is not None:
+        dispatch, verbs, llm_profiles = loaded
+
+    return TranscriptCommandsConfig(
+        triggers=dict(triggers),
+        dispatch=dispatch,
+        verbs=dict(verbs),
+        llm_profiles=dict(llm_profiles),
     )
+
+
+_TRIGGERS_JSON_CACHE: tuple[float, dict[str, str] | None] | None = None
+
+
+def triggers_json_path() -> Path:
+    """Canonical triggers config file path (non-secret)."""
+    return config_dir() / "triggers.json"
+
+
+def _parse_transcript_triggers_json_obj(obj: dict[str, Any]) -> dict[str, str] | None:
+    raw_version = obj.get("version", 1)
+    if not isinstance(raw_version, int):
+        raise VoicepipeConfigError("Invalid triggers.json: 'version' must be an integer")
+    if raw_version != 1:
+        raise VoicepipeConfigError(f"Unsupported triggers.json version: {raw_version}")
+
+    if "triggers" in obj:
+        section = obj.get("triggers")
+    elif "transcript_triggers" in obj:
+        section = obj.get("transcript_triggers")
+    else:
+        return None
+
+    if not isinstance(section, dict):
+        raise VoicepipeConfigError(
+            "Invalid triggers.json: expected 'triggers' to be an object mapping trigger->action"
+        )
+
+    out: dict[str, str] = {}
+    for raw_trigger, raw_value in section.items():
+        if not isinstance(raw_trigger, str):
+            continue
+        trigger = raw_trigger.strip().lower()
+        if not trigger:
+            continue
+
+        action: str | None = None
+        if isinstance(raw_value, str):
+            action = raw_value
+        elif isinstance(raw_value, dict):
+            raw_action = raw_value.get("action")
+            if isinstance(raw_action, str):
+                action = raw_action
+        else:
+            raise VoicepipeConfigError(
+                f"Invalid triggers.json: trigger {raw_trigger!r} must map to a string or an object"
+            )
+
+        action = (action or "").strip().lower() or "strip"
+        out[trigger] = action
+
+    return out
+
+
+def _load_transcript_triggers_json(*, path: Path | None = None) -> dict[str, str] | None:
+    """Load transcript triggers from triggers.json.
+
+    Returns:
+      - dict (possibly empty) when the file exists and contains a triggers mapping
+      - None when the file is missing or does not define triggers
+
+    Raises:
+      - VoicepipeConfigError when the file exists but is invalid.
+    """
+
+    config_path = triggers_json_path() if path is None else Path(path)
+    try:
+        st = config_path.stat()
+    except FileNotFoundError:
+        return None
+
+    global _TRIGGERS_JSON_CACHE
+    try:
+        mtime = float(st.st_mtime)
+    except Exception:
+        mtime = 0.0
+
+    if _TRIGGERS_JSON_CACHE is not None and _TRIGGERS_JSON_CACHE[0] == mtime:
+        cached = _TRIGGERS_JSON_CACHE[1]
+        return dict(cached) if cached is not None else None
+
+    try:
+        raw = config_path.read_text(encoding="utf-8-sig")
+    except Exception as e:
+        raise VoicepipeConfigError(f"Failed to read triggers config: {config_path} ({e})") from e
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise VoicepipeConfigError(f"Invalid JSON in triggers config: {config_path} ({e})") from e
+
+    if not isinstance(payload, dict):
+        raise VoicepipeConfigError(
+            f"Invalid triggers config: {config_path} must contain a JSON object"
+        )
+
+    triggers = _parse_transcript_triggers_json_obj(payload)
+    _TRIGGERS_JSON_CACHE = (mtime, dict(triggers) if triggers is not None else None)
+    return dict(triggers) if triggers is not None else None
 
 
 def get_zwingli_backend(*, default: str = "openai", load_env: bool = True) -> str:
@@ -636,13 +1120,7 @@ def get_zwingli_backend(*, default: str = "openai", load_env: bool = True) -> st
     return raw or str(default)
 
 
-def get_zwingli_base_url(*, default: str = "", load_env: bool = True) -> str:
-    if load_env:
-        load_environment()
-    return (os.environ.get("VOICEPIPE_ZWINGLI_BASE_URL") or str(default) or "").strip()
-
-
-def get_zwingli_model(*, default: str = "gpt-4o-mini", load_env: bool = True) -> str:
+def get_zwingli_model(*, default: str = "gpt-5.2", load_env: bool = True) -> str:
     if load_env:
         load_environment()
     return (os.environ.get("VOICEPIPE_ZWINGLI_MODEL") or str(default) or "").strip()
@@ -676,52 +1154,17 @@ def get_zwingli_user_prompt(*, default: str = "", load_env: bool = True) -> str:
     return (os.environ.get("VOICEPIPE_ZWINGLI_USER_PROMPT") or str(default) or "").strip()
 
 
-def get_transcript_triggers(
-    *,
-    default: dict[str, str] | None = None,
-    load_env: bool = True,
-) -> dict[str, str]:
-    """Return transcript trigger->action mapping.
-
-    These are lightweight text prefixes checked against the transcription result.
-    If a trigger matches, the corresponding action is invoked to produce the
-    final output text.
-
-    Env format (comma-separated pairs):
-      VOICEPIPE_TRANSCRIPT_TRIGGERS=zwingly=zwingli,fix=zwingli
-
-    If the variable is present but empty, triggers are disabled.
-    """
+def get_zwingli_base_url(*, default: str = "", load_env: bool = True) -> str:
     if load_env:
         load_environment()
+    return (os.environ.get("VOICEPIPE_ZWINGLI_BASE_URL") or str(default) or "").strip()
 
-    env_name = "VOICEPIPE_TRANSCRIPT_TRIGGERS"
-    raw = (os.environ.get(env_name) or "").strip()
 
-    if env_name in os.environ and not raw:
-        return {}
-
-    if not raw:
-        return dict(default or {"zwingly": "zwingli"})
-
-    out: dict[str, str] = {}
-    for entry in raw.split(","):
-        item = (entry or "").strip()
-        if not item:
-            continue
-        if "=" in item:
-            trigger, _sep, action = item.partition("=")
-        elif ":" in item:
-            trigger, _sep, action = item.partition(":")
-        else:
-            trigger, action = item, "zwingli"
-
-        trigger = (trigger or "").strip().lower()
-        action = (action or "").strip().lower()
-        if not trigger:
-            continue
-        if not action:
-            action = "zwingli"
-        out[trigger] = action
-
-    return out
+def get_zwingli_api_key(*, default: str = "", load_env: bool = True) -> str:
+    if load_env:
+        load_environment()
+    raw = (os.environ.get("VOICEPIPE_ZWINGLI_API_KEY") or "").strip()
+    if raw:
+        return raw
+    # Default to OpenAI key if present (common case).
+    return (os.environ.get("OPENAI_API_KEY") or str(default) or "").strip()

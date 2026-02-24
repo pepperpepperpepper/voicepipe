@@ -430,16 +430,47 @@ class RecordingDaemon:
     
     def _timeout_callback(self):
         """Called when recording timeout is reached."""
+        audio_file = None
+        recording_id = None
         with self._state_lock:
-            if self.recording:
-                logger.info("Recording timeout reached (5 minutes), stopping...")
-                self._timeout_triggered = True
+            if not self.recording:
+                return
+            logger.info("Recording timeout reached (5 minutes), stopping...")
+            self._timeout_triggered = True
+            try:
+                response = self._stop_recording()
+                audio_file = (
+                    response.get("audio_file")
+                    if isinstance(response, dict) and isinstance(response.get("audio_file"), str)
+                    else None
+                )
+                recording_id = (
+                    response.get("recording_id")
+                    if isinstance(response, dict) and isinstance(response.get("recording_id"), str)
+                    else None
+                )
+            except Exception as e:
+                logger.exception("Error during timeout handling: %s", e)
+                # Ensure we clean up gracefully even if stop fails
+                self._cleanup_timeout_state()
+                return
+
+        if audio_file:
+            def _worker() -> None:
                 try:
-                    self._stop_recording()
-                except Exception as e:
-                    logger.exception("Error during timeout handling: %s", e)
-                    # Ensure we clean up gracefully even if stop fails
-                    self._cleanup_timeout_state()
+                    from voicepipe.timeout_transcription import transcribe_timeout_audio_file
+
+                    transcribe_timeout_audio_file(
+                        audio_file,
+                        recording_id=recording_id,
+                        source="daemon-timeout",
+                        keep_audio=False,
+                    )
+                except Exception:
+                    logger.exception("Timeout transcription worker failed")
+
+            thread = threading.Thread(target=_worker, daemon=True)
+            thread.start()
             
     def _stop_recording(self):
         """Stop recording and save audio."""
@@ -472,13 +503,6 @@ class RecordingDaemon:
                 'audio_file': self.audio_file,
                 'recording_id': recording_id,
             }
-            
-            # Handle file cleanup - only delete on timeout, preserve for transcription
-            if self._timeout_triggered:
-                # Timeout completion - delete the file
-                if self.audio_file and os.path.exists(self.audio_file):
-                    os.unlink(self.audio_file)
-            # If normal completion, preserve the file for transcription
             
             # Reset state
             self.recording = False

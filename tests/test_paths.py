@@ -9,10 +9,9 @@ import voicepipe.paths as paths
 
 def test_runtime_dir_prefers_xdg_runtime_dir(tmp_path: Path, monkeypatch) -> None:
     if sys.platform == "win32":
-        monkeypatch.setenv("TEMP", str(tmp_path))
-        monkeypatch.setenv("TMP", str(tmp_path))
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
         monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
-        assert paths.runtime_dir() == Path(tempfile.gettempdir())
+        assert paths.runtime_dir() == tmp_path / "voicepipe" / "run"
     else:
         monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
         assert paths.runtime_dir() == tmp_path
@@ -20,10 +19,9 @@ def test_runtime_dir_prefers_xdg_runtime_dir(tmp_path: Path, monkeypatch) -> Non
 
 def test_runtime_app_dir_under_xdg_runtime_dir(tmp_path: Path, monkeypatch) -> None:
     if sys.platform == "win32":
-        monkeypatch.setenv("TEMP", str(tmp_path))
-        monkeypatch.setenv("TMP", str(tmp_path))
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
         monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
-        assert paths.runtime_app_dir() == Path(tempfile.gettempdir()) / "voicepipe"
+        assert paths.runtime_app_dir() == tmp_path / "voicepipe" / "run"
     else:
         monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
         assert paths.runtime_app_dir() == tmp_path / "voicepipe"
@@ -31,15 +29,14 @@ def test_runtime_app_dir_under_xdg_runtime_dir(tmp_path: Path, monkeypatch) -> N
 
 def test_daemon_socket_path_creates_dir(tmp_path: Path, monkeypatch) -> None:
     if sys.platform == "win32":
-        monkeypatch.setenv("TEMP", str(tmp_path))
-        monkeypatch.setenv("TMP", str(tmp_path))
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
         monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
     else:
         monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     sock = paths.daemon_socket_path(create_dir=True)
     assert sock.name == "voicepipe.sock"
     if sys.platform == "win32":
-        assert sock.parent == Path(tempfile.gettempdir()) / "voicepipe"
+        assert sock.parent == tmp_path / "voicepipe" / "run"
     else:
         assert sock.parent == tmp_path / "voicepipe"
     assert sock.parent.exists()

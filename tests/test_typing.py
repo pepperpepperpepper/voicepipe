@@ -233,6 +233,8 @@ def test_sendinput_falls_back_when_ulong_ptr_missing(monkeypatch) -> None:
         def __init__(self) -> None:
             self.GetForegroundWindow = _Func(lambda: wintypes.HWND(1))
             self.SetForegroundWindow = _Func(lambda _hwnd: wintypes.BOOL(1))
+            self.GetWindowThreadProcessId = _Func(lambda _hwnd, _pid_ptr: wintypes.DWORD(0))
+            self.GetGUIThreadInfo = _Func(lambda _tid, _info_ptr: wintypes.BOOL(0))
             self.SendInput = _Func(lambda n_inputs, _inputs, _size: n_inputs)
 
     monkeypatch.setattr(ctypes, "WinDLL", lambda *_a, **_kw: _User32())

@@ -47,6 +47,8 @@ def test_win_hotkey_main_triggers_toggle_on_wm_hotkey(monkeypatch: pytest.Monkey
         calls.append("toggle")
 
     monkeypatch.setattr(win_hotkey, "_run_toggle", fake_run_toggle)
+    monkeypatch.setattr(win_hotkey, "_prewarm_audio", lambda: None)
+    monkeypatch.setattr(win_hotkey, "_prewarm_fast", lambda: None)
 
     class _Thread:
         def __init__(self, *, target, daemon: bool):
@@ -73,6 +75,10 @@ def test_win_hotkey_main_triggers_toggle_on_wm_hotkey(monkeypatch: pytest.Monkey
 
             self.RegisterHotKey = _Func(lambda _hwnd, _id, _mod, _vk: wintypes.BOOL(1))
             self.UnregisterHotKey = _Func(lambda _hwnd, _id: wintypes.BOOL(1))
+            self.GetAsyncKeyState = _Func(lambda _vk: wintypes.SHORT(0))
+            self.SetWindowsHookExW = _Func(lambda *_a: wintypes.HANDLE(1))
+            self.UnhookWindowsHookEx = _Func(lambda _hook: wintypes.BOOL(1))
+            self.CallNextHookEx = _Func(lambda *_a: 0)
 
             def _get_message(msg_ptr, _hwnd, _min, _max):
                 self._getmessage_calls += 1
@@ -85,7 +91,16 @@ def test_win_hotkey_main_triggers_toggle_on_wm_hotkey(monkeypatch: pytest.Monkey
 
             self.GetMessageW = _Func(_get_message)
 
-    monkeypatch.setattr(ctypes, "WinDLL", lambda *_a, **_kw: _User32())
+    class _Kernel32:
+        def __init__(self) -> None:
+            self.GetModuleHandleW = _Func(lambda _name: wintypes.HANDLE(1))
+
+    def _windll(name: str, *_a, **_kw):
+        if str(name).lower() == "kernel32":
+            return _Kernel32()
+        return _User32()
+
+    monkeypatch.setattr(ctypes, "WinDLL", _windll)
 
     win_hotkey.main()
     assert calls == ["toggle"]

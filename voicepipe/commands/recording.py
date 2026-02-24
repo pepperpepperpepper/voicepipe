@@ -37,6 +37,7 @@ def _emit_transcription(
     *,
     type_: bool,
     json_output: bool,
+    clipboard: bool = False,
 ) -> None:
     intent = route_intent(result)
     output_text = result.text
@@ -47,6 +48,25 @@ def _emit_transcription(
 
     payload = result.to_dict()
     payload["intent"] = intent.to_dict()
+    payload["output_text"] = output_text
+
+    # Always persist the last output for replay/recovery workflows.
+    try:
+        from voicepipe.last_output import save_last_output
+
+        save_last_output(output_text, payload=payload)
+    except Exception:
+        pass
+
+    if clipboard:
+        try:
+            from voicepipe.clipboard import copy_to_clipboard
+
+            ok, err = copy_to_clipboard(output_text)
+            if not ok:
+                click.echo(f"Error copying to clipboard: {err}", err=True)
+        except Exception as e:
+            click.echo(f"Error copying to clipboard: {e}", err=True)
 
     strict_commands = os.environ.get("VOICEPIPE_COMMANDS_STRICT") == "1"
     if strict_commands and intent.mode == "command":
@@ -80,6 +100,7 @@ def _transcribe_and_finalize(
     temperature: float,
     type_: bool,
     json_output: bool,
+    clipboard: bool,
     keep_audio: bool,
     source: str,
     prefer_daemon: bool = True,
@@ -100,7 +121,12 @@ def _transcribe_and_finalize(
         )
         transcription_ok = True
 
-        _emit_transcription(result, type_=bool(type_), json_output=bool(json_output))
+        _emit_transcription(
+            result,
+            type_=bool(type_),
+            json_output=bool(json_output),
+            clipboard=bool(clipboard),
+        )
     except SystemExit:
         raise
     except Exception as e:
@@ -147,6 +173,7 @@ def _transcribe_and_finalize_fileobj(
     temperature: float,
     type_: bool,
     json_output: bool,
+    clipboard: bool,
     keep_audio: bool,
     source: str,
 ) -> None:
@@ -186,7 +213,12 @@ def _transcribe_and_finalize_fileobj(
             except Exception:
                 pass
         transcription_ok = True
-        _emit_transcription(result, type_=bool(type_), json_output=bool(json_output))
+        _emit_transcription(
+            result,
+            type_=bool(type_),
+            json_output=bool(json_output),
+            clipboard=bool(clipboard),
+        )
     except SystemExit:
         raise
     except Exception as e:
@@ -273,6 +305,7 @@ def start(device: str | None) -> None:
     is_flag=True,
     help="Keep the recorded audio file after transcription (prevents deletion).",
 )
+@click.option("--clipboard", is_flag=True, help="Copy the final output text to your clipboard.")
 @click.option("--json", "json_", is_flag=True, help="Output structured JSON (default: plain text)")
 def stop(
     type_: bool,
@@ -281,6 +314,7 @@ def stop(
     model: str | None,
     temperature: float,
     keep_audio: bool,
+    clipboard: bool,
     json_: bool,
 ) -> None:
     """Stop recording and transcribe the audio."""
@@ -298,6 +332,7 @@ def stop(
             temperature=float(temperature),
             type_=bool(type_),
             json_output=bool(json_),
+            clipboard=bool(clipboard),
             keep_audio=bool(keep_audio),
             source="stop",
             prefer_daemon=True,
@@ -368,6 +403,7 @@ def status() -> None:
     type=float,
     help="Temperature for transcription (0.0 for deterministic, default: 0.0)",
 )
+@click.option("--clipboard", is_flag=True, help="Copy the final output text to your clipboard.")
 @click.option("--json", "json_", is_flag=True, help="Output structured JSON (default: plain text)")
 def transcribe_file(
     type_: bool,
@@ -376,6 +412,7 @@ def transcribe_file(
     prompt: str | None,
     model: str | None,
     temperature: float,
+    clipboard: bool,
     json_: bool,
 ) -> None:
     """Transcribe an audio file (no recording session required)."""
@@ -390,35 +427,12 @@ def transcribe_file(
             prefer_daemon=True,
             source="transcribe-file",
         )
-        intent = route_intent(result)
-        output_text = result.text
-        if intent.mode == "dictation" and intent.dictation_text is not None:
-            output_text = intent.dictation_text
-        elif intent.mode == "command" and intent.command_text is not None:
-            output_text = intent.command_text
-
-        payload = result.to_dict()
-        payload["intent"] = intent.to_dict()
-
-        strict_commands = os.environ.get("VOICEPIPE_COMMANDS_STRICT") == "1"
-        if strict_commands and intent.mode == "command":
-            if json_:
-                click.echo(json.dumps(payload, ensure_ascii=False))
-            click.echo(
-                "Command-mode detected but commands are not implemented yet.",
-                err=True,
-            )
-            raise SystemExit(2)
-
-        if json_:
-            click.echo(json.dumps(payload, ensure_ascii=False))
-        else:
-            click.echo(output_text)
-
-        if type_:
-            ok, err = type_text(output_text)
-            if not ok:
-                click.echo(f"Error typing text: {err}", err=True)
+        _emit_transcription(
+            result,
+            type_=bool(type_),
+            json_output=bool(json_),
+            clipboard=bool(clipboard),
+        )
 
     except SystemExit:
         raise
@@ -480,6 +494,7 @@ def transcribe_file(
     is_flag=True,
     help="Keep the recorded audio file after transcription (prevents deletion).",
 )
+@click.option("--clipboard", is_flag=True, help="Copy the final output text to your clipboard.")
 @click.option("--json", "json_", is_flag=True, help="Output structured JSON (default: plain text)")
 def dictate(
     seconds: float | None,
@@ -491,6 +506,7 @@ def dictate(
     temperature: float,
     prefer_daemon: bool,
     keep_audio: bool,
+    clipboard: bool,
     json_: bool,
 ) -> None:
     """Record from the mic, transcribe, and optionally type (one command)."""
@@ -534,6 +550,7 @@ def dictate(
                 temperature=float(temperature),
                 type_=bool(type_),
                 json_output=bool(json_),
+                clipboard=bool(clipboard),
                 keep_audio=bool(keep_audio),
                 source="dictate",
                 prefer_daemon=True,
@@ -700,6 +717,7 @@ def dictate(
             temperature=float(temperature),
             type_=bool(type_),
             json_output=bool(json_),
+            clipboard=bool(clipboard),
             keep_audio=bool(keep_audio),
             source="dictate",
         )

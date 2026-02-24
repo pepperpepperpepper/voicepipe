@@ -319,9 +319,19 @@ voicepipe smoke test.mp3 --expected "ask not what your country can do for you"
 ```bash
 voicepipe start
 # Speak...
-voicepipe stop | xclip -selection clipboard
-# Or on Wayland:
-voicepipe stop | wl-copy
+voicepipe stop --clipboard
+
+# Or via piping:
+voicepipe stop | xclip -selection clipboard  # X11
+voicepipe stop | wl-copy  # Wayland
+```
+
+#### Replay Last Output
+If you typed into the wrong window, you can replay the last output without re-transcribing:
+```bash
+voicepipe replay
+voicepipe replay --type
+voicepipe replay --clipboard
 ```
 
 #### Language-Specific Transcription

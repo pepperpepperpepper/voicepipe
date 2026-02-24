@@ -28,6 +28,11 @@ def test_dictate_requires_seconds_without_tty(monkeypatch) -> None:
 def test_dictate_records_transcribes_and_cleans_up(tmp_path: Path, monkeypatch) -> None:
     import voicepipe.commands.recording as recording_cmd
 
+    # The Windows `dictate` implementation uses an in-process recorder that
+    # requires a real audio input device. CI runners often have none, and this
+    # test is focused on the "record -> transcribe -> cleanup" flow.
+    monkeypatch.setattr(recording_cmd, "is_windows", lambda: False)
+
     audio = tmp_path / "audio.wav"
     audio.write_bytes(b"abc")
 

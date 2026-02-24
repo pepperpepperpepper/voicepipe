@@ -634,7 +634,6 @@ def get_intent_wake_prefixes(
     parts = [p.strip() for p in raw.split(",")]
     return [p for p in parts if p]
 
-
 def get_transcript_triggers(
     *,
     default: dict[str, str] | None = None,

@@ -25,7 +25,7 @@ class IntentResult:
         }
 
 
-DEFAULT_WAKE_PREFIXES: tuple[str, ...] = ("command", "computer")
+DEFAULT_WAKE_PREFIXES: tuple[str, ...] = ("zwingli", "zwingly")
 
 
 def route_intent(
@@ -59,4 +59,3 @@ def route_intent(
             return IntentResult(mode="command", command_text=stripped, reason=f"prefix:{prefix}")
 
     return IntentResult(mode="dictation", dictation_text=text, reason="default")
-

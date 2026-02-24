@@ -7,6 +7,7 @@ import click
 from .config import config_group
 from .doctor import doctor_group, doctor_legacy
 from .recording import cancel, daemon, dictate, start, status, stop, transcribe_file
+from .replay import replay
 from . import smoke as smoke_module
 from .service import service_group
 from .setup import setup
@@ -31,3 +32,4 @@ def register(main: click.Group) -> None:
     main.add_command(cancel)
     main.add_command(transcribe_file)
     main.add_command(daemon)
+    main.add_command(replay)

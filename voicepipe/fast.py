@@ -312,21 +312,11 @@ def _perform_toggle_post_stop(post: _TogglePostStop) -> None:
     if text:
         cleaned_text = text.rstrip()
         fast_log(f"[TOGGLE] Transcription: {cleaned_text}")
-        # Always persist the last transcript for debugging/recovery.
+        # Always persist the last output for replay/recovery workflows.
         try:
-            last_path = _runtime_dir(create=True) / "voicepipe-last.txt"
-            try:
-                last_path.write_text(cleaned_text + "\n", encoding="utf-8")
-            except PermissionError:
-                try:
-                    last_path.unlink()
-                except Exception:
-                    pass
-                try:
-                    last_path.write_text(cleaned_text + "\n", encoding="utf-8")
-                except Exception:
-                    alt_path = _runtime_dir(create=True) / f"voicepipe-last-{int(time.time() * 1000)}.txt"
-                    alt_path.write_text(cleaned_text + "\n", encoding="utf-8")
+            from voicepipe.last_output import save_last_output
+
+            save_last_output(cleaned_text, payload={"source": "fast-toggle"})
         except Exception:
             pass
 
@@ -824,6 +814,13 @@ def main(argv: Optional[list[str]] = None) -> None:
             audio_file = stop_result.audio_file
             if os.path.exists(audio_file) and os.path.getsize(audio_file) > 0:
                 text = send_transcribe_request(audio_file)
+                # Persist last output for replay/recovery workflows.
+                try:
+                    from voicepipe.last_output import save_last_output
+
+                    save_last_output(text or "", payload={"source": "fast-stop"})
+                except Exception:
+                    pass
                 # Output text
                 if text:
                     out = getattr(sys, "stdout", None)

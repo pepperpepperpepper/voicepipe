@@ -4,7 +4,7 @@ from voicepipe.intent_router import route_intent
 from voicepipe.transcription_result import TranscriptionResult
 
 
-def test_intent_router_routes_command_prefix() -> None:
+def test_intent_router_does_not_route_command_prefix_by_default() -> None:
     tr = TranscriptionResult(
         text="command copy that",
         backend="openai",
@@ -12,11 +12,11 @@ def test_intent_router_routes_command_prefix() -> None:
         audio_file="a.wav",
     )
     intent = route_intent(tr)
-    assert intent.mode == "command"
-    assert intent.command_text == "copy that"
+    assert intent.mode == "dictation"
+    assert intent.dictation_text == "command copy that"
 
 
-def test_intent_router_routes_command_prefix_with_punctuation() -> None:
+def test_intent_router_does_not_route_computer_prefix_by_default() -> None:
     tr = TranscriptionResult(
         text="Computer, open the browser",
         backend="openai",
@@ -24,8 +24,20 @@ def test_intent_router_routes_command_prefix_with_punctuation() -> None:
         audio_file="a.wav",
     )
     intent = route_intent(tr)
+    assert intent.mode == "dictation"
+    assert intent.dictation_text == "Computer, open the browser"
+
+
+def test_intent_router_routes_zwingli_prefix() -> None:
+    tr = TranscriptionResult(
+        text="Zwingli ps aux | grep -v codex",
+        backend="openai",
+        model="gpt-test",
+        audio_file="a.wav",
+    )
+    intent = route_intent(tr)
     assert intent.mode == "command"
-    assert intent.command_text == "open the browser"
+    assert intent.command_text == "ps aux | grep -v codex"
 
 
 def test_intent_router_defaults_to_dictation() -> None:
@@ -38,4 +50,3 @@ def test_intent_router_defaults_to_dictation() -> None:
     intent = route_intent(tr)
     assert intent.mode == "dictation"
     assert intent.dictation_text == "hello world"
-

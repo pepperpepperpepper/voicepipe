@@ -59,6 +59,7 @@ def _transcribe_via_daemon(
     language: Optional[str],
     prompt: Optional[str],
     temperature: float,
+    apply_triggers: bool,
     socket_path: Optional[Path] = None,
     connect_timeout: float = 2.0,
     read_timeout: float = 60.0,
@@ -91,7 +92,12 @@ def _transcribe_via_daemon(
                 last_error = e
                 continue
 
-            request = {"audio_file": audio_file, "model": model, "temperature": temperature}
+            request = {
+                "audio_file": audio_file,
+                "model": model,
+                "temperature": temperature,
+                "apply_triggers": bool(apply_triggers),
+            }
             if language:
                 request["language"] = language
             if prompt:
@@ -155,6 +161,7 @@ def transcribe_audio_file(
     prompt: Optional[str] = None,
     temperature: float = 0.0,
     prefer_daemon: bool = True,
+    apply_triggers: bool = True,
 ) -> str:
     """Transcribe an on-disk audio file."""
     backend, resolved_model, model_for_daemon = _resolve_backend_and_model(model)
@@ -176,6 +183,7 @@ def transcribe_audio_file(
                 language=language,
                 prompt=prompt,
                 temperature=float(temperature),
+                apply_triggers=bool(apply_triggers),
             )
         except TranscriberDaemonUnavailable as e:
             if daemon_mode == "always":
@@ -187,12 +195,17 @@ def transcribe_audio_file(
 
         try:
             transcriber = WhisperTranscriber(model=resolved_model)
-            return transcriber.transcribe(
+            text = transcriber.transcribe(
                 audio_file,
                 language=language,
                 prompt=prompt,
                 temperature=float(temperature),
             )
+            if apply_triggers:
+                from voicepipe.transcript_triggers import apply_transcript_triggers
+
+                text, _meta = apply_transcript_triggers(text)
+            return text
         except Exception as e:
             raise TranscriptionError(str(e)) from e
 
@@ -201,12 +214,17 @@ def transcribe_audio_file(
 
         try:
             transcriber = ElevenLabsTranscriber(model_id=resolved_model)
-            return transcriber.transcribe(
+            text = transcriber.transcribe(
                 audio_file,
                 language=language,
                 prompt=prompt,
                 temperature=float(temperature),
             )
+            if apply_triggers:
+                from voicepipe.transcript_triggers import apply_transcript_triggers
+
+                text, _meta = apply_transcript_triggers(text)
+            return text
         except Exception as e:
             raise TranscriptionError(str(e)) from e
 
@@ -226,6 +244,7 @@ def transcribe_audio_bytes(
     language: Optional[str] = None,
     prompt: Optional[str] = None,
     temperature: float = 0.0,
+    apply_triggers: bool = True,
 ) -> str:
     """Transcribe audio bytes without requiring an on-disk temp file."""
     backend, resolved_model, _model_for_daemon = _resolve_backend_and_model(model)
@@ -235,7 +254,7 @@ def transcribe_audio_bytes(
 
         try:
             transcriber = WhisperTranscriber(model=resolved_model)
-            return transcriber.transcribe_bytes(
+            text = transcriber.transcribe_bytes(
                 audio_bytes,
                 filename=str(filename or "audio.wav"),
                 language=language,
@@ -243,6 +262,11 @@ def transcribe_audio_bytes(
                 temperature=float(temperature),
                 model=resolved_model,
             )
+            if apply_triggers:
+                from voicepipe.transcript_triggers import apply_transcript_triggers
+
+                text, _meta = apply_transcript_triggers(text)
+            return text
         except Exception as e:
             raise TranscriptionError(str(e)) from e
 
@@ -251,7 +275,7 @@ def transcribe_audio_bytes(
 
         try:
             transcriber = ElevenLabsTranscriber(model_id=resolved_model)
-            return transcriber.transcribe_bytes(
+            text = transcriber.transcribe_bytes(
                 audio_bytes,
                 filename=str(filename or "audio.wav"),
                 language=language,
@@ -259,6 +283,11 @@ def transcribe_audio_bytes(
                 temperature=float(temperature),
                 model=resolved_model,
             )
+            if apply_triggers:
+                from voicepipe.transcript_triggers import apply_transcript_triggers
+
+                text, _meta = apply_transcript_triggers(text)
+            return text
         except Exception as e:
             raise TranscriptionError(str(e)) from e
 
@@ -278,6 +307,7 @@ def transcribe_audio_fileobj(
     language: Optional[str] = None,
     prompt: Optional[str] = None,
     temperature: float = 0.0,
+    apply_triggers: bool = True,
 ) -> str:
     """Transcribe audio from a file-like object without a filesystem path."""
     backend, resolved_model, _model_for_daemon = _resolve_backend_and_model(model)
@@ -287,7 +317,7 @@ def transcribe_audio_fileobj(
 
         try:
             transcriber = WhisperTranscriber(model=resolved_model)
-            return transcriber.transcribe_fileobj(
+            text = transcriber.transcribe_fileobj(
                 fh,
                 filename=str(filename or "audio.wav"),
                 language=language,
@@ -295,6 +325,11 @@ def transcribe_audio_fileobj(
                 temperature=float(temperature),
                 model=resolved_model,
             )
+            if apply_triggers:
+                from voicepipe.transcript_triggers import apply_transcript_triggers
+
+                text, _meta = apply_transcript_triggers(text)
+            return text
         except Exception as e:
             raise TranscriptionError(str(e)) from e
 
@@ -304,7 +339,7 @@ def transcribe_audio_fileobj(
         try:
             audio_bytes = fh.read()
             transcriber = ElevenLabsTranscriber(model_id=resolved_model)
-            return transcriber.transcribe_bytes(
+            text = transcriber.transcribe_bytes(
                 audio_bytes,
                 filename=str(filename or "audio.wav"),
                 language=language,
@@ -312,6 +347,11 @@ def transcribe_audio_fileobj(
                 temperature=float(temperature),
                 model=resolved_model,
             )
+            if apply_triggers:
+                from voicepipe.transcript_triggers import apply_transcript_triggers
+
+                text, _meta = apply_transcript_triggers(text)
+            return text
         except Exception as e:
             raise TranscriptionError(str(e)) from e
 
@@ -331,6 +371,7 @@ def transcribe_audio_file_result(
     prompt: Optional[str] = None,
     temperature: float = 0.0,
     prefer_daemon: bool = True,
+    apply_triggers: bool = True,
     recording_id: str | None = None,
     source: str | None = None,
 ) -> TranscriptionResult:
@@ -344,6 +385,7 @@ def transcribe_audio_file_result(
         prompt=prompt,
         temperature=float(temperature),
         prefer_daemon=prefer_daemon,
+        apply_triggers=bool(apply_triggers),
     )
     return TranscriptionResult(
         text=text,
@@ -364,6 +406,7 @@ def transcribe_audio_bytes_result(
     language: Optional[str] = None,
     prompt: Optional[str] = None,
     temperature: float = 0.0,
+    apply_triggers: bool = True,
     recording_id: str | None = None,
     source: str | None = None,
 ) -> TranscriptionResult:
@@ -377,6 +420,7 @@ def transcribe_audio_bytes_result(
         language=language,
         prompt=prompt,
         temperature=float(temperature),
+        apply_triggers=bool(apply_triggers),
     )
     return TranscriptionResult(
         text=text,
@@ -397,6 +441,7 @@ def transcribe_audio_fileobj_result(
     language: Optional[str] = None,
     prompt: Optional[str] = None,
     temperature: float = 0.0,
+    apply_triggers: bool = True,
     recording_id: str | None = None,
     source: str | None = None,
 ) -> TranscriptionResult:
@@ -410,6 +455,7 @@ def transcribe_audio_fileobj_result(
         language=language,
         prompt=prompt,
         temperature=float(temperature),
+        apply_triggers=bool(apply_triggers),
     )
     return TranscriptionResult(
         text=text,

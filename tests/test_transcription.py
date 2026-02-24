@@ -72,6 +72,7 @@ def test_transcribe_via_daemon_requires_socket(tmp_path: Path) -> None:
             language=None,
             prompt=None,
             temperature=0.0,
+            apply_triggers=True,
             socket_path=tmp_path / "missing.sock",
         )
 
@@ -91,6 +92,7 @@ def test_transcribe_via_daemon_streams_text_until_complete(tmp_path: Path) -> No
             assert req["language"] == "en"
             assert req["prompt"] == "ctx"
             assert req["temperature"] == 0.0
+            assert req["apply_triggers"] is True
 
             conn.sendall(
                 (json.dumps({"type": "transcription", "text": "hello "}) + "\n").encode()
@@ -107,6 +109,7 @@ def test_transcribe_via_daemon_streams_text_until_complete(tmp_path: Path) -> No
             language="en",
             prompt="ctx",
             temperature=0.0,
+            apply_triggers=True,
             socket_path=sock_path,
             connect_timeout=1.0,
             read_timeout=1.0,
@@ -130,6 +133,7 @@ def test_transcribe_via_daemon_propagates_error(tmp_path: Path) -> None:
                 language=None,
                 prompt=None,
                 temperature=0.0,
+                apply_triggers=True,
                 socket_path=sock_path,
                 connect_timeout=1.0,
                 read_timeout=1.0,

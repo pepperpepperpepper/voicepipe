@@ -75,15 +75,9 @@ def _emit_transcription(
         )
         raise SystemExit(2)
 
-    from voicepipe.transcript_triggers import apply_transcript_triggers
-
-    output_text, trigger_meta = apply_transcript_triggers(output_text)
-
     payload = result.to_dict()
     payload["intent"] = intent.to_dict()
     payload["output_text"] = output_text
-    if trigger_meta is not None:
-        payload["transcript_trigger"] = trigger_meta
 
     # Always persist the last output for replay/recovery workflows.
     try:
@@ -233,6 +227,7 @@ def _transcribe_and_finalize_fileobj(
                     audio_file=str(dst),
                     recording_id=result.recording_id,
                     source=result.source,
+                    transcript_trigger=result.transcript_trigger,
                     warnings=list(result.warnings),
                 )
             except Exception:

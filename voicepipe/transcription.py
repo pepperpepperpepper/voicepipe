@@ -11,7 +11,7 @@ import json
 import os
 import socket
 from pathlib import Path
-from typing import BinaryIO, Optional
+from typing import Any, BinaryIO, Optional
 
 from voicepipe.config import (
     get_daemon_mode,
@@ -190,6 +190,112 @@ def _transcribe_via_daemon(
                         )
 
             return full_text
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+    msg = f"Could not connect to transcriber daemon (tried: {', '.join(str(p) for p in existing_paths)})"
+    if last_error is not None:
+        msg = f"{msg}: {last_error}"
+    raise TranscriberDaemonUnavailable(msg)
+
+
+def _transcribe_via_daemon_result(
+    audio_file: str,
+    *,
+    model: str,
+    language: Optional[str],
+    prompt: Optional[str],
+    temperature: float,
+    apply_triggers: bool,
+    socket_path: Optional[Path] = None,
+    connect_timeout: float = 2.0,
+    read_timeout: float = 60.0,
+) -> tuple[str, dict[str, Any] | None]:
+    sock_paths = [socket_path] if socket_path is not None else transcriber_socket_paths()
+    existing_paths: list[Path] = []
+    for p in sock_paths:
+        try:
+            if p.exists():
+                existing_paths.append(p)
+        except Exception:
+            continue
+    if not existing_paths:
+        tried = ", ".join(str(p) for p in sock_paths)
+        raise TranscriberDaemonUnavailable(f"Transcriber socket not found (tried: {tried})")
+
+    last_error: Exception | None = None
+    for sock_path in existing_paths:
+        try:
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        except OSError as e:
+            raise TranscriberDaemonUnavailable(
+                f"Unix sockets are unavailable on this platform: {e}"
+            ) from e
+        client.settimeout(connect_timeout)
+        try:
+            try:
+                client.connect(str(sock_path))
+            except OSError as e:
+                last_error = e
+                continue
+
+            request = {
+                "audio_file": audio_file,
+                "model": model,
+                "temperature": temperature,
+                "apply_triggers": bool(apply_triggers),
+            }
+            if language:
+                request["language"] = language
+            if prompt:
+                request["prompt"] = prompt
+
+            client.sendall((json.dumps(request) + "\n").encode("utf-8"))
+
+            client.settimeout(read_timeout)
+
+            buffer = ""
+            full_text = ""
+            postprocess_meta: dict[str, Any] | None = None
+            while True:
+                try:
+                    chunk = client.recv(4096).decode("utf-8", errors="replace")
+                except socket.timeout as e:
+                    raise TranscriptionError(
+                        f"Timed out waiting for transcriber daemon response ({sock_path})"
+                    ) from e
+                if not chunk:
+                    break
+                buffer += chunk
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    if not line.strip():
+                        continue
+                    try:
+                        response = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    kind = response.get("type")
+                    if kind == "transcription":
+                        text = response.get("text", "")
+                        if text:
+                            full_text += str(text)
+                    elif kind == "postprocess":
+                        meta = response.get("meta")
+                        if isinstance(meta, dict):
+                            postprocess_meta = dict(meta)
+                    elif kind == "complete":
+                        return full_text, postprocess_meta
+                    elif kind == "error":
+                        raise TranscriptionError(
+                            str(response.get("message") or "unknown error")
+                        )
+
+            return full_text, postprocess_meta
         finally:
             try:
                 client.close()
@@ -428,25 +534,106 @@ def transcribe_audio_file_result(
     source: str | None = None,
 ) -> TranscriptionResult:
     """Transcribe an on-disk audio file and return a structured result."""
-    backend, resolved_model, _model_for_daemon = _resolve_backend_and_model(model)
+    backend, resolved_model, model_for_daemon = _resolve_backend_and_model(model)
     resolved_model = resolved_model or model
-    text = transcribe_audio_file(
-        audio_file,
-        model=model,
-        language=language,
-        prompt=prompt,
-        temperature=float(temperature),
-        prefer_daemon=prefer_daemon,
-        apply_triggers=bool(apply_triggers),
-    )
-    return TranscriptionResult(
-        text=text,
-        backend=backend,
-        model=resolved_model,
-        audio_file=audio_file,
-        recording_id=recording_id,
-        source=source,
-        warnings=[],
+    effective_prompt = _resolve_effective_prompt(prompt=prompt)
+
+    daemon_mode = get_daemon_mode(load_env=True)
+    effective_prefer_daemon = bool(prefer_daemon)
+    if daemon_mode == "never":
+        effective_prefer_daemon = False
+    elif daemon_mode == "auto" and is_windows():
+        effective_prefer_daemon = False
+    elif daemon_mode == "always":
+        effective_prefer_daemon = True
+
+    if effective_prefer_daemon:
+        try:
+            text, trigger_meta = _transcribe_via_daemon_result(
+                os.path.abspath(os.path.expanduser(audio_file)),
+                model=model_for_daemon,
+                language=language,
+                prompt=effective_prompt,
+                temperature=float(temperature),
+                apply_triggers=bool(apply_triggers),
+            )
+            return TranscriptionResult(
+                text=text,
+                backend=backend,
+                model=resolved_model,
+                audio_file=audio_file,
+                recording_id=recording_id,
+                source=source,
+                transcript_trigger=trigger_meta,
+                warnings=[],
+            )
+        except TranscriberDaemonUnavailable as e:
+            if daemon_mode == "always":
+                raise TranscriptionError(str(e)) from e
+
+    trigger_meta: dict[str, Any] | None = None
+
+    if backend == "openai":
+        from voicepipe.transcriber import WhisperTranscriber
+
+        try:
+            transcriber = WhisperTranscriber(model=resolved_model)
+            text = transcriber.transcribe(
+                audio_file,
+                language=language,
+                prompt=effective_prompt,
+                temperature=float(temperature),
+            )
+            if apply_triggers:
+                from voicepipe.transcript_triggers import apply_transcript_triggers
+
+                text, trigger_meta = apply_transcript_triggers(text)
+            return TranscriptionResult(
+                text=text,
+                backend=backend,
+                model=resolved_model,
+                audio_file=audio_file,
+                recording_id=recording_id,
+                source=source,
+                transcript_trigger=trigger_meta,
+                warnings=[],
+            )
+        except Exception as e:
+            raise TranscriptionError(str(e)) from e
+
+    if backend == "elevenlabs":
+        from voicepipe.elevenlabs_transcriber import ElevenLabsTranscriber
+
+        try:
+            transcriber = ElevenLabsTranscriber(model_id=resolved_model)
+            text = transcriber.transcribe(
+                audio_file,
+                language=language,
+                prompt=effective_prompt,
+                temperature=float(temperature),
+            )
+            if apply_triggers:
+                from voicepipe.transcript_triggers import apply_transcript_triggers
+
+                text, trigger_meta = apply_transcript_triggers(text)
+            return TranscriptionResult(
+                text=text,
+                backend=backend,
+                model=resolved_model,
+                audio_file=audio_file,
+                recording_id=recording_id,
+                source=source,
+                transcript_trigger=trigger_meta,
+                warnings=[],
+            )
+        except Exception as e:
+            raise TranscriptionError(str(e)) from e
+
+    raise TranscriptionError(
+        "Unsupported transcription backend.\n\n"
+        "Set VOICEPIPE_TRANSCRIBE_BACKEND to one of: openai, elevenlabs\n"
+        "Or prefix the model like: openai:whisper-1 or elevenlabs:scribe_v1\n"
+        f"Got backend={backend!r} model={model!r}"
     )
 
 
@@ -472,8 +659,13 @@ def transcribe_audio_bytes_result(
         language=language,
         prompt=prompt,
         temperature=float(temperature),
-        apply_triggers=bool(apply_triggers),
+        apply_triggers=False,
     )
+    trigger_meta: dict[str, Any] | None = None
+    if apply_triggers:
+        from voicepipe.transcript_triggers import apply_transcript_triggers
+
+        text, trigger_meta = apply_transcript_triggers(text)
     return TranscriptionResult(
         text=text,
         backend=backend,
@@ -481,6 +673,7 @@ def transcribe_audio_bytes_result(
         audio_file=None,
         recording_id=recording_id,
         source=source,
+        transcript_trigger=trigger_meta,
         warnings=[],
     )
 
@@ -507,8 +700,13 @@ def transcribe_audio_fileobj_result(
         language=language,
         prompt=prompt,
         temperature=float(temperature),
-        apply_triggers=bool(apply_triggers),
+        apply_triggers=False,
     )
+    trigger_meta: dict[str, Any] | None = None
+    if apply_triggers:
+        from voicepipe.transcript_triggers import apply_transcript_triggers
+
+        text, trigger_meta = apply_transcript_triggers(text)
     return TranscriptionResult(
         text=text,
         backend=backend,
@@ -516,5 +714,6 @@ def transcribe_audio_fileobj_result(
         audio_file=None,
         recording_id=recording_id,
         source=source,
+        transcript_trigger=trigger_meta,
         warnings=[],
     )

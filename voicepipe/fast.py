@@ -176,6 +176,47 @@ def send_transcribe_request(audio_file: str) -> str:
         return ""
 
 
+def send_transcribe_request_result(audio_file: str, *, source: str) -> "TranscriptionResult":
+    """Transcribe audio and return a structured result including trigger metadata."""
+    # Keep imports out of the `start` hot path.
+    from voicepipe.transcription import transcribe_audio_file_result
+    from voicepipe.transcription_result import TranscriptionResult
+    from voicepipe.wav import read_wav_duration_s
+
+    try:
+        duration_s = read_wav_duration_s(audio_file)
+        if duration_s is not None and duration_s < 0.2:
+            fast_log(
+                f"[TRANSCRIBE] Skipping transcription (audio too short: {duration_s:.3f}s)"
+            )
+            return TranscriptionResult(
+                text="",
+                backend="",
+                model=get_transcribe_model(),
+                audio_file=audio_file,
+                source=source,
+                warnings=[],
+            )
+        model = get_transcribe_model()
+        return transcribe_audio_file_result(
+            audio_file,
+            model=model,
+            prefer_daemon=True,
+            apply_triggers=True,
+            source=source,
+        )
+    except Exception as e:
+        fast_log(f"[TRANSCRIBE] Error: {e}")
+        return TranscriptionResult(
+            text="",
+            backend="",
+            model=get_transcribe_model(),
+            audio_file=audio_file,
+            source=source,
+            warnings=[],
+        )
+
+
 def send_transcribe_request_fileobj(fh: BinaryIO, *, filename: str) -> str:
     """Transcribe audio from a file-like object without writing a temp WAV."""
     # Keep imports out of the `start` hot path.
@@ -307,14 +348,12 @@ def _perform_toggle_post_stop(post: _TogglePostStop) -> None:
     target_window = post.target_window
     typing_backend = post.typing_backend
 
-    text = send_transcribe_request(audio_file)
+    result = send_transcribe_request_result(audio_file, source="fast-toggle")
     transcription_ok = False
-    if text:
-        cleaned_text = text.rstrip()
-        fast_log(f"[TOGGLE] Transcription: {cleaned_text}")
-        from voicepipe.transcript_triggers import apply_transcript_triggers
-
-        output_text, trigger_meta = apply_transcript_triggers(cleaned_text)
+    if result.text:
+        output_text = (result.text or "").rstrip()
+        fast_log(f"[TOGGLE] Transcription: {output_text}")
+        trigger_meta = result.transcript_trigger
         if trigger_meta is not None:
             fast_log(f"[TOGGLE] Transcript trigger: {trigger_meta}")
 
@@ -322,9 +361,8 @@ def _perform_toggle_post_stop(post: _TogglePostStop) -> None:
         try:
             from voicepipe.last_output import save_last_output
 
-            payload: dict[str, object] = {"source": "fast-toggle"}
-            if trigger_meta is not None:
-                payload["transcript_trigger"] = trigger_meta
+            payload = result.to_dict()
+            payload["output_text"] = output_text
             save_last_output(output_text, payload=payload)
         except Exception:
             pass
@@ -816,25 +854,28 @@ def main(argv: Optional[list[str]] = None) -> None:
             stop_result = backend.stop()
             audio_file = stop_result.audio_file
             if os.path.exists(audio_file) and os.path.getsize(audio_file) > 0:
-                text = send_transcribe_request(audio_file)
+                result = send_transcribe_request_result(audio_file, source="fast-stop")
+                output_text = (result.text or "").rstrip()
                 # Persist last output for replay/recovery workflows.
                 try:
                     from voicepipe.last_output import save_last_output
 
-                    save_last_output(text or "", payload={"source": "fast-stop"})
+                    payload = result.to_dict()
+                    payload["output_text"] = output_text
+                    save_last_output(output_text, payload=payload)
                 except Exception:
                     pass
                 # Output text
-                if text:
+                if output_text:
                     out = getattr(sys, "stdout", None)
                     if out is not None:
-                        print(text, file=out)
+                        print(output_text, file=out)
                     else:
-                        fast_log(text)
+                        fast_log(output_text)
                 # Clean up
-                if text and os.path.exists(audio_file):
+                if output_text and os.path.exists(audio_file):
                     os.unlink(audio_file)
-                elif not text:
+                elif not output_text:
                     try:
                         dst_dir = preserved_audio_dir(create=True)
                         dst = dst_dir / Path(audio_file).name

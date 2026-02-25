@@ -308,6 +308,7 @@ Add runtime toggles:
     - Timeout case harness added; `sleep 2` audio fixture still pending recording.
 - Add round 4 fixtures for plugin verbs (pure transforms; no filesystem writes). (IN PROGRESS: 2026-02-25)
   - Added round 4 live tests for plugin verb gating + metadata invariants (reuses round 1 audio fixture). (DONE: 2026-02-25)
+  - Added planned fixtures manifest: `tests/assets/zwingli_round4/manifest.json`. (DONE: 2026-02-25)
 
 ---
 

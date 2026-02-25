@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "created": "2026-02-25",
+  "notes": "Round 4 planned Zwingli audio fixtures. These focus on plugin verbs (pure text transforms; no filesystem writes). Audio files are intentionally not checked in yet; record them and update this manifest with URLs.",
+  "samples": [
+    {
+      "file": "zwingli_plugin_alpha_bravo_charlie.wav",
+      "url": "",
+      "spoken_text": "Zwingli plugin alpha bravo charlie.",
+      "status": "todo"
+    },
+    {
+      "file": "zwingli_plugin_comma_alpha_bravo_charlie.wav",
+      "url": "",
+      "spoken_text": "Zwingli, plugin alpha bravo charlie.",
+      "status": "todo"
+    }
+  ]
+}

@@ -243,7 +243,7 @@ Add dedicated commands for triggers config:
 
 Add runtime toggles:
 - `--no-triggers` (debug: bypass postprocessing)
-- `--json` includes trigger/verb/action metadata when applied
+- `--json` includes trigger/verb/action metadata when applied. (DONE: 2026-02-25)
 
 ---
 

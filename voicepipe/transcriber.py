@@ -45,13 +45,18 @@ Example: If speaker says "open quote hello close quote", transcribe as: "hello" 
         self.model = model
 
     def _resolve_prompt(self, *, prompt: Optional[str], effective_model: str) -> Optional[str]:
-        if prompt is not None:
-            return prompt
+        builtin: Optional[str] = None
         if effective_model.startswith("gpt-4"):
-            return self.GPT4_PROMPT
-        if effective_model == "whisper-1":
-            return self.WHISPER_PROMPT
-        return None
+            builtin = self.GPT4_PROMPT
+        elif effective_model == "whisper-1":
+            builtin = self.WHISPER_PROMPT
+
+        cleaned = (prompt or "").strip()
+        if cleaned:
+            if builtin:
+                return f"{builtin}\n\n{cleaned}"
+            return cleaned
+        return builtin
 
     def transcribe_file(
         self,

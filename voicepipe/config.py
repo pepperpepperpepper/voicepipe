@@ -57,6 +57,8 @@ DEFAULT_ENV_FILE_TEMPLATE = """# Voicepipe environment config (used by systemd s
 # VOICEPIPE_AUDIO_CHANNELS=1
 # VOICEPIPE_TRANSCRIBE_BACKEND=openai
 # VOICEPIPE_TRANSCRIBE_MODEL=gpt-4o-transcribe
+# VOICEPIPE_TRANSCRIBE_PROMPT=  # extra transcription context (optional; appended to the built-in prompt)
+# VOICEPIPE_TRANSCRIBE_PROMPT_APPEND_TRIGGERS=0  # append trigger words to the STT prompt (opt-in)
 # VOICEPIPE_TYPE_BACKEND=auto  # typing backend override (optional)
 #   Linux: auto|wayland|x11|wtype|xdotool|none
 #   macOS: auto|osascript|none
@@ -208,6 +210,27 @@ def get_transcribe_model(
     if backend == "elevenlabs":
         return DEFAULT_ELEVENLABS_TRANSCRIBE_MODEL
     return DEFAULT_OPENAI_TRANSCRIBE_MODEL
+
+
+def get_transcribe_prompt(*, default: str = "", load_env: bool = True) -> str:
+    if load_env:
+        load_environment()
+    if "VOICEPIPE_TRANSCRIBE_PROMPT" not in os.environ:
+        return str(default)
+    return (os.environ.get("VOICEPIPE_TRANSCRIBE_PROMPT") or "").strip()
+
+
+def get_transcribe_prompt_append_triggers(
+    *, default: bool = False, load_env: bool = True
+) -> bool:
+    if load_env:
+        load_environment()
+    if "VOICEPIPE_TRANSCRIBE_PROMPT_APPEND_TRIGGERS" not in os.environ:
+        return bool(default)
+    return _as_bool(
+        os.environ.get("VOICEPIPE_TRANSCRIBE_PROMPT_APPEND_TRIGGERS"),
+        default=bool(default),
+    )
 
 
 def _as_positive_int(value: object) -> Optional[int]:

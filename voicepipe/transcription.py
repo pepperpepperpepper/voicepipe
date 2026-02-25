@@ -13,7 +13,13 @@ import socket
 from pathlib import Path
 from typing import BinaryIO, Optional
 
-from voicepipe.config import get_daemon_mode, get_transcribe_backend
+from voicepipe.config import (
+    get_daemon_mode,
+    get_transcribe_backend,
+    get_transcribe_prompt,
+    get_transcribe_prompt_append_triggers,
+    get_transcript_commands_config,
+)
 from voicepipe.platform import is_windows
 from voicepipe.paths import transcriber_socket_paths
 from voicepipe.transcription_result import TranscriptionResult
@@ -25,6 +31,49 @@ class TranscriptionError(RuntimeError):
 
 class TranscriberDaemonUnavailable(TranscriptionError):
     pass
+
+
+def _select_trigger_hint_words(triggers: dict[str, str], *, limit: int = 4) -> list[str]:
+    out: list[str] = []
+    for raw_trigger in triggers.keys():
+        cleaned = (raw_trigger or "").strip()
+        if not cleaned:
+            continue
+        if any(ch.isspace() for ch in cleaned):
+            continue
+        out.append(cleaned)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _build_trigger_prompt_hint(triggers: dict[str, str]) -> str | None:
+    words = _select_trigger_hint_words(triggers)
+    if not words:
+        return None
+    joined = ", ".join(words)
+    return f"The speaker may start by saying the command word(s): {joined}."
+
+
+def _resolve_effective_prompt(*, prompt: Optional[str]) -> Optional[str]:
+    parts: list[str] = []
+
+    env_prompt = (get_transcribe_prompt(load_env=True) or "").strip()
+    if env_prompt:
+        parts.append(env_prompt)
+
+    user_prompt = (prompt or "").strip()
+    if user_prompt:
+        parts.append(user_prompt)
+
+    if get_transcribe_prompt_append_triggers(load_env=False):
+        commands = get_transcript_commands_config(load_env=False)
+        hint = _build_trigger_prompt_hint(commands.triggers)
+        if hint:
+            parts.append(hint)
+
+    combined = "\n\n".join(parts).strip()
+    return combined or None
 
 
 def _normalize_backend(value: str) -> str:
@@ -165,6 +214,7 @@ def transcribe_audio_file(
 ) -> str:
     """Transcribe an on-disk audio file."""
     backend, resolved_model, model_for_daemon = _resolve_backend_and_model(model)
+    effective_prompt = _resolve_effective_prompt(prompt=prompt)
 
     daemon_mode = get_daemon_mode(load_env=True)
     effective_prefer_daemon = bool(prefer_daemon)
@@ -181,7 +231,7 @@ def transcribe_audio_file(
                 os.path.abspath(os.path.expanduser(audio_file)),
                 model=model_for_daemon,
                 language=language,
-                prompt=prompt,
+                prompt=effective_prompt,
                 temperature=float(temperature),
                 apply_triggers=bool(apply_triggers),
             )
@@ -198,7 +248,7 @@ def transcribe_audio_file(
             text = transcriber.transcribe(
                 audio_file,
                 language=language,
-                prompt=prompt,
+                prompt=effective_prompt,
                 temperature=float(temperature),
             )
             if apply_triggers:
@@ -217,7 +267,7 @@ def transcribe_audio_file(
             text = transcriber.transcribe(
                 audio_file,
                 language=language,
-                prompt=prompt,
+                prompt=effective_prompt,
                 temperature=float(temperature),
             )
             if apply_triggers:
@@ -248,6 +298,7 @@ def transcribe_audio_bytes(
 ) -> str:
     """Transcribe audio bytes without requiring an on-disk temp file."""
     backend, resolved_model, _model_for_daemon = _resolve_backend_and_model(model)
+    effective_prompt = _resolve_effective_prompt(prompt=prompt)
 
     if backend == "openai":
         from voicepipe.transcriber import WhisperTranscriber
@@ -258,7 +309,7 @@ def transcribe_audio_bytes(
                 audio_bytes,
                 filename=str(filename or "audio.wav"),
                 language=language,
-                prompt=prompt,
+                prompt=effective_prompt,
                 temperature=float(temperature),
                 model=resolved_model,
             )
@@ -279,7 +330,7 @@ def transcribe_audio_bytes(
                 audio_bytes,
                 filename=str(filename or "audio.wav"),
                 language=language,
-                prompt=prompt,
+                prompt=effective_prompt,
                 temperature=float(temperature),
                 model=resolved_model,
             )
@@ -311,6 +362,7 @@ def transcribe_audio_fileobj(
 ) -> str:
     """Transcribe audio from a file-like object without a filesystem path."""
     backend, resolved_model, _model_for_daemon = _resolve_backend_and_model(model)
+    effective_prompt = _resolve_effective_prompt(prompt=prompt)
 
     if backend == "openai":
         from voicepipe.transcriber import WhisperTranscriber
@@ -321,7 +373,7 @@ def transcribe_audio_fileobj(
                 fh,
                 filename=str(filename or "audio.wav"),
                 language=language,
-                prompt=prompt,
+                prompt=effective_prompt,
                 temperature=float(temperature),
                 model=resolved_model,
             )
@@ -343,7 +395,7 @@ def transcribe_audio_fileobj(
                 audio_bytes,
                 filename=str(filename or "audio.wav"),
                 language=language,
-                prompt=prompt,
+                prompt=effective_prompt,
                 temperature=float(temperature),
                 model=resolved_model,
             )

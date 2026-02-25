@@ -532,8 +532,8 @@ then optionally run extra LLM processing before the final destination (typing, e
 ### Next refactor (after `zwingli1.wav` + `zwingli2.wav` are reliable)
 
 - Make trigger words more reliably recognized by STT:
-  - Add a config/default for a transcription prompt (e.g. `VOICEPIPE_TRANSCRIBE_PROMPT`).
-  - Automatically append known trigger words from `VOICEPIPE_TRANSCRIPT_TRIGGERS` to the STT prompt so `zwingly` is less likely to become `swinging`.
+  - Add a config/default for a transcription prompt (e.g. `VOICEPIPE_TRANSCRIBE_PROMPT`). (DONE: 2026-02-25)
+  - Support appending trigger-word hints to the STT prompt (opt-in via `VOICEPIPE_TRANSCRIBE_PROMPT_APPEND_TRIGGERS=1`). (DONE: 2026-02-25)
 - Extend transcript triggers beyond “single pass text rewrite”:
   - Allow trigger actions to return structured output (e.g. `{destination: "type"|"clipboard"|"shell", text: ...}`).
   - Support multi-step LLM processing for advanced workflows (e.g. command extraction + safety pass) using `zwingli_advanced.wav` as the first regression fixture.

@@ -64,6 +64,9 @@ DEFAULT_ENV_FILE_TEMPLATE = """# Voicepipe environment config (used by systemd s
 # VOICEPIPE_TRANSCRIPT_TRIGGERS=zwingli=strip,zwingly=strip
 #   Actions: strip|zwingli
 #
+# Replay behavior:
+# VOICEPIPE_REPLAY_DEFAULT=clipboard  # default actions for `voicepipe replay` (print|clipboard|type|json; comma-separated)
+#
 # Zwingli LLM preprocessing (action=zwingli):
 # VOICEPIPE_ZWINGLI_MODEL=gpt-4o-mini
 # VOICEPIPE_ZWINGLI_TEMPERATURE=0.2

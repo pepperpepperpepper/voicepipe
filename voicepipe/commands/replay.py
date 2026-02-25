@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 import click
@@ -8,6 +9,30 @@ import click
 from voicepipe.clipboard import copy_to_clipboard
 from voicepipe.last_output import clear_last_output, load_last_output
 from voicepipe.typing import type_text
+
+
+def _parse_default_actions(raw: str) -> set[str]:
+    tokens: list[str] = []
+    for part in (raw or "").replace("+", ",").split(","):
+        item = (part or "").strip().lower()
+        if not item:
+            continue
+        tokens.append(item)
+
+    aliases = {
+        "copy": "clipboard",
+        "clip": "clipboard",
+        "cb": "clipboard",
+        "paste": "clipboard",
+        "stdin": "print",
+        "stdout": "print",
+        "tty": "type",
+    }
+
+    out: set[str] = set()
+    for item in tokens:
+        out.add(aliases.get(item, item))
+    return out
 
 
 @click.command("replay")
@@ -45,6 +70,12 @@ def replay(type_: bool, clipboard: bool, clear: bool, json_: bool) -> None:
       voicepipe replay --clipboard
       voicepipe replay --json
     """
+    if not any([type_, clipboard, json_]):
+        defaults = _parse_default_actions(os.environ.get("VOICEPIPE_REPLAY_DEFAULT") or "")
+        clipboard = bool(clipboard or ("clipboard" in defaults))
+        type_ = bool(type_ or ("type" in defaults))
+        json_ = bool(json_ or ("json" in defaults))
+
     entry = load_last_output()
     if entry is None:
         raise click.ClickException(
@@ -56,6 +87,9 @@ def replay(type_: bool, clipboard: bool, clear: bool, json_: bool) -> None:
             "  voicepipe replay --type     # type into focused window\n"
             "  voicepipe replay --clipboard  # copy to clipboard\n"
             "  voicepipe replay --json     # show metadata\n"
+            "\n"
+            "You can also set a default replay action in your config, e.g.:\n"
+            "  VOICEPIPE_REPLAY_DEFAULT=clipboard\n"
         )
 
     if json_:

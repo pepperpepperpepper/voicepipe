@@ -35,16 +35,15 @@ from voicepipe.typing import type_text
 def replay(type_: bool, clipboard: bool, clear: bool, json_: bool) -> None:
     """Replay the last buffered Voicepipe output.
 
-    This is useful when you typed into the wrong window or Voicepipe timed out:
-    Voicepipe always stores the last output in a small local buffer so you can
-    replay it without re-transcribing.
+    By default, this prints the buffered text to stdout. Use `--type` (desktop)
+    or `--clipboard` to replay it elsewhere without re-transcribing.
 
-    By default, this prints the buffered text to stdout. Use flags for desktop
-    workflows:
-
-      - `--type` to type into the currently focused window
-      - `--clipboard` to copy so you can paste
-      - `--json` to inspect metadata (created time, recording_id, etc.)
+    \b
+    Examples:
+      voicepipe replay
+      voicepipe replay --type
+      voicepipe replay --clipboard
+      voicepipe replay --json
     """
     entry = load_last_output()
     if entry is None:

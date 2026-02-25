@@ -128,6 +128,28 @@ def test_apply_transcript_triggers_dispatch_known_verb_routes() -> None:
     assert meta["meta"]["action"] == "strip"
 
 
+def test_apply_transcript_triggers_dispatch_includes_destination_metadata() -> None:
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "strip": config.TranscriptVerbConfig(
+                action="strip",
+                enabled=True,
+                type="builtin",
+                destination="clipboard",
+            ),
+        },
+    )
+    out, meta = tt.apply_transcript_triggers("zwingli strip hello", commands=commands)
+    assert out == "hello"
+    assert meta is not None
+    assert meta["ok"] is True
+    assert meta["action"] == "dispatch"
+    assert meta["meta"]["mode"] == "verb"
+    assert meta["meta"]["destination"] == "clipboard"
+
+
 def test_apply_transcript_triggers_dispatch_shell_uses_verb_timeout_seconds(monkeypatch) -> None:
     monkeypatch.setenv("VOICEPIPE_SHELL_ALLOW", "1")
     monkeypatch.setenv("VOICEPIPE_SHELL_TIMEOUT_SECONDS", "99")

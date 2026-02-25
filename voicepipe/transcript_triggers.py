@@ -400,6 +400,8 @@ def _dispatch_prompt(prompt: str, *, commands: TranscriptCommandsConfig) -> tupl
             "verb_type": getattr(verb_cfg, "type", None),
             "action": action,
         }
+        if getattr(verb_cfg, "destination", None):
+            meta["destination"] = verb_cfg.destination
         if getattr(verb_cfg, "profile", None):
             meta["profile"] = verb_cfg.profile
             if action == "zwingli":

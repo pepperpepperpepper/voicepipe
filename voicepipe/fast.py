@@ -312,19 +312,22 @@ def _perform_toggle_post_stop(post: _TogglePostStop) -> None:
     if text:
         cleaned_text = text.rstrip()
         fast_log(f"[TOGGLE] Transcription: {cleaned_text}")
-        # Always persist the last output for replay/recovery workflows.
-        try:
-            from voicepipe.last_output import save_last_output
-
-            save_last_output(cleaned_text, payload={"source": "fast-toggle"})
-        except Exception:
-            pass
-
         from voicepipe.transcript_triggers import apply_transcript_triggers
 
         output_text, trigger_meta = apply_transcript_triggers(cleaned_text)
         if trigger_meta is not None:
             fast_log(f"[TOGGLE] Transcript trigger: {trigger_meta}")
+
+        # Always persist the last output for replay/recovery workflows.
+        try:
+            from voicepipe.last_output import save_last_output
+
+            payload: dict[str, object] = {"source": "fast-toggle"}
+            if trigger_meta is not None:
+                payload["transcript_trigger"] = trigger_meta
+            save_last_output(output_text, payload=payload)
+        except Exception:
+            pass
 
         typed_ok, type_err = type_text(
             output_text,

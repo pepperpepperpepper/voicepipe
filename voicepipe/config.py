@@ -739,6 +739,7 @@ class TranscriptVerbConfig:
     profile: str | None = None
     timeout_seconds: float | None = None
     plugin: TranscriptPluginConfig | None = None
+    destination: str | None = None
 
 
 @dataclass(frozen=True)
@@ -814,6 +815,7 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
             continue
 
         plugin: TranscriptPluginConfig | None = None
+        destination: str | None = None
         if isinstance(raw_value, str):
             action = raw_value
             enabled = True
@@ -833,6 +835,18 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
                     f"Invalid triggers.json: verb {raw_verb!r} has non-boolean 'enabled'"
                 )
             enabled = bool(enabled_value)
+
+            raw_destination = raw_value.get("destination")
+            if isinstance(raw_destination, str):
+                cleaned = raw_destination.strip().lower()
+                if cleaned:
+                    if cleaned not in {"print", "clipboard", "type"}:
+                        raise VoicepipeConfigError(
+                            "Invalid triggers.json: verb "
+                            f"{raw_verb!r} has invalid destination {cleaned!r} "
+                            "(expected: print, clipboard, type)"
+                        )
+                    destination = cleaned
 
             profile = None
             raw_profile = raw_value.get("profile")
@@ -902,6 +916,7 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
             profile=profile,
             timeout_seconds=timeout_seconds,
             plugin=plugin,
+            destination=destination,
         )
 
     return out

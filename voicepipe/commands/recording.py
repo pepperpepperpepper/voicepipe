@@ -53,9 +53,37 @@ def _emit_transcription(
     else:
         output_text = (result.text or "").strip()
 
+    strict_commands = os.environ.get("VOICEPIPE_COMMANDS_STRICT") == "1"
+    if strict_commands and intent.mode == "command":
+        payload = result.to_dict()
+        payload["intent"] = intent.to_dict()
+        payload["output_text"] = output_text
+
+        # Always persist the last output for replay/recovery workflows.
+        try:
+            from voicepipe.last_output import save_last_output
+
+            save_last_output(output_text, payload=payload)
+        except Exception:
+            pass
+
+        if json_output:
+            click.echo(json.dumps(payload, ensure_ascii=False))
+        click.echo(
+            "Command-mode detected but commands are not implemented yet.",
+            err=True,
+        )
+        raise SystemExit(2)
+
+    from voicepipe.transcript_triggers import apply_transcript_triggers
+
+    output_text, trigger_meta = apply_transcript_triggers(output_text)
+
     payload = result.to_dict()
     payload["intent"] = intent.to_dict()
     payload["output_text"] = output_text
+    if trigger_meta is not None:
+        payload["transcript_trigger"] = trigger_meta
 
     # Always persist the last output for replay/recovery workflows.
     try:
@@ -74,23 +102,6 @@ def _emit_transcription(
                 click.echo(f"Error copying to clipboard: {err}", err=True)
         except Exception as e:
             click.echo(f"Error copying to clipboard: {e}", err=True)
-
-    from voicepipe.transcript_triggers import apply_transcript_triggers
-
-    output_text, trigger_meta = apply_transcript_triggers(output_text)
-    payload["output_text"] = output_text
-    if trigger_meta is not None:
-        payload["transcript_trigger"] = trigger_meta
-
-    strict_commands = os.environ.get("VOICEPIPE_COMMANDS_STRICT") == "1"
-    if strict_commands and intent.mode == "command":
-        if json_output:
-            click.echo(json.dumps(payload, ensure_ascii=False))
-        click.echo(
-            "Command-mode detected but commands are not implemented yet.",
-            err=True,
-        )
-        raise SystemExit(2)
 
     if json_output:
         click.echo(json.dumps(payload, ensure_ascii=False))

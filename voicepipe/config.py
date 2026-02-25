@@ -71,6 +71,9 @@ DEFAULT_ENV_FILE_TEMPLATE = """# Voicepipe environment config (used by systemd s
 # VOICEPIPE_SHELL_ALLOW=1
 # VOICEPIPE_SHELL_TIMEOUT_SECONDS=10
 #
+# Replay behavior:
+# VOICEPIPE_REPLAY_DEFAULT=clipboard  # default actions for `voicepipe replay` (print|clipboard|type|json; comma-separated)
+#
 # Zwingli LLM preprocessing (action=zwingli):
 # VOICEPIPE_ZWINGLI_BACKEND=openai  # openai|groq
 # VOICEPIPE_ZWINGLI_MODEL=gpt-5.2

@@ -42,6 +42,7 @@ def run_recording_subprocess() -> None:
 
         stop_event = threading.Event()
         requested_action: dict[str, str] = {"action": ""}
+        timed_out: dict[str, bool] = {"value": False}
 
         def _cleanup_session() -> None:
             try:
@@ -143,6 +144,7 @@ def run_recording_subprocess() -> None:
                 pass
 
         def _timeout_stop() -> None:
+            timed_out["value"] = True
             _request("stop")
 
         timeout_timer = threading.Timer(300, _timeout_stop)
@@ -230,6 +232,19 @@ def run_recording_subprocess() -> None:
                     time.sleep(0.05)
         except Exception:
             pass
+
+        if timed_out.get("value") and audio_file:
+            try:
+                from voicepipe.timeout_transcription import transcribe_timeout_audio_file
+
+                transcribe_timeout_audio_file(
+                    str(audio_file),
+                    recording_id=str(session.get("recording_id") or "") or None,
+                    source="start-timeout",
+                    keep_audio=False,
+                )
+            except Exception:
+                pass
 
         _cleanup_session()
         raise SystemExit(0)

@@ -217,6 +217,24 @@ def send_transcribe_request_result(audio_file: str, *, source: str) -> "Transcri
         )
 
 
+def _resolve_destination_from_transcript_trigger(meta: object) -> str | None:
+    if not isinstance(meta, dict):
+        return None
+    inner = meta.get("meta")
+    if isinstance(inner, dict):
+        raw = inner.get("destination")
+        if isinstance(raw, str):
+            cleaned = raw.strip().lower()
+            if cleaned:
+                return cleaned
+    raw = meta.get("destination")
+    if isinstance(raw, str):
+        cleaned = raw.strip().lower()
+        if cleaned:
+            return cleaned
+    return None
+
+
 def send_transcribe_request_fileobj(fh: BinaryIO, *, filename: str) -> str:
     """Transcribe audio from a file-like object without writing a temp WAV."""
     # Keep imports out of the `start` hot path.
@@ -367,14 +385,31 @@ def _perform_toggle_post_stop(post: _TogglePostStop) -> None:
         except Exception:
             pass
 
-        typed_ok, type_err = type_text(
-            output_text,
-            window_id=target_window,
-            backend=typing_backend,  # type: ignore[arg-type]
-        )
-        if not typed_ok:
-            fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
-        transcription_ok = True
+        dest = None
+        if (os.environ.get("VOICEPIPE_COMMANDS_RESPECT_DESTINATION") or "").strip() == "1":
+            dest = _resolve_destination_from_transcript_trigger(trigger_meta)
+
+        if dest == "clipboard":
+            try:
+                from voicepipe.clipboard import copy_to_clipboard
+
+                ok, err = copy_to_clipboard(output_text)
+                if not ok:
+                    fast_log(f"[TOGGLE] Warning: clipboard failed: {err}")
+                else:
+                    transcription_ok = True
+            except Exception as e:
+                fast_log(f"[TOGGLE] Warning: clipboard failed: {e}")
+
+        if not transcription_ok:
+            typed_ok, type_err = type_text(
+                output_text,
+                window_id=target_window,
+                backend=typing_backend,  # type: ignore[arg-type]
+            )
+            if not typed_ok:
+                fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
+            transcription_ok = True
     else:
         fast_log("[TOGGLE] No transcription returned")
 

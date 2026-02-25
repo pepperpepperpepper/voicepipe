@@ -32,6 +32,24 @@ from voicepipe.platform import is_windows
 logger = logging.getLogger(__name__)
 
 
+def _resolve_destination_from_transcript_trigger(meta: object) -> str | None:
+    if not isinstance(meta, dict):
+        return None
+    inner = meta.get("meta")
+    if isinstance(inner, dict):
+        raw = inner.get("destination")
+        if isinstance(raw, str):
+            cleaned = raw.strip().lower()
+            if cleaned:
+                return cleaned
+    raw = meta.get("destination")
+    if isinstance(raw, str):
+        cleaned = raw.strip().lower()
+        if cleaned:
+            return cleaned
+    return None
+
+
 def _emit_transcription(
     result,
     *,
@@ -74,6 +92,16 @@ def _emit_transcription(
             err=True,
         )
         raise SystemExit(2)
+
+    if (os.environ.get("VOICEPIPE_COMMANDS_RESPECT_DESTINATION") or "").strip() == "1":
+        if not type_ and not clipboard:
+            dest = _resolve_destination_from_transcript_trigger(
+                getattr(result, "transcript_trigger", None)
+            )
+            if dest == "clipboard":
+                clipboard = True
+            elif dest == "type":
+                type_ = True
 
     payload = result.to_dict()
     payload["intent"] = intent.to_dict()

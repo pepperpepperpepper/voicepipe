@@ -189,3 +189,60 @@ def test_stop_json_outputs_structured_result(tmp_path: Path, monkeypatch, isolat
     assert payload["intent"]["mode"] == "dictation"
     assert payload["intent"]["dictation_text"] == "hello"
     assert "sk-test-secret" not in result.output
+
+
+def test_stop_respects_transcript_trigger_destination_clipboard(
+    tmp_path: Path,
+    monkeypatch,
+    isolated_home: Path,
+) -> None:
+    import voicepipe.commands.recording as recording_cmd
+
+    monkeypatch.setenv("VOICEPIPE_COMMANDS_RESPECT_DESTINATION", "1")
+
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"abc")
+
+    session_dict = {"pid": 1, "audio_file": str(audio)}
+
+    class _FakeBackend:
+        def stop(self):
+            return _StopResult(audio_file=str(audio), session=session_dict)
+
+    clipboard_calls: list[str] = []
+
+    import voicepipe.clipboard as clipboard
+
+    def _fake_copy(text: str):
+        clipboard_calls.append(text)
+        return True, None
+
+    monkeypatch.setattr(clipboard, "copy_to_clipboard", _fake_copy)
+
+    monkeypatch.setattr(recording_cmd, "AutoRecorderBackend", lambda: _FakeBackend())
+    monkeypatch.setattr(
+        recording_cmd,
+        "transcribe_audio_file_result",
+        lambda *_a, **_k: TranscriptionResult(
+            text="hello",
+            backend="openai",
+            model="gpt-test",
+            audio_file=str(audio),
+            recording_id=None,
+            source="stop",
+            transcript_trigger={
+                "ok": True,
+                "action": "dispatch",
+                "trigger": "zwingli",
+                "reason": "prefix",
+                "meta": {"destination": "clipboard"},
+            },
+            warnings=[],
+        ),
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["stop"])
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == "hello"
+    assert clipboard_calls == ["hello"]

@@ -535,6 +535,6 @@ then optionally run extra LLM processing before the final destination (typing, e
   - Add a config/default for a transcription prompt (e.g. `VOICEPIPE_TRANSCRIBE_PROMPT`). (DONE: 2026-02-25)
   - Support appending trigger-word hints to the STT prompt (opt-in via `VOICEPIPE_TRANSCRIBE_PROMPT_APPEND_TRIGGERS=1`). (DONE: 2026-02-25)
 - Extend transcript triggers beyond “single pass text rewrite”:
-  - Add per-verb `destination` hints (`print|clipboard|type`) surfaced in dispatch metadata / `--json`. (DONE: 2026-02-25)
+  - Add per-verb `destination` hints (`print|clipboard|type`) surfaced in dispatch metadata / `--json` (and optionally respected when `VOICEPIPE_COMMANDS_RESPECT_DESTINATION=1`). (DONE: 2026-02-25)
   - Allow trigger actions to return structured output (e.g. `{destination: "type"|"clipboard"|"shell", text: ...}`).
   - Support multi-step LLM processing for advanced workflows (e.g. command extraction + safety pass) using `zwingli_advanced.wav` as the first regression fixture.

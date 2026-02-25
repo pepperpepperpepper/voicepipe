@@ -43,6 +43,15 @@ def match_transcript_trigger(
 
     lowered = cleaned.lower()
 
+    word_separators: tuple[tuple[str, str], ...] = (
+        ("comma", ","),
+        ("colon", ":"),
+        ("semicolon", ";"),
+        ("semi colon", ";"),
+        ("period", "."),
+        ("full stop", "."),
+    )
+
     for raw_trigger, raw_action in triggers.items():
         trigger = (raw_trigger or "").strip().lower()
         if not trigger:
@@ -57,22 +66,60 @@ def match_transcript_trigger(
                 reason="exact",
             )
 
-        if lowered.startswith(trigger + " "):
-            return TranscriptTriggerMatch(
-                trigger=trigger,
-                action=action,
-                remainder=cleaned[len(trigger) :].lstrip(),
-                reason="prefix:space",
-            )
+        if not lowered.startswith(trigger):
+            continue
 
-        for sep in (",", ":", ";", "."):
-            if lowered.startswith(trigger + sep):
+        after = len(trigger)
+        if after >= len(lowered):
+            continue
+
+        # Boundary-aware match: allow either whitespace or a separator after
+        # the trigger. Prefer stripping a separator even when there's whitespace
+        # before it (e.g. "zwingli , do it").
+        i = after
+        while i < len(lowered) and lowered[i].isspace():
+            i += 1
+
+        if i < len(lowered):
+            # Trigger followed by a separator character.
+            for sep in (",", ":", ";", "."):
+                if lowered[i] == sep:
+                    return TranscriptTriggerMatch(
+                        trigger=trigger,
+                        action=action,
+                        remainder=cleaned[i + 1 :].lstrip(),
+                        reason=f"prefix:{sep}",
+                    )
+
+            # Trigger followed by a separator word (e.g. "zwingli comma ...").
+            for word, sep in word_separators:
+                if not lowered.startswith(word, i):
+                    continue
+                end = i + len(word)
+                if end < len(lowered):
+                    next_ch = lowered[end]
+                    if not (next_ch.isspace() or next_ch in {",", ":", ";", "."}):
+                        continue
+                j = end
+                while j < len(lowered) and lowered[j].isspace():
+                    j += 1
+                if j < len(lowered) and lowered[j] in {",", ":", ";", "."}:
+                    j += 1
                 return TranscriptTriggerMatch(
                     trigger=trigger,
                     action=action,
-                    remainder=cleaned[len(trigger) + 1 :].lstrip(),
+                    remainder=cleaned[j:].lstrip(),
                     reason=f"prefix:{sep}",
                 )
+
+        # Trigger followed by whitespace and then non-separator content.
+        if lowered[after].isspace():
+            return TranscriptTriggerMatch(
+                trigger=trigger,
+                action=action,
+                remainder=cleaned[after:].lstrip(),
+                reason="prefix:space",
+            )
 
     return None
 
@@ -365,6 +412,29 @@ def _resolve_action_from_verb_config(_verb: str, cfg: TranscriptVerbConfig) -> s
 def _dispatch_prompt(prompt: str, *, commands: TranscriptCommandsConfig) -> tuple[str, dict[str, Any]]:
     cleaned = (prompt or "").strip()
     verb, args = _split_dispatch_verb(cleaned)
+
+    # Normalize common STT variants that turn a single-word verb into two words.
+    # Example: "plugin" -> "plug in".
+    if verb == "plug" and "plugin" in commands.verbs and "plug" not in commands.verbs:
+        stripped_args = args.lstrip()
+        lowered_args = stripped_args.lower()
+        if lowered_args == "in":
+            args = ""
+            verb = "plugin"
+        elif lowered_args.startswith("in"):
+            next_ch = stripped_args[2:3]
+            if not next_ch:
+                args = ""
+                verb = "plugin"
+            elif next_ch.isspace() or next_ch in _DISPATCH_SEPARATORS:
+                j = 2
+                if j < len(stripped_args) and stripped_args[j] in _DISPATCH_SEPARATORS:
+                    j += 1
+                while j < len(stripped_args) and stripped_args[j].isspace():
+                    j += 1
+                args = stripped_args[j:]
+                verb = "plugin"
+
     verb_cfg = commands.verbs.get(verb) if verb else None
 
     if verb_cfg is not None and bool(verb_cfg.enabled):

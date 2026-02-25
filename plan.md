@@ -292,23 +292,23 @@ Add runtime toggles:
 - Add round 1 recorded audio fixtures + opt-in live tests (STT → trigger/dispatch; no side effects). (DONE: 2026-02-23)
   - Baseline transcription model: `gpt-4o-transcribe` (default).
   - Observed trigger mis-transcriptions in round 1 (use as optional alias triggers): `swingly`, `swing your`, `swing the`, `swing this trip`, `zwinglistrep`, `zwingle`.
-- Add round 2 fixtures for separator/alias edge cases + disabled-verb semantics (enabled/disabled LLM verbs). (IN PROGRESS: 2026-02-23)
+- Add a dedicated `@pytest.mark.audio` marker + CI job that runs the recorded Zwingli audio suite on every push/PR (non-fork; requires `OPENAI_API_KEY`). (DONE: 2026-02-25)
+  - CI command: `pytest -m audio` with `VOICEPIPE_LIVE_TESTS=1`, `VOICEPIPE_TRANSCRIBE_MODEL=gpt-4o-transcribe`, and `VOICEPIPE_LIVE_LLM_TESTS=1` (so recorded `bash`/`email` fixtures exercise the gpt-5.2 dispatch path).
+- Add round 2 fixtures for separator/alias edge cases + disabled-verb semantics (enabled/disabled LLM verbs). (DONE: 2026-02-25)
   - Live tests should use `gpt-4o-transcribe` for STT and `gpt-5.2` for LLM verbs.
   - Implemented round 2 live tests for:
     - Disabled LLM verbs → `disabled_verb` metadata + safe fallback output.
     - Enabled LLM verbs (gated by `VOICEPIPE_LIVE_LLM_TESTS=1`) → LLM dispatch + metadata invariants.
-  - Added a separator-focused live test harness that will run once round 2 audio is recorded.
-  - Separator-focused audio fixtures are still pending recording (see `tests/assets/zwingli_round2/manifest.json`).
+  - Separator-focused audio fixtures recorded + checked in; tests use manifest `spoken_text` as an STT prompt hint for stability.
 - Add round 3 fixtures for `execute` enable path + timeout semantics (still gated; non-destructive commands only). (IN PROGRESS: 2026-02-23)
   - Added round 3 planned fixtures manifest: `tests/assets/zwingli_round3/manifest.json`.
   - Added round 3 live tests:
     - Disabled `execute` verb → `disabled_verb` metadata + safe fallback output.
     - Enabled `execute` verb but shell disallowed → `ok=false` + clear `VOICEPIPE_SHELL_ALLOW=1` error.
     - Enabled `execute` verb execution (gated by `VOICEPIPE_LIVE_SHELL_TESTS=1`) → shell dispatch + metadata invariants.
-    - Timeout case harness added; `sleep 2` audio fixture still pending recording.
-- Add round 4 fixtures for plugin verbs (pure transforms; no filesystem writes). (IN PROGRESS: 2026-02-25)
-  - Added round 4 live tests for plugin verb gating + metadata invariants (reuses round 1 audio fixture). (DONE: 2026-02-25)
-  - Added planned fixtures manifest: `tests/assets/zwingli_round4/manifest.json`. (DONE: 2026-02-25)
+    - Timeout case harness added; `sleep 2` audio fixture recorded + included (shell execution remains opt-in).
+- Add round 4 fixtures for plugin verbs (pure transforms; no filesystem writes). (DONE: 2026-02-25)
+  - Added round 4 live tests for plugin verb gating + metadata invariants (uses round 4 audio fixtures). (DONE: 2026-02-25)
 
 ---
 

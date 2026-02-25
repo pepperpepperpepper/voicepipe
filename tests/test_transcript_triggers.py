@@ -31,6 +31,46 @@ def test_match_transcript_trigger_prefix_variants() -> None:
     assert m.remainder == "do it"
 
 
+def test_match_transcript_trigger_allows_whitespace_before_separators() -> None:
+    triggers = {"zwingly": "zwingli"}
+
+    m = tt.match_transcript_trigger("Zwingly , do it", triggers=triggers)
+    assert m is not None
+    assert m.remainder == "do it"
+
+    m = tt.match_transcript_trigger("zwingly : do it", triggers=triggers)
+    assert m is not None
+    assert m.remainder == "do it"
+
+    m = tt.match_transcript_trigger("zwingly ; do it", triggers=triggers)
+    assert m is not None
+    assert m.remainder == "do it"
+
+    m = tt.match_transcript_trigger("zwingly . do it", triggers=triggers)
+    assert m is not None
+    assert m.remainder == "do it"
+
+
+def test_match_transcript_trigger_allows_separator_words() -> None:
+    triggers = {"zwingly": "zwingli"}
+
+    m = tt.match_transcript_trigger("zwingly comma do it", triggers=triggers)
+    assert m is not None
+    assert m.remainder == "do it"
+
+    m = tt.match_transcript_trigger("zwingly colon do it", triggers=triggers)
+    assert m is not None
+    assert m.remainder == "do it"
+
+    m = tt.match_transcript_trigger("zwingly semicolon do it", triggers=triggers)
+    assert m is not None
+    assert m.remainder == "do it"
+
+    m = tt.match_transcript_trigger("zwingly period do it", triggers=triggers)
+    assert m is not None
+    assert m.remainder == "do it"
+
+
 def test_match_transcript_trigger_requires_boundary() -> None:
     triggers = {"zwingly": "zwingli"}
     assert tt.match_transcript_trigger("zwinglyx do it", triggers=triggers) is None
@@ -299,6 +339,27 @@ def test_apply_transcript_triggers_dispatch_parses_verb_separators() -> None:
     assert meta["ok"] is True
     assert meta["action"] == "dispatch"
     assert meta["meta"]["mode"] == "verb"
+
+
+def test_apply_transcript_triggers_dispatch_normalizes_plug_in_to_plugin() -> None:
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "plugin": config.TranscriptVerbConfig(
+                action="strip",
+                enabled=True,
+                type="builtin",
+            ),
+        },
+    )
+    out, meta = tt.apply_transcript_triggers("zwingli plug in hello", commands=commands)
+    assert out == "hello"
+    assert meta is not None
+    assert meta["ok"] is True
+    assert meta["action"] == "dispatch"
+    assert meta["meta"]["mode"] == "verb"
+    assert meta["meta"]["verb"] == "plugin"
 
 
 def test_apply_transcript_triggers_dispatch_plugin_disabled(monkeypatch, tmp_path) -> None:

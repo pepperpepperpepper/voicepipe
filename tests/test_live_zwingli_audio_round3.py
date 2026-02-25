@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -12,7 +14,7 @@ import voicepipe.transcript_triggers as tt
 from voicepipe.transcription import transcribe_audio_file
 
 
-pytestmark = pytest.mark.live
+pytestmark = [pytest.mark.live, pytest.mark.audio]
 
 
 def _env_flag(name: str) -> bool:
@@ -54,6 +56,37 @@ def _assert_contains_ordered_tokens(text: str, tokens: list[str], *, label: str)
 
 def _asset_path_round3(*parts: str) -> Path:
     return Path(__file__).resolve().parent / "assets" / "zwingli_round3" / Path(*parts)
+
+
+def _load_manifest_spoken_texts(manifest_path: Path) -> dict[str, str]:
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+    samples = payload.get("samples")
+    if not isinstance(samples, list):
+        return {}
+
+    out: dict[str, str] = {}
+    for sample in samples:
+        if not isinstance(sample, dict):
+            continue
+        file = (sample.get("file") or "").strip()
+        spoken = (sample.get("spoken_text") or "").strip()
+        if file and spoken:
+            out[file] = spoken
+    return out
+
+
+_ROUND3_SPOKEN_TEXT = _load_manifest_spoken_texts(_asset_path_round3("manifest.json"))
+
+
+def _prompt_hint(spoken_text: str | None) -> str | None:
+    cleaned = (spoken_text or "").strip()
+    if not cleaned:
+        return None
+    return f"The speaker may say: {cleaned}"
 
 
 def _skip_unless_live_enabled() -> None:
@@ -110,7 +143,8 @@ _TRIGGERS = {
 }
 
 
-def _transcribe_round3_audio(path: Path) -> str:
+@lru_cache(maxsize=None)
+def _transcribe_round3_audio(path: Path, *, prompt: str | None = None) -> str:
     backend, model_id = _resolve_live_backend_and_model()
     model = f"{backend}:{model_id}" if model_id else backend
 
@@ -131,6 +165,7 @@ def _transcribe_round3_audio(path: Path) -> str:
         str(path),
         model=model,
         language="en",
+        prompt=prompt,
         temperature=0.0,
         prefer_daemon=False,
         apply_triggers=False,
@@ -151,10 +186,10 @@ def test_live_zwingli_audio_round3_execute_disabled_falls_back() -> None:
     )
 
     audio = _asset_path_round3("zwingli_execute_echo_hello_world.wav")
-    if not audio.exists():
-        pytest.skip(f"Audio fixture missing: {audio}")
+    assert audio.exists(), f"Audio fixture missing: {audio}"
 
-    text = _transcribe_round3_audio(audio)
+    prompt = _prompt_hint(_ROUND3_SPOKEN_TEXT.get("zwingli_execute_echo_hello_world.wav"))
+    text = _transcribe_round3_audio(audio, prompt=prompt)
     out, meta = tt.apply_transcript_triggers(text, commands=commands)
 
     assert meta is not None
@@ -190,10 +225,10 @@ def test_live_zwingli_audio_round3_execute_enabled_but_shell_disallowed_returns_
     )
 
     audio = _asset_path_round3("zwingli_execute_echo_hello_world.wav")
-    if not audio.exists():
-        pytest.skip(f"Audio fixture missing: {audio}")
+    assert audio.exists(), f"Audio fixture missing: {audio}"
 
-    text = _transcribe_round3_audio(audio)
+    prompt = _prompt_hint(_ROUND3_SPOKEN_TEXT.get("zwingli_execute_echo_hello_world.wav"))
+    text = _transcribe_round3_audio(audio, prompt=prompt)
     out, meta = tt.apply_transcript_triggers(text, commands=commands)
 
     assert meta is not None
@@ -234,10 +269,10 @@ def test_live_zwingli_audio_round3_execute_enabled_shell_allowed_runs_echo(
     )
 
     audio = _asset_path_round3("zwingli_execute_echo_hello_world.wav")
-    if not audio.exists():
-        pytest.skip(f"Audio fixture missing: {audio}")
+    assert audio.exists(), f"Audio fixture missing: {audio}"
 
-    text = _transcribe_round3_audio(audio)
+    prompt = _prompt_hint(_ROUND3_SPOKEN_TEXT.get("zwingli_execute_echo_hello_world.wav"))
+    text = _transcribe_round3_audio(audio, prompt=prompt)
     out, meta = tt.apply_transcript_triggers(text, commands=commands)
 
     assert meta is not None
@@ -270,15 +305,10 @@ def test_live_zwingli_audio_round3_execute_timeout(
         pytest.skip("sleep not available on PATH (needed for timeout fixture).")
 
     audio = _asset_path_round3("zwingli_execute_sleep_2.wav")
-    if not audio.exists():
-        pytest.skip(f"Audio fixture missing: {audio}")
+    assert audio.exists(), f"Audio fixture missing: {audio}"
 
-    text = _transcribe_round3_audio(audio)
-    if not _contains_ordered_tokens(text, ["execute", "sleep", "2"]):
-        pytest.skip(
-            "Transcription for timeout fixture did not include the expected command "
-            "tokens (expected: execute sleep 2). Re-record if needed."
-        )
+    prompt = _prompt_hint(_ROUND3_SPOKEN_TEXT.get("zwingli_execute_sleep_2.wav"))
+    text = _transcribe_round3_audio(audio, prompt=prompt)
 
     commands = config.TranscriptCommandsConfig(
         triggers=dict(_TRIGGERS),
@@ -313,3 +343,38 @@ def test_live_zwingli_audio_round3_execute_timeout(
     assert handler_meta.get("timeout_seconds") == 0.2
 
     _assert_output_does_not_start_with_trigger(out, commands=commands)
+
+
+def test_live_zwingli_audio_round3_execute_sleep_2_shell_disallowed_returns_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise the recorded `sleep 2` fixture without executing shell commands."""
+    monkeypatch.delenv("VOICEPIPE_SHELL_ALLOW", raising=False)
+
+    commands = config.TranscriptCommandsConfig(
+        triggers=dict(_TRIGGERS),
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "execute": config.TranscriptVerbConfig(
+                action="shell",
+                enabled=True,
+                type="execute",
+            )
+        },
+    )
+
+    audio = _asset_path_round3("zwingli_execute_sleep_2.wav")
+    assert audio.exists(), f"Audio fixture missing: {audio}"
+
+    prompt = _prompt_hint(_ROUND3_SPOKEN_TEXT.get("zwingli_execute_sleep_2.wav"))
+    text = _transcribe_round3_audio(audio, prompt=prompt)
+    out, meta = tt.apply_transcript_triggers(text, commands=commands)
+
+    assert meta is not None
+    assert meta["ok"] is False
+    assert meta["action"] == "dispatch"
+    assert meta["trigger"] in set(commands.triggers.keys())
+    assert "VOICEPIPE_SHELL_ALLOW=1" in str(meta.get("error") or "")
+
+    _assert_output_does_not_start_with_trigger(out, commands=commands)
+    _assert_contains_ordered_tokens(out, ["execute", "sleep", "2"], label="output")

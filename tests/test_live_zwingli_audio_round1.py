@@ -11,7 +11,7 @@ import voicepipe.transcript_triggers as tt
 from voicepipe.transcription import transcribe_audio_file
 
 
-pytestmark = pytest.mark.live
+pytestmark = [pytest.mark.live, pytest.mark.audio]
 
 
 def _env_flag(name: str) -> bool:
@@ -213,8 +213,7 @@ def test_live_zwingli_audio_round1(case: dict) -> None:
         pytest.skip(f"Unsupported transcription backend for live tests: {backend!r}")
 
     audio = _asset_path(str(case["file"]))
-    if not audio.exists():
-        pytest.skip(f"Audio fixture missing: {audio}")
+    assert audio.exists(), f"Audio fixture missing: {audio}"
 
     text = transcribe_audio_file(
         str(audio),

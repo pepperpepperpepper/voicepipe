@@ -70,3 +70,6 @@ Thumbs.db
 *.wav
 /tmp/voicepipe-*
 voicepipe.service
+
+# Allow committed audio fixtures for regression tests.
+!tests/assets/**/*.wav

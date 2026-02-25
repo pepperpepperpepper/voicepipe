@@ -5,45 +5,45 @@
   "samples": [
     {
       "file": "zwingli_colon_strip_alpha_bravo_charlie.wav",
-      "url": "",
+      "url": "https://tmp.uh-oh.wtf/2026/02/25/5d7c9432-zwingli_colon_strip_alpha_bravo_charlie.wav",
       "spoken_text": "Zwingli: strip alpha bravo charlie.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "file": "zwingli_semicolon_strip_alpha_bravo_charlie.wav",
-      "url": "",
+      "url": "https://tmp.uh-oh.wtf/2026/02/25/7cd25f6c-zwingli_semicolon_strip_alpha_bravo_charlie.wav",
       "spoken_text": "Zwingli; strip alpha bravo charlie.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "file": "zwingli_period_strip_alpha_bravo_charlie.wav",
-      "url": "",
+      "url": "https://tmp.uh-oh.wtf/2026/02/25/8596b54a-zwingli_period_strip_alpha_bravo_charlie.wav",
       "spoken_text": "Zwingli. strip alpha bravo charlie.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "file": "zwingli_strip_colon_alpha_bravo_charlie.wav",
-      "url": "",
+      "url": "https://tmp.uh-oh.wtf/2026/02/25/1603f2af-zwingli_strip_colon_alpha_bravo_charlie.wav",
       "spoken_text": "Zwingli strip: alpha bravo charlie.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "file": "zwingli_strip_semicolon_alpha_bravo_charlie.wav",
-      "url": "",
+      "url": "https://tmp.uh-oh.wtf/2026/02/25/e81f5df3-zwingli_strip_semicolon_alpha_bravo_charlie.wav",
       "spoken_text": "Zwingli strip; alpha bravo charlie.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "file": "zwingli_bash_colon_list_files_in_my_home_directory.wav",
-      "url": "",
+      "url": "https://tmp.uh-oh.wtf/2026/02/25/16312fc2-zwingli_bash_colon_list_files_in_my_home_directory.wav",
       "spoken_text": "Zwingli bash: list files in my home directory.",
-      "status": "todo"
+      "status": "done"
     },
     {
       "file": "zwingli_email_colon_to_kelly_subject_lunch_body_are_we_still_on_for_noon.wav",
-      "url": "",
+      "url": "https://tmp.uh-oh.wtf/2026/02/25/5ae02215-zwingli_email_colon_to_kelly_subject_lunch_body_are_we_still_on_for_noon.wav",
       "spoken_text": "Zwingli email: to Kelly subject Lunch body Are we still on for noon.",
-      "status": "todo"
+      "status": "done"
     }
   ]
 }

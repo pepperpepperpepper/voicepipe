@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import re
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -11,7 +13,7 @@ import voicepipe.transcript_triggers as tt
 from voicepipe.transcription import transcribe_audio_file
 
 
-pytestmark = pytest.mark.live
+pytestmark = [pytest.mark.live, pytest.mark.audio]
 
 
 def _env_flag(name: str) -> bool:
@@ -49,8 +51,39 @@ def _assert_contains_ordered_tokens(text: str, tokens: list[str], *, label: str)
         raise AssertionError(f"{label} missing expected tokens: {tokens!r}\n\nraw:\n{text}")
 
 
-def _asset_path_round1(*parts: str) -> Path:
-    return Path(__file__).resolve().parent / "assets" / "zwingli_round1" / Path(*parts)
+def _asset_path_round4(*parts: str) -> Path:
+    return Path(__file__).resolve().parent / "assets" / "zwingli_round4" / Path(*parts)
+
+
+def _load_manifest_spoken_texts(manifest_path: Path) -> dict[str, str]:
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+    samples = payload.get("samples")
+    if not isinstance(samples, list):
+        return {}
+
+    out: dict[str, str] = {}
+    for sample in samples:
+        if not isinstance(sample, dict):
+            continue
+        file = (sample.get("file") or "").strip()
+        spoken = (sample.get("spoken_text") or "").strip()
+        if file and spoken:
+            out[file] = spoken
+    return out
+
+
+_ROUND4_SPOKEN_TEXT = _load_manifest_spoken_texts(_asset_path_round4("manifest.json"))
+
+
+def _prompt_hint(spoken_text: str | None) -> str | None:
+    cleaned = (spoken_text or "").strip()
+    if not cleaned:
+        return None
+    return f"The speaker may say: {cleaned}"
 
 
 def _skip_unless_live_enabled() -> None:
@@ -85,7 +118,8 @@ def _resolve_live_backend_and_model() -> tuple[str, str]:
     return configured_backend, raw_model
 
 
-def _transcribe_round_audio(path: Path) -> str:
+@lru_cache(maxsize=None)
+def _transcribe_round4_audio(path: Path, *, prompt: str | None = None) -> str:
     backend, model_id = _resolve_live_backend_and_model()
     model = f"{backend}:{model_id}" if model_id else backend
 
@@ -104,6 +138,7 @@ def _transcribe_round_audio(path: Path) -> str:
         str(path),
         model=model,
         language="en",
+        prompt=prompt,
         temperature=0.0,
         prefer_daemon=False,
         apply_triggers=False,
@@ -124,13 +159,21 @@ _TRIGGERS = {
 }
 
 
+@pytest.mark.parametrize(
+    "audio_file",
+    [
+        "zwingli_plugin_alpha_bravo_charlie.wav",
+        "zwingli_plugin_comma_alpha_bravo_charlie.wav",
+    ],
+    ids=lambda f: f,
+)
 def test_live_zwingli_audio_round4_plugin_verb_disabled_without_allow_flag(
+    audio_file: str,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    audio = _asset_path_round1("zwingli_strip_alpha_bravo_charlie.wav")
-    if not audio.exists():
-        pytest.skip(f"Audio fixture missing: {audio}")
+    audio = _asset_path_round4(audio_file)
+    assert audio.exists(), f"Audio fixture missing: {audio}"
 
     plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir(parents=True, exist_ok=True)
@@ -146,15 +189,14 @@ def test_live_zwingli_audio_round4_plugin_verb_disabled_without_allow_flag(
         return tmp_path
 
     monkeypatch.setattr(config, "config_dir", _fake_config_dir)
-    monkeypatch.delenv("VOICEPIPE_PLUGIN_ALLOW", raising=False)
+    # Explicitly disable plugins for this test (don't rely on the developer/user env).
+    monkeypatch.setenv("VOICEPIPE_PLUGIN_ALLOW", "0")
 
     commands = config.TranscriptCommandsConfig(
         triggers=dict(_TRIGGERS),
         dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
         verbs={
-            # Reuse the round1 audio fixture that says "zwingli strip ...",
-            # but treat "strip" as a plugin verb for this round.
-            "strip": config.TranscriptVerbConfig(
+            "plugin": config.TranscriptVerbConfig(
                 action="plugin",
                 enabled=True,
                 type="plugin",
@@ -166,7 +208,8 @@ def test_live_zwingli_audio_round4_plugin_verb_disabled_without_allow_flag(
         },
     )
 
-    text = _transcribe_round_audio(audio)
+    prompt = _prompt_hint(_ROUND4_SPOKEN_TEXT.get(audio_file))
+    text = _transcribe_round4_audio(audio, prompt=prompt)
     out, meta = tt.apply_transcript_triggers(text, commands=commands)
 
     assert meta is not None
@@ -175,16 +218,24 @@ def test_live_zwingli_audio_round4_plugin_verb_disabled_without_allow_flag(
     assert meta["trigger"] in set(commands.triggers.keys())
     assert "VOICEPIPE_PLUGIN_ALLOW=1" in str(meta.get("error") or "")
 
-    _assert_contains_ordered_tokens(out, ["strip", "alpha", "bravo", "charlie"], label="output")
+    _assert_contains_ordered_tokens(out, ["plugin", "alpha", "bravo", "charlie"], label="output")
 
 
+@pytest.mark.parametrize(
+    "audio_file",
+    [
+        "zwingli_plugin_alpha_bravo_charlie.wav",
+        "zwingli_plugin_comma_alpha_bravo_charlie.wav",
+    ],
+    ids=lambda f: f,
+)
 def test_live_zwingli_audio_round4_plugin_verb_executes_when_allowed(
+    audio_file: str,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    audio = _asset_path_round1("zwingli_strip_alpha_bravo_charlie.wav")
-    if not audio.exists():
-        pytest.skip(f"Audio fixture missing: {audio}")
+    audio = _asset_path_round4(audio_file)
+    assert audio.exists(), f"Audio fixture missing: {audio}"
 
     plugin_dir = tmp_path / "plugins"
     plugin_dir.mkdir(parents=True, exist_ok=True)
@@ -206,7 +257,7 @@ def test_live_zwingli_audio_round4_plugin_verb_executes_when_allowed(
         triggers=dict(_TRIGGERS),
         dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
         verbs={
-            "strip": config.TranscriptVerbConfig(
+            "plugin": config.TranscriptVerbConfig(
                 action="plugin",
                 enabled=True,
                 type="plugin",
@@ -218,7 +269,8 @@ def test_live_zwingli_audio_round4_plugin_verb_executes_when_allowed(
         },
     )
 
-    text = _transcribe_round_audio(audio)
+    prompt = _prompt_hint(_ROUND4_SPOKEN_TEXT.get(audio_file))
+    text = _transcribe_round4_audio(audio, prompt=prompt)
     out, meta = tt.apply_transcript_triggers(text, commands=commands)
 
     assert meta is not None
@@ -228,7 +280,7 @@ def test_live_zwingli_audio_round4_plugin_verb_executes_when_allowed(
 
     inner = meta.get("meta") or {}
     assert inner.get("mode") == "verb"
-    assert inner.get("verb") == "strip"
+    assert inner.get("verb") == "plugin"
     assert inner.get("verb_type") == "plugin"
     assert inner.get("action") == "plugin"
     assert inner.get("plugin", {}).get("path") == "plugins/ok_prefix.py"
@@ -240,4 +292,3 @@ def test_live_zwingli_audio_round4_plugin_verb_executes_when_allowed(
 
     # Plugin output should include the OK marker and the original content words.
     _assert_contains_ordered_tokens(out, ["ok", "alpha", "bravo", "charlie"], label="output")
-

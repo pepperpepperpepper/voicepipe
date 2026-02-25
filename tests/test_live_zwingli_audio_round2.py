@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import re
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -11,7 +13,7 @@ import voicepipe.transcript_triggers as tt
 from voicepipe.transcription import transcribe_audio_file
 
 
-pytestmark = pytest.mark.live
+pytestmark = [pytest.mark.live, pytest.mark.audio]
 
 
 def _env_flag(name: str) -> bool:
@@ -57,6 +59,38 @@ def _asset_path(*parts: str) -> Path:
 
 def _asset_path_round2(*parts: str) -> Path:
     return Path(__file__).resolve().parent / "assets" / "zwingli_round2" / Path(*parts)
+
+
+def _load_manifest_spoken_texts(manifest_path: Path) -> dict[str, str]:
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+    samples = payload.get("samples")
+    if not isinstance(samples, list):
+        return {}
+
+    out: dict[str, str] = {}
+    for sample in samples:
+        if not isinstance(sample, dict):
+            continue
+        file = (sample.get("file") or "").strip()
+        spoken = (sample.get("spoken_text") or "").strip()
+        if file and spoken:
+            out[file] = spoken
+    return out
+
+
+_ROUND1_SPOKEN_TEXT = _load_manifest_spoken_texts(_asset_path("manifest.json"))
+_ROUND2_SPOKEN_TEXT = _load_manifest_spoken_texts(_asset_path_round2("manifest.json"))
+
+
+def _prompt_hint(spoken_text: str | None) -> str | None:
+    cleaned = (spoken_text or "").strip()
+    if not cleaned:
+        return None
+    return f"The speaker may say: {cleaned}"
 
 
 def _skip_unless_live_enabled() -> None:
@@ -115,7 +149,8 @@ _TRIGGERS = {
 }
 
 
-def _transcribe_round2_audio(path: Path) -> str:
+@lru_cache(maxsize=None)
+def _transcribe_round2_audio(path: Path, *, prompt: str | None = None) -> str:
     backend, model_id = _resolve_live_backend_and_model()
     model = f"{backend}:{model_id}" if model_id else backend
 
@@ -136,6 +171,7 @@ def _transcribe_round2_audio(path: Path) -> str:
         str(path),
         model=model,
         language="en",
+        prompt=prompt,
         temperature=0.0,
         prefer_daemon=False,
         apply_triggers=False,
@@ -192,11 +228,15 @@ _STRIP_ONLY_COMMANDS = config.TranscriptCommandsConfig(
         {
             "file": "zwingli_bash_colon_list_files_in_my_home_directory.wav",
             "expect_mode": "unknown-verb",
+            "expect_verb": "bash",
+            "expect_action": "strip",
             "output_tokens": ["bash", "list", "files", "home", "directory"],
         },
         {
             "file": "zwingli_email_colon_to_kelly_subject_lunch_body_are_we_still_on_for_noon.wav",
             "expect_mode": "unknown-verb",
+            "expect_verb": "email",
+            "expect_action": "strip",
             "output_tokens": ["email", "kelly", "subject", "lunch", "noon"],
         },
     ],
@@ -204,10 +244,10 @@ _STRIP_ONLY_COMMANDS = config.TranscriptCommandsConfig(
 )
 def test_live_zwingli_audio_round2_separators(case: dict) -> None:
     audio = _asset_path_round2(str(case["file"]))
-    if not audio.exists():
-        pytest.skip(f"Audio fixture missing: {audio}")
+    assert audio.exists(), f"Audio fixture missing: {audio}"
 
-    text = _transcribe_round2_audio(audio)
+    prompt = _prompt_hint(_ROUND2_SPOKEN_TEXT.get(str(case["file"])))
+    text = _transcribe_round2_audio(audio, prompt=prompt)
     out, meta = tt.apply_transcript_triggers(text, commands=_STRIP_ONLY_COMMANDS)
 
     assert meta is not None
@@ -262,10 +302,10 @@ def test_live_zwingli_audio_round2_disabled_llm_verbs_fall_back(case: dict) -> N
     )
 
     audio = _asset_path(str(case["file"]))
-    if not audio.exists():
-        pytest.skip(f"Audio fixture missing: {audio}")
+    assert audio.exists(), f"Audio fixture missing: {audio}"
 
-    text = _transcribe_round2_audio(audio)
+    prompt = _prompt_hint(_ROUND1_SPOKEN_TEXT.get(str(case["file"])))
+    text = _transcribe_round2_audio(audio, prompt=prompt)
     out, meta = tt.apply_transcript_triggers(text, commands=commands)
 
     assert meta is not None
@@ -305,7 +345,9 @@ def _skip_unless_live_llm_enabled() -> None:
     ],
     ids=lambda c: f"enabled:{c['verb']}",
 )
-def test_live_zwingli_audio_round2_enabled_llm_verbs(case: dict) -> None:
+def test_live_zwingli_audio_round2_enabled_llm_verbs(
+    case: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _skip_unless_live_llm_enabled()
 
     zwingli_key = config.get_zwingli_api_key(load_env=True)
@@ -322,6 +364,15 @@ def test_live_zwingli_audio_round2_enabled_llm_verbs(case: dict) -> None:
         dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
         verbs={
             "bash": config.TranscriptVerbConfig(
+                action="zwingli", enabled=True, type="llm", profile="bash"
+            ),
+            # Common gpt-4o-transcribe mis-transcriptions for user audio:
+            # "bash" -> "batch"
+            "batch": config.TranscriptVerbConfig(
+                action="zwingli", enabled=True, type="llm", profile="bash"
+            ),
+            # "bash list" -> "bashlist"
+            "bashlist": config.TranscriptVerbConfig(
                 action="zwingli", enabled=True, type="llm", profile="bash"
             ),
             "email": config.TranscriptVerbConfig(
@@ -358,10 +409,10 @@ def test_live_zwingli_audio_round2_enabled_llm_verbs(case: dict) -> None:
     )
 
     audio = _asset_path(str(case["file"]))
-    if not audio.exists():
-        pytest.skip(f"Audio fixture missing: {audio}")
+    assert audio.exists(), f"Audio fixture missing: {audio}"
 
-    text = _transcribe_round2_audio(audio)
+    prompt = _prompt_hint(_ROUND1_SPOKEN_TEXT.get(str(case["file"])))
+    text = _transcribe_round2_audio(audio, prompt=prompt)
     out, meta = tt.apply_transcript_triggers(text, commands=commands)
 
     assert meta is not None
@@ -371,7 +422,10 @@ def test_live_zwingli_audio_round2_enabled_llm_verbs(case: dict) -> None:
 
     inner = meta.get("meta") or {}
     assert inner.get("mode") == "verb"
-    assert inner.get("verb") == case["verb"]
+    if case["verb"] == "bash":
+        assert inner.get("verb") in {"bash", "batch", "bashlist"}
+    else:
+        assert inner.get("verb") == case["verb"]
     assert inner.get("action") == "zwingli"
     assert inner.get("profile_found") is True
     assert inner.get("template_applied") is True

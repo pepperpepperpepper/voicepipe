@@ -36,6 +36,9 @@ APP_NAME = "voicepipe"
 DEFAULT_TRANSCRIBE_BACKEND = "openai"
 DEFAULT_OPENAI_TRANSCRIBE_MODEL = "gpt-4o-transcribe"
 DEFAULT_ELEVENLABS_TRANSCRIBE_MODEL = "scribe_v1"
+DEFAULT_ZWINGLI_BACKEND = "groq"
+DEFAULT_ZWINGLI_MODEL = "moonshotai/kimi-k2-instruct"
+DEFAULT_GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
 # Recording/audio defaults.
 DEFAULT_AUDIO_SAMPLE_RATE = 16000
@@ -80,13 +83,13 @@ DEFAULT_ENV_FILE_TEMPLATE = """# Voicepipe environment config (used by systemd s
 # VOICEPIPE_REPLAY_DEFAULT=clipboard  # default actions for `voicepipe replay` (print|clipboard|type|json; comma-separated)
 #
 # Zwingli LLM preprocessing (action=zwingli):
-# VOICEPIPE_ZWINGLI_BACKEND=openai  # openai|groq
-# VOICEPIPE_ZWINGLI_MODEL=gpt-5.2
+# VOICEPIPE_ZWINGLI_BACKEND=groq  # openai|groq
+# VOICEPIPE_ZWINGLI_MODEL=moonshotai/kimi-k2-instruct
 # VOICEPIPE_ZWINGLI_TEMPERATURE=0.2
 # VOICEPIPE_ZWINGLI_SYSTEM_PROMPT=You are a dictation preprocessor. Output only the final text to type.
 # VOICEPIPE_ZWINGLI_USER_PROMPT=
-# VOICEPIPE_ZWINGLI_BASE_URL=
-# VOICEPIPE_ZWINGLI_API_KEY=  # defaults to OPENAI_API_KEY when unset
+# VOICEPIPE_ZWINGLI_BASE_URL=https://api.groq.com/openai/v1
+# VOICEPIPE_ZWINGLI_API_KEY=  # optional override; otherwise uses GROQ_API_KEY or OPENAI_API_KEY depending on backend
 """
 
 DaemonMode = Literal["auto", "never", "always"]
@@ -159,6 +162,45 @@ def legacy_api_key_paths() -> list[Path]:
         config_dir() / "api_key",
         Path.home() / ".voicepipe_api_key",
     ]
+
+
+def api_keys_path() -> Path:
+    """Best-effort path to a user-managed API keys file/dir (Unix-y convention)."""
+    try:
+        return Path.home() / ".api-keys"
+    except Exception:
+        return Path(".api-keys")
+
+
+def _read_key_from_api_keys(*, env_name: str, dir_candidates: list[str]) -> str:
+    # 1) ~/.api-keys as dotenv-style file (KEY=VALUE).
+    try:
+        path = api_keys_path()
+        if path.is_file():
+            values = read_env_file(path)
+            value = (values.get(env_name) or "").strip()
+            if value:
+                return value
+    except Exception:
+        pass
+
+    # 2) ~/.api-keys as directory of key files.
+    try:
+        path = api_keys_path()
+        if path.is_dir():
+            for name in dir_candidates:
+                candidate = path / name
+                try:
+                    if candidate.is_file():
+                        value = candidate.read_text(encoding="utf-8").strip()
+                        if value:
+                            return value
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    return ""
 
 
 def load_environment(*, load_cwd_dotenv: bool = True) -> None:
@@ -329,6 +371,13 @@ def get_openai_api_key(*, load_env: bool = True) -> str:
             except Exception:
                 continue
 
+    from_api_keys = _read_key_from_api_keys(
+        env_name="OPENAI_API_KEY",
+        dir_candidates=["OPENAI_API_KEY", "openai_api_key", "openai"],
+    )
+    if from_api_keys:
+        return from_api_keys
+
     for path in legacy_api_key_paths():
         try:
             if path.exists():
@@ -345,6 +394,7 @@ def get_openai_api_key(*, load_env: bool = True) -> str:
         "  Example line: OPENAI_API_KEY=sk-...\n\n"
         "Alternatives:\n"
         "  - Set OPENAI_API_KEY in the current environment\n"
+        "  - Put OPENAI_API_KEY in ~/.api-keys (file or directory)\n"
         "  - Legacy file locations: ~/.config/voicepipe/api_key or ~/.voicepipe_api_key\n"
     )
 
@@ -364,9 +414,31 @@ def get_groq_api_key(*, load_env: bool = True) -> str:
     api_key = (os.environ.get("GROQ_API_KEY") or "").strip()
     if api_key:
         return api_key
+
+    # Optional: systemd credentials (recommended over env vars for some users).
+    cred_dir = os.environ.get("CREDENTIALS_DIRECTORY")
+    if cred_dir:
+        for name in ("groq_api_key", "GROQ_API_KEY"):
+            try:
+                cred_path = Path(cred_dir) / name
+                if cred_path.exists():
+                    api_key = cred_path.read_text(encoding="utf-8").strip()
+                    if api_key:
+                        return api_key
+            except Exception:
+                continue
+
+    from_api_keys = _read_key_from_api_keys(
+        env_name="GROQ_API_KEY",
+        dir_candidates=["GROQ_API_KEY", "groq_api_key", "groq"],
+    )
+    if from_api_keys:
+        return from_api_keys
+
     raise VoicepipeConfigError(
         "Groq API key not found.\n\n"
-        "Set GROQ_API_KEY in your environment or in your voicepipe.env file."
+        "Set GROQ_API_KEY in your environment (or voicepipe.env),\n"
+        "or put GROQ_API_KEY in ~/.api-keys (file or directory)."
     )
 
 
@@ -1234,14 +1306,14 @@ def _load_transcript_triggers_json(*, path: Path | None = None) -> dict[str, str
     return dict(triggers) if triggers is not None else None
 
 
-def get_zwingli_backend(*, default: str = "openai", load_env: bool = True) -> str:
+def get_zwingli_backend(*, default: str = DEFAULT_ZWINGLI_BACKEND, load_env: bool = True) -> str:
     if load_env:
         load_environment()
     raw = (os.environ.get("VOICEPIPE_ZWINGLI_BACKEND") or "").strip().lower()
     return raw or str(default)
 
 
-def get_zwingli_model(*, default: str = "gpt-5.2", load_env: bool = True) -> str:
+def get_zwingli_model(*, default: str = DEFAULT_ZWINGLI_MODEL, load_env: bool = True) -> str:
     if load_env:
         load_environment()
     return (os.environ.get("VOICEPIPE_ZWINGLI_MODEL") or str(default) or "").strip()
@@ -1278,7 +1350,15 @@ def get_zwingli_user_prompt(*, default: str = "", load_env: bool = True) -> str:
 def get_zwingli_base_url(*, default: str = "", load_env: bool = True) -> str:
     if load_env:
         load_environment()
-    return (os.environ.get("VOICEPIPE_ZWINGLI_BASE_URL") or str(default) or "").strip()
+    raw = (os.environ.get("VOICEPIPE_ZWINGLI_BASE_URL") or "").strip()
+    if raw:
+        return raw
+
+    backend = get_zwingli_backend(load_env=False)
+    if backend == "groq":
+        return DEFAULT_GROQ_BASE_URL
+
+    return str(default).strip()
 
 
 def get_zwingli_api_key(*, default: str = "", load_env: bool = True) -> str:
@@ -1287,5 +1367,27 @@ def get_zwingli_api_key(*, default: str = "", load_env: bool = True) -> str:
     raw = (os.environ.get("VOICEPIPE_ZWINGLI_API_KEY") or "").strip()
     if raw:
         return raw
-    # Default to OpenAI key if present (common case).
-    return (os.environ.get("OPENAI_API_KEY") or str(default) or "").strip()
+
+    backend = get_zwingli_backend(load_env=False)
+    if backend == "groq":
+        raw_groq = (os.environ.get("GROQ_API_KEY") or "").strip()
+        if raw_groq:
+            return raw_groq
+        from_api_keys = _read_key_from_api_keys(
+            env_name="GROQ_API_KEY",
+            dir_candidates=["GROQ_API_KEY", "groq_api_key", "groq"],
+        )
+        if from_api_keys:
+            return from_api_keys
+
+    raw_openai = (os.environ.get("OPENAI_API_KEY") or "").strip()
+    if raw_openai:
+        return raw_openai
+    from_api_keys = _read_key_from_api_keys(
+        env_name="OPENAI_API_KEY",
+        dir_candidates=["OPENAI_API_KEY", "openai_api_key", "openai"],
+    )
+    if from_api_keys:
+        return from_api_keys
+
+    return str(default).strip()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import os
 from typing import Optional
 
 from voicepipe.config import (
@@ -74,6 +75,11 @@ def process_zwingli_prompt_result(
     resolved_base_url = base_url
     if resolved_base_url is None:
         resolved_base_url = get_zwingli_base_url()
+
+    if not api_key:
+        env_override = (os.environ.get("VOICEPIPE_ZWINGLI_API_KEY") or "").strip()
+        if env_override:
+            api_key = env_override
 
     if not api_key:
         if resolved_backend == "groq":

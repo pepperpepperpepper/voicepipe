@@ -350,14 +350,20 @@ def test_live_zwingli_audio_round2_enabled_llm_verbs(
 ) -> None:
     _skip_unless_live_llm_enabled()
 
+    llm_backend = (os.environ.get("VOICEPIPE_LIVE_ZWINGLI_BACKEND") or "").strip().lower() or "openai"
+    if llm_backend not in {"openai", "groq"}:
+        pytest.skip(f"Unsupported VOICEPIPE_LIVE_ZWINGLI_BACKEND for live LLM tests: {llm_backend!r}")
+    monkeypatch.setenv("VOICEPIPE_ZWINGLI_BACKEND", llm_backend)
+
     zwingli_key = config.get_zwingli_api_key(load_env=True)
     if not zwingli_key:
         pytest.skip(
-            "VOICEPIPE_ZWINGLI_API_KEY or OPENAI_API_KEY not configured "
-            "(required for live LLM tests)."
+            "No API key configured for live LLM tests "
+            "(set VOICEPIPE_ZWINGLI_API_KEY and/or GROQ_API_KEY/OPENAI_API_KEY)."
         )
 
-    llm_model = (os.environ.get("VOICEPIPE_LIVE_ZWINGLI_MODEL") or "").strip() or "gpt-5.2"
+    default_llm_model = "gpt-5.2" if llm_backend == "openai" else "moonshotai/kimi-k2-instruct"
+    llm_model = (os.environ.get("VOICEPIPE_LIVE_ZWINGLI_MODEL") or "").strip() or default_llm_model
 
     commands = config.TranscriptCommandsConfig(
         triggers=dict(_TRIGGERS),

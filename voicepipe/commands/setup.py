@@ -10,6 +10,7 @@ import click
 
 from voicepipe.config import (
     ensure_env_file,
+    ensure_triggers_json,
     env_file_permissions_ok,
     legacy_api_key_paths,
     legacy_elevenlabs_key_paths,
@@ -178,6 +179,9 @@ def setup(
         click.echo(f"env file has ELEVENLABS_API_KEY/XI_API_KEY: {has_key_in_file}")
     else:
         click.echo(f"env file has OPENAI_API_KEY: {has_key_in_file}")
+
+    triggers_path = ensure_triggers_json()
+    click.echo(f"triggers config: {triggers_path}")
 
     if systemd:
         if is_windows():

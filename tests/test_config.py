@@ -146,6 +146,41 @@ def test_ensure_env_file_does_not_overwrite(tmp_path: Path, monkeypatch) -> None
     assert env_path.read_text(encoding="utf-8") == "OPENAI_API_KEY=existing\n"
 
 
+def test_ensure_triggers_json_creates_template(tmp_path: Path, monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = config.ensure_triggers_json()
+    assert triggers_path.exists()
+    payload = json.loads(triggers_path.read_text(encoding="utf-8"))
+    assert payload["version"] == 1
+    assert payload["dispatch"]["unknown_verb"] == "strip"
+    assert payload["triggers"]["zwingli"]["action"] == "dispatch"
+
+
+def test_ensure_triggers_json_does_not_overwrite(tmp_path: Path, monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = config.triggers_json_path()
+    triggers_path.parent.mkdir(parents=True, exist_ok=True)
+    triggers_path.write_text("{}", encoding="utf-8")
+
+    config.ensure_triggers_json()
+    assert triggers_path.read_text(encoding="utf-8") == "{}"
+
+
+def test_triggers_json_path_respects_env_override(tmp_path: Path, monkeypatch) -> None:
+    config = _reload_config()
+    override = tmp_path / "repo" / "triggers.json"
+    monkeypatch.setenv("VOICEPIPE_TRIGGERS_JSON", str(override))
+    assert config.triggers_json_path() == override
+
+
 def test_get_transcript_triggers_default(monkeypatch) -> None:
     config = _reload_config()
     monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)

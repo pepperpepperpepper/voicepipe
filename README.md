@@ -370,7 +370,7 @@ Configure in your `voicepipe.env` file:
 VOICEPIPE_TRANSCRIPT_TRIGGERS=zwingli=strip,zwingly=strip
 ```
 
-Or configure structured triggers/verbs in `triggers.json`:
+Or configure structured triggers/verbs in `triggers.json` (non-secret config):
 ```json
 {
   "version": 1,
@@ -379,6 +379,10 @@ Or configure structured triggers/verbs in `triggers.json`:
   "verbs": { "strip": { "type": "builtin" } }
 }
 ```
+
+Bootstrap:
+- `voicepipe setup` installs a safe default `triggers.json` into your Voicepipe config dir if you don't already have one.
+- You can override the location (git-friendly) with `VOICEPIPE_TRIGGERS_JSON=/path/to/triggers.json`.
 
 LLM verbs can optionally point at per-verb prompt settings via `llm_profiles` (safe “generate-only” output; no side effects):
 ```json

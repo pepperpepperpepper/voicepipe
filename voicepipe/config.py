@@ -65,6 +65,9 @@ DEFAULT_ENV_FILE_TEMPLATE = """# Voicepipe environment config (used by systemd s
 #   Windows: auto|sendinput|none
 # VOICEPIPE_DAEMON_MODE=auto  # auto|never|always
 #
+# Transcript commands config (non-secret):
+# VOICEPIPE_TRIGGERS_JSON=  # optional path override for triggers.json (git-friendly)
+#
 # Transcript triggers (prefix-based; checked after transcription):
 # VOICEPIPE_TRANSCRIPT_TRIGGERS=zwingli=strip,zwingly=strip
 #   Actions: strip|dispatch|zwingli|shell
@@ -459,6 +462,72 @@ def ensure_env_file(
 
     ensure_private_path(env_path, file_mode)
     return env_path
+
+
+_DEFAULT_TRIGGERS_JSON_TEMPLATE_FALLBACK = """{
+  \"version\": 1,
+  \"triggers\": {
+    \"zwingli\": { \"action\": \"dispatch\" },
+    \"zwingly\": { \"action\": \"dispatch\" }
+  },
+  \"dispatch\": { \"unknown_verb\": \"strip\" },
+  \"verbs\": {
+    \"strip\": { \"type\": \"builtin\" },
+    \"rewrite\": { \"type\": \"llm\", \"profile\": \"rewrite\" },
+    \"shell\": { \"type\": \"llm\", \"profile\": \"shell\" },
+    \"bash\": { \"type\": \"llm\", \"profile\": \"shell\" },
+    \"email\": { \"type\": \"llm\", \"profile\": \"email_draft\" },
+    \"execute\": { \"type\": \"execute\", \"enabled\": false, \"timeout_seconds\": 10 }
+  },
+  \"llm_profiles\": {
+    \"rewrite\": {
+      \"temperature\": 0.2,
+      \"system_prompt\": \"You rewrite text for dictation. Output only the final text to type.\"
+    },
+    \"shell\": {
+      \"temperature\": 0.0,
+      \"system_prompt\": \"You write safe shell scripts. Output only the script text.\\\\nRequirements:\\\\n- Start with: #!/usr/bin/env bash\\\\n- No markdown, no backticks.\\\\n- Must be read-only and non-destructive.\\\\n- Prefer: ls -la \\\\\\\"$HOME\\\\\\\"\",
+      \"user_prompt_template\": \"Write a shell script for: {{text}}\"
+    },
+    \"email_draft\": {
+      \"temperature\": 0.0,
+      \"system_prompt\": \"Draft an email. Output ONLY 3 lines:\\\\nTo: <recipient>\\\\nSubject: <subject>\\\\nBody: <body>\\\\nNo markdown, no extra lines.\",
+      \"user_prompt_template\": \"Draft an email from this phrase: {{text}}\"
+    }
+  }
+}
+"""
+
+
+def _load_default_triggers_json_template() -> str:
+    try:
+        asset_path = Path(__file__).resolve().parent / "assets" / "triggers.default.json"
+        if asset_path.exists():
+            return asset_path.read_text(encoding="utf-8")
+    except Exception:
+        pass
+    return _DEFAULT_TRIGGERS_JSON_TEMPLATE_FALLBACK
+
+
+def ensure_triggers_json(
+    *,
+    path: Optional[Path] = None,
+    create_dir: bool = True,
+    overwrite: bool = False,
+    file_mode: int = 0o600,
+    dir_mode: int = 0o700,
+) -> Path:
+    """Ensure the triggers.json config exists (without overwriting user changes)."""
+    triggers_path = triggers_json_path() if path is None else Path(path)
+    if create_dir:
+        triggers_path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_private_path(triggers_path.parent, dir_mode)
+
+    if overwrite or not triggers_path.exists():
+        _atomic_write(triggers_path, _load_default_triggers_json_template())
+
+    ensure_private_path(triggers_path, file_mode)
+    return triggers_path
 
 
 def read_env_file(path: Optional[Path] = None) -> dict[str, str]:
@@ -1058,6 +1127,18 @@ _TRIGGERS_JSON_CACHE: tuple[float, dict[str, str] | None] | None = None
 
 def triggers_json_path() -> Path:
     """Canonical triggers config file path (non-secret)."""
+    override = getenv_path("VOICEPIPE_TRIGGERS_JSON")
+    if override:
+        try:
+            path = Path(override).expanduser()
+        except Exception:
+            path = Path(override)
+        if not path.is_absolute():
+            try:
+                path = (Path.cwd() / path).resolve()
+            except Exception:
+                pass
+        return path
     return config_dir() / "triggers.json"
 
 

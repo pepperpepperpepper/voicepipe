@@ -699,3 +699,92 @@ def type_text(
             return False, f"wtype error: {e}"
 
     return False, backend.error or "No typing backend available"
+
+
+def press_enter(
+    *,
+    window_id: Optional[str] = None,
+    backend: TypingBackend | None = None,
+) -> tuple[bool, Optional[str]]:
+    """Press the Enter/Return key using the best available backend.
+
+    Prefer this over typing a literal newline when the target expects a real
+    keypress event (some shells/apps distinguish Enter from inserting '\n').
+    """
+    backend = _resolve_typing_backend_cached() if backend is None else backend
+    if backend.name in ("none", "unavailable"):
+        return False, backend.error or "Typing unavailable"
+
+    if backend.name == "sendinput":
+        # `type_text` already maps '\n' to VK_RETURN for predictable behavior.
+        return type_text("\n", window_id=window_id, backend=backend)
+
+    if backend.name == "osascript":
+        # Avoid hanging when invoked from non-interactive remote sessions.
+        if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY") or os.environ.get("SSH_CLIENT"):
+            return False, "osascript typing requires an interactive macOS desktop session (SSH detected)"
+        try:
+            script = 'tell application "System Events" to key code 36\n'
+            result = subprocess.run(
+                [backend.path or "osascript", "-"],
+                input=script,
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+                check=False,
+            )
+            if result.returncode == 0:
+                return True, None
+            err = (result.stderr or "").strip()
+            out = (result.stdout or "").strip()
+            detail = err or out
+            return False, detail or f"osascript failed (rc={result.returncode})"
+        except subprocess.TimeoutExpired:
+            return False, "osascript timed out"
+        except Exception as e:
+            return False, f"osascript error: {e}"
+
+    if backend.name == "xdotool":
+        cmd = [backend.path or "xdotool", "key", "--clearmodifiers"]
+        if window_id:
+            cmd += ["--window", str(window_id)]
+        cmd += ["Return"]
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+                check=False,
+            )
+            if result.returncode != 0:
+                err = (result.stderr or "").strip()
+                return False, err or f"xdotool failed (rc={result.returncode})"
+            return True, None
+        except subprocess.TimeoutExpired:
+            return False, "xdotool timed out"
+        except Exception as e:
+            return False, f"xdotool error: {e}"
+
+    if backend.name == "wtype":
+        # Wayland: send a real Return keysym press/release instead of a newline
+        # character. Window targeting is compositor-controlled.
+        cmd = [backend.path or "wtype", "-P", "Return", "-p", "Return"]
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+                check=False,
+            )
+            if result.returncode == 0:
+                return True, None
+            err = (result.stderr or "").strip()
+            return False, err or f"wtype failed (rc={result.returncode})"
+        except subprocess.TimeoutExpired:
+            return False, "wtype timed out"
+        except Exception as e:
+            return False, f"wtype error: {e}"
+
+    return False, backend.error or "No typing backend available"

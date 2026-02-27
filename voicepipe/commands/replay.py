@@ -8,7 +8,7 @@ import click
 
 from voicepipe.clipboard import copy_to_clipboard
 from voicepipe.last_output import clear_last_output, load_last_output
-from voicepipe.typing import type_text
+from voicepipe.typing import press_enter, type_text
 
 
 def _parse_default_actions(raw: str) -> set[str]:
@@ -190,7 +190,7 @@ def replay(type_: bool, clipboard: bool, clear: bool, json_: bool, execute_outpu
         if not ok:
             click.echo(f"Error typing text: {err}", err=True)
         elif not execute_output and _payload_is_execute(entry.payload) and replay_text.strip():
-            ok2, err2 = type_text("\n")
+            ok2, err2 = press_enter()
             if not ok2:
                 click.echo(f"Error pressing Enter: {err2}", err=True)
 

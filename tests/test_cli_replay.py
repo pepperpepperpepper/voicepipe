@@ -108,6 +108,7 @@ def test_replay_types_enter_for_execute_trigger(monkeypatch, isolated_home) -> N
     )
 
     calls: list[str] = []
+    enter_calls: list[object] = []
 
     import importlib
 
@@ -119,7 +120,14 @@ def test_replay_types_enter_for_execute_trigger(monkeypatch, isolated_home) -> N
 
     monkeypatch.setattr(replay_cmd, "type_text", _fake_type)
 
+    def _fake_enter(**_kwargs):
+        enter_calls.append(object())
+        return True, None
+
+    monkeypatch.setattr(replay_cmd, "press_enter", _fake_enter)
+
     runner = CliRunner()
     result = runner.invoke(main, ["replay", "--type"])
     assert result.exit_code == 0
-    assert calls == ["ls -la", "\n"]
+    assert calls == ["ls -la"]
+    assert len(enter_calls) == 1

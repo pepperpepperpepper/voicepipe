@@ -352,7 +352,7 @@ def execute_toggle_split(*, perform_transcribe: bool) -> _TogglePostStop | None:
 
 def _perform_toggle_post_stop(post: _TogglePostStop) -> None:
     # Keep imports out of hot paths; the toggle lock has already been released.
-    from voicepipe.typing import type_text
+    from voicepipe.typing import press_enter, type_text
 
     audio_file = post.audio_file
     target_window = post.target_window
@@ -385,8 +385,7 @@ def _perform_toggle_post_stop(post: _TogglePostStop) -> None:
         if not typed_ok:
             fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
         elif _is_execute_trigger(result) and output_text.strip():
-            ok2, err2 = type_text(
-                "\n",
+            ok2, err2 = press_enter(
                 window_id=target_window,
                 backend=typing_backend,  # type: ignore[arg-type]
             )
@@ -594,6 +593,7 @@ def execute_toggle_inprocess() -> None:
         if _inprocess_is_recording():
             from voicepipe.typing import (
                 get_active_window_id,
+                press_enter,
                 resolve_typing_backend,
                 type_text,
             )
@@ -736,8 +736,7 @@ def execute_toggle_inprocess() -> None:
                             == "execute"
                             and output_text.strip()
                         ):
-                            ok2, err2 = type_text(
-                                "\n",
+                            ok2, err2 = press_enter(
                                 window_id=target_window,
                                 backend=typing_backend,
                             )

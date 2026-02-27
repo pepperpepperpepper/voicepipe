@@ -26,7 +26,7 @@ from voicepipe.recording_backend import (
 from voicepipe.session import RecordingSession
 from voicepipe.transcription import transcribe_audio_file_result, transcribe_audio_fileobj_result
 from voicepipe.transcription_result import TranscriptionResult
-from voicepipe.typing import type_text
+from voicepipe.typing import press_enter, type_text
 from voicepipe.platform import is_windows
 
 logger = logging.getLogger(__name__)
@@ -115,7 +115,7 @@ def _emit_transcription(
         if not ok:
             click.echo(f"Error typing text: {err}", err=True)
         elif _is_execute_trigger(result) and output_text.strip():
-            ok2, err2 = type_text("\n")
+            ok2, err2 = press_enter()
             if not ok2:
                 click.echo(f"Error pressing Enter: {err2}", err=True)
 

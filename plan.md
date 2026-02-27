@@ -309,6 +309,8 @@ Add runtime toggles:
     - Timeout case harness added; `sleep 2` audio fixture recorded + included (shell execution remains opt-in).
 - Add round 4 fixtures for plugin verbs (pure transforms; no filesystem writes). (DONE: 2026-02-25)
   - Added round 4 live tests for plugin verb gating + metadata invariants (uses round 4 audio fixtures). (DONE: 2026-02-25)
+- Harden command-output routing in typing workflows (DONE: 2026-02-27)
+  - Default `execute` destination to `clipboard` and avoid typing multi-line command/script output into terminals; always persist output for replay.
 
 ---
 

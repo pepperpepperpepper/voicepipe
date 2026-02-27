@@ -546,10 +546,10 @@ _DEFAULT_TRIGGERS_JSON_TEMPLATE_FALLBACK = """{
   \"verbs\": {
     \"strip\": { \"type\": \"builtin\" },
     \"rewrite\": { \"type\": \"llm\", \"profile\": \"rewrite\" },
-    \"shell\": { \"type\": \"llm\", \"profile\": \"shell\" },
-    \"bash\": { \"type\": \"llm\", \"profile\": \"shell\" },
+    \"shell\": { \"type\": \"llm\", \"profile\": \"shell\", \"destination\": \"clipboard\" },
+    \"bash\": { \"type\": \"llm\", \"profile\": \"shell\", \"destination\": \"clipboard\" },
     \"email\": { \"type\": \"llm\", \"profile\": \"email_draft\" },
-    \"execute\": { \"type\": \"execute\", \"enabled\": false, \"timeout_seconds\": 10 }
+    \"execute\": { \"type\": \"execute\", \"enabled\": true, \"timeout_seconds\": 10, \"destination\": \"clipboard\" }
   },
   \"llm_profiles\": {
     \"rewrite\": {
@@ -988,6 +988,12 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
                             "(expected: print, clipboard, type)"
                         )
                     destination = cleaned
+            if destination is None and verb_type == "execute":
+                # Safety default: `execute` often produces multi-line output.
+                # Typing that output into a terminal can cause each line to be
+                # executed as a separate command. Prefer clipboard unless the
+                # user explicitly opts into typing via triggers.json.
+                destination = "clipboard"
 
             profile = None
             raw_profile = raw_value.get("profile")

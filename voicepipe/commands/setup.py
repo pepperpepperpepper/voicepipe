@@ -38,7 +38,7 @@ def _read_key_from_file(path: Path) -> str:
 
 
 def _enable_execute_in_triggers_json(path: Path) -> bool:
-    """Best-effort: ensure the `execute` verb exists and is enabled."""
+    """Best-effort: ensure the `execute` verb exists, is enabled, and is safe."""
     try:
         payload = json.loads(path.read_text(encoding="utf-8-sig") or "")
     except Exception:
@@ -65,9 +65,31 @@ def _enable_execute_in_triggers_json(path: Path) -> bool:
         if "timeout_seconds" not in existing:
             existing["timeout_seconds"] = 10
             changed = True
+        if "destination" not in existing:
+            existing["destination"] = "clipboard"
+            changed = True
     else:
-        verbs["execute"] = {"type": "execute", "enabled": True, "timeout_seconds": 10}
+        verbs["execute"] = {
+            "type": "execute",
+            "enabled": True,
+            "timeout_seconds": 10,
+            "destination": "clipboard",
+        }
         changed = True
+
+    # Best-effort: prefer clipboard for script-generating verbs to avoid typing
+    # multi-line content into terminals.
+    for verb_name in ("shell", "bash"):
+        existing = verbs.get(verb_name)
+        if not isinstance(existing, dict):
+            continue
+        if "destination" in existing:
+            continue
+        raw_type = str(existing.get("type") or "").strip().lower()
+        raw_profile = str(existing.get("profile") or "").strip().lower()
+        if raw_type == "llm" and raw_profile == "shell":
+            existing["destination"] = "clipboard"
+            changed = True
 
     if not changed:
         return False
@@ -239,6 +261,20 @@ def setup(
                 "Warning: this allows running shell commands from transcribed speech. "
                 "Disable by setting VOICEPIPE_SHELL_ALLOW=0.",
                 err=True,
+            )
+
+    respect_dest_in_file = (env_values.get("VOICEPIPE_COMMANDS_RESPECT_DESTINATION") or "").strip()
+    if not respect_dest_in_file:
+        from_env = (os.environ.get("VOICEPIPE_COMMANDS_RESPECT_DESTINATION") or "").strip()
+        if from_env:
+            upsert_env_var("VOICEPIPE_COMMANDS_RESPECT_DESTINATION", from_env)
+            click.echo(
+                "Configured VOICEPIPE_COMMANDS_RESPECT_DESTINATION in env file (source: env var)"
+            )
+        else:
+            upsert_env_var("VOICEPIPE_COMMANDS_RESPECT_DESTINATION", "1")
+            click.echo(
+                "Configured VOICEPIPE_COMMANDS_RESPECT_DESTINATION=1 (respects per-verb destination hints like clipboard)."
             )
 
     triggers_path = ensure_triggers_json()

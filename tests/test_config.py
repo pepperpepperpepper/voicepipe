@@ -328,6 +328,34 @@ def test_get_transcript_commands_config_reads_dispatch_and_verbs(tmp_path: Path,
     assert cfg.llm_profiles["bash"].user_prompt_template == "Write a bash script for: {{text}}"
 
 
+def test_get_transcript_commands_config_defaults_execute_destination_clipboard(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = _reload_config()
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = config.config_dir(create=True) / "triggers.json"
+    triggers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "verbs": {
+                    "execute": {"type": "execute", "enabled": True, "timeout_seconds": 5},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cfg = config.get_transcript_commands_config(load_env=False)
+    assert cfg.verbs["execute"].type == "execute"
+    assert cfg.verbs["execute"].destination == "clipboard"
+
+
 def test_get_transcript_commands_config_env_var_overrides_triggers_but_uses_verbs(
     tmp_path: Path, monkeypatch
 ) -> None:

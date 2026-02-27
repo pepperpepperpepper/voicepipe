@@ -385,9 +385,15 @@ def _perform_toggle_post_stop(post: _TogglePostStop) -> None:
         except Exception:
             pass
 
-        dest = None
-        if (os.environ.get("VOICEPIPE_COMMANDS_RESPECT_DESTINATION") or "").strip() == "1":
-            dest = _resolve_destination_from_transcript_trigger(trigger_meta)
+        dest = _resolve_destination_from_transcript_trigger(trigger_meta)
+        inner_meta = trigger_meta.get("meta") if isinstance(trigger_meta, dict) else None
+        if dest is None and isinstance(inner_meta, dict):
+            # Safety defaults for command-mode outputs: multi-line shell output
+            # or generated scripts should not be typed into a terminal prompt.
+            if inner_meta.get("verb_type") == "execute":
+                dest = "clipboard"
+            elif inner_meta.get("profile") == "shell":
+                dest = "clipboard"
 
         if dest == "clipboard":
             try:
@@ -397,9 +403,12 @@ def _perform_toggle_post_stop(post: _TogglePostStop) -> None:
                 if not ok:
                     fast_log(f"[TOGGLE] Warning: clipboard failed: {err}")
                 else:
-                    transcription_ok = True
+                    fast_log("[TOGGLE] Copied output to clipboard")
             except Exception as e:
                 fast_log(f"[TOGGLE] Warning: clipboard failed: {e}")
+            # Even if clipboard fails, keep the output in the replay buffer and
+            # avoid typing potentially-dangerous multi-line content.
+            transcription_ok = True
 
         if not transcription_ok:
             typed_ok, type_err = type_text(
@@ -717,22 +726,59 @@ def execute_toggle_inprocess() -> None:
                     if trigger_meta is not None:
                         fast_log(f"[TOGGLE] Transcript trigger: {trigger_meta}")
 
-                    fast_log(
-                        "[TOGGLE] Typing transcription: "
-                        f"backend={typing_backend.name} window_id={target_window or ''} chars={len(output_text)}"
+                    # Persist last output for replay/recovery workflows.
+                    try:
+                        from voicepipe.last_output import save_last_output
+
+                        payload = {
+                            "source": "fast-toggle-inprocess",
+                            "text": cleaned_text,
+                            "trigger_meta": trigger_meta,
+                            "output_text": output_text,
+                        }
+                        save_last_output(output_text, payload=payload)
+                    except Exception:
+                        pass
+
+                    dest = _resolve_destination_from_transcript_trigger(trigger_meta)
+                    inner_meta = (
+                        trigger_meta.get("meta") if isinstance(trigger_meta, dict) else None
                     )
-                    t_type0 = time.monotonic()
-                    typed_ok, type_err = type_text(
-                        output_text,
-                        window_id=target_window,
-                        backend=typing_backend,
-                    )
-                    t_type_ms = int((time.monotonic() - t_type0) * 1000)
-                    if not typed_ok:
-                        fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
+                    if dest is None and isinstance(inner_meta, dict):
+                        if inner_meta.get("verb_type") == "execute":
+                            dest = "clipboard"
+                        elif inner_meta.get("profile") == "shell":
+                            dest = "clipboard"
+
+                    if dest == "clipboard":
+                        try:
+                            from voicepipe.clipboard import copy_to_clipboard
+
+                            ok, err = copy_to_clipboard(output_text)
+                            if not ok:
+                                fast_log(f"[TOGGLE] Warning: clipboard failed: {err}")
+                            else:
+                                fast_log("[TOGGLE] Copied output to clipboard")
+                        except Exception as e:
+                            fast_log(f"[TOGGLE] Warning: clipboard failed: {e}")
+                        transcription_ok = True
                     else:
-                        fast_log(f"[TOGGLE] Typed transcription (ok) in {t_type_ms}ms")
-                    transcription_ok = True
+                        fast_log(
+                            "[TOGGLE] Typing transcription: "
+                            f"backend={typing_backend.name} window_id={target_window or ''} chars={len(output_text)}"
+                        )
+                        t_type0 = time.monotonic()
+                        typed_ok, type_err = type_text(
+                            output_text,
+                            window_id=target_window,
+                            backend=typing_backend,
+                        )
+                        t_type_ms = int((time.monotonic() - t_type0) * 1000)
+                        if not typed_ok:
+                            fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
+                        else:
+                            fast_log(f"[TOGGLE] Typed transcription (ok) in {t_type_ms}ms")
+                        transcription_ok = True
                 else:
                     fast_log("[TOGGLE] No transcription returned")
 

@@ -37,8 +37,8 @@ def _read_key_from_file(path: Path) -> str:
         return ""
 
 
-def _enable_execute_in_triggers_json(path: Path) -> bool:
-    """Best-effort: ensure the `execute` and `subprocess` verbs are enabled."""
+def _ensure_zwingli_verbs_in_triggers_json(path: Path) -> bool:
+    """Best-effort: ensure key Zwingli verbs exist/enabled in triggers.json."""
     try:
         payload = json.loads(path.read_text(encoding="utf-8-sig") or "")
     except Exception:
@@ -90,6 +90,21 @@ def _enable_execute_in_triggers_json(path: Path) -> bool:
             "type": "shell",
             "enabled": True,
             "timeout_seconds": 10,
+        }
+        changed = True
+
+    existing = verbs.get("type")
+    if isinstance(existing, dict):
+        if str(existing.get("type") or "").strip().lower() != "type":
+            existing["type"] = "type"
+            changed = True
+        if existing.get("enabled") is not True:
+            existing["enabled"] = True
+            changed = True
+    else:
+        verbs["type"] = {
+            "type": "type",
+            "enabled": True,
         }
         changed = True
 
@@ -267,8 +282,8 @@ def setup(
 
     triggers_path = ensure_triggers_json()
     click.echo(f"triggers config: {triggers_path}")
-    if _enable_execute_in_triggers_json(triggers_path):
-        click.echo("Enabled `execute` and `subprocess` verbs in triggers.json.")
+    if _ensure_zwingli_verbs_in_triggers_json(triggers_path):
+        click.echo("Enabled `execute`, `subprocess`, and `type` verbs in triggers.json.")
 
     if systemd:
         if is_windows():

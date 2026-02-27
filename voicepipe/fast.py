@@ -227,6 +227,54 @@ def _is_execute_trigger(result: object) -> bool:
     return str(meta.get("verb_type") or "").strip().lower() == "execute"
 
 
+def _extract_type_sequence(result: object) -> list[dict[str, object]] | None:
+    trigger = getattr(result, "transcript_trigger", None)
+    if not isinstance(trigger, dict):
+        return None
+
+    action = str(trigger.get("action") or "").strip().lower()
+    meta = trigger.get("meta")
+    if not isinstance(meta, dict):
+        return None
+
+    if action == "type":
+        seq = meta.get("sequence")
+        return seq if isinstance(seq, list) else None
+
+    if action != "dispatch":
+        return None
+    if str(meta.get("action") or "").strip().lower() != "type":
+        return None
+    handler_meta = meta.get("handler_meta")
+    if not isinstance(handler_meta, dict):
+        return None
+    seq = handler_meta.get("sequence")
+    return seq if isinstance(seq, list) else None
+
+
+def _extract_type_sequence_from_payload(payload: object) -> list[dict[str, object]] | None:
+    if not isinstance(payload, dict):
+        return None
+
+    action = str(payload.get("action") or "").strip().lower()
+    meta = payload.get("meta")
+    if not isinstance(meta, dict):
+        return None
+
+    if action == "type":
+        seq = meta.get("sequence")
+        return seq if isinstance(seq, list) else None
+
+    if action != "dispatch":
+        return None
+    if str(meta.get("action") or "").strip().lower() != "type":
+        return None
+    handler_meta = meta.get("handler_meta")
+    if not isinstance(handler_meta, dict):
+        return None
+    seq = handler_meta.get("sequence")
+    return seq if isinstance(seq, list) else None
+
 def send_transcribe_request_fileobj(fh: BinaryIO, *, filename: str) -> str:
     """Transcribe audio from a file-like object without writing a temp WAV."""
     # Keep imports out of the `start` hot path.
@@ -352,7 +400,7 @@ def execute_toggle_split(*, perform_transcribe: bool) -> _TogglePostStop | None:
 
 def _perform_toggle_post_stop(post: _TogglePostStop) -> None:
     # Keep imports out of hot paths; the toggle lock has already been released.
-    from voicepipe.typing import press_enter, type_text
+    from voicepipe.typing import perform_type_sequence, press_enter, type_text
 
     audio_file = post.audio_file
     target_window = post.target_window
@@ -377,14 +425,22 @@ def _perform_toggle_post_stop(post: _TogglePostStop) -> None:
         except Exception:
             pass
 
-        typed_ok, type_err = type_text(
-            output_text,
-            window_id=target_window,
-            backend=typing_backend,  # type: ignore[arg-type]
-        )
+        type_sequence = _extract_type_sequence(result)
+        if type_sequence is not None:
+            typed_ok, type_err = perform_type_sequence(
+                type_sequence,
+                window_id=target_window,
+                backend=typing_backend,  # type: ignore[arg-type]
+            )
+        else:
+            typed_ok, type_err = type_text(
+                output_text,
+                window_id=target_window,
+                backend=typing_backend,  # type: ignore[arg-type]
+            )
         if not typed_ok:
             fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
-        elif _is_execute_trigger(result) and output_text.strip():
+        elif type_sequence is None and _is_execute_trigger(result) and output_text.strip():
             ok2, err2 = press_enter(
                 window_id=target_window,
                 backend=typing_backend,  # type: ignore[arg-type]
@@ -593,6 +649,7 @@ def execute_toggle_inprocess() -> None:
         if _inprocess_is_recording():
             from voicepipe.typing import (
                 get_active_window_id,
+                perform_type_sequence,
                 press_enter,
                 resolve_typing_backend,
                 type_text,
@@ -719,17 +776,27 @@ def execute_toggle_inprocess() -> None:
                         f"backend={typing_backend.name} window_id={target_window or ''} chars={len(output_text)}"
                     )
                     t_type0 = time.monotonic()
-                    typed_ok, type_err = type_text(
-                        output_text,
-                        window_id=target_window,
-                        backend=typing_backend,
-                    )
+                    type_sequence = _extract_type_sequence_from_payload(trigger_meta)
+                    if type_sequence is not None:
+                        typed_ok, type_err = perform_type_sequence(
+                            type_sequence,
+                            window_id=target_window,
+                            backend=typing_backend,
+                        )
+                    else:
+                        typed_ok, type_err = type_text(
+                            output_text,
+                            window_id=target_window,
+                            backend=typing_backend,
+                        )
                     t_type_ms = int((time.monotonic() - t_type0) * 1000)
                     if not typed_ok:
                         fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
                     else:
                         fast_log(f"[TOGGLE] Typed transcription (ok) in {t_type_ms}ms")
                         if (
+                            type_sequence is None
+                            and
                             isinstance(trigger_meta, dict)
                             and isinstance(trigger_meta.get("meta"), dict)
                             and str(trigger_meta["meta"].get("verb_type") or "").strip().lower()

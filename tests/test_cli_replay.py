@@ -131,3 +131,42 @@ def test_replay_types_enter_for_execute_trigger(monkeypatch, isolated_home) -> N
     assert result.exit_code == 0
     assert calls == ["ls -la"]
     assert len(enter_calls) == 1
+
+
+def test_replay_types_key_sequence_for_type_trigger(monkeypatch, isolated_home) -> None:
+    seq = [
+        {"kind": "key", "key": "up", "mods": []},
+        {"kind": "key", "key": "up", "mods": []},
+        {"kind": "key", "key": "up", "mods": []},
+    ]
+    save_last_output(
+        "up up up",
+        payload={
+            "transcript_trigger": {
+                "action": "dispatch",
+                "meta": {"action": "type", "handler_meta": {"sequence": seq}},
+            }
+        },
+    )
+
+    calls: list[object] = []
+
+    import importlib
+
+    replay_cmd = importlib.import_module("voicepipe.commands.replay")
+
+    def _fake_perform(sequence, **_kwargs):
+        calls.append(sequence)
+        return True, None
+
+    monkeypatch.setattr(replay_cmd, "perform_type_sequence", _fake_perform)
+
+    def _fake_type(_text: str):
+        raise AssertionError("type_text should not be called for `zwingli type` sequences")
+
+    monkeypatch.setattr(replay_cmd, "type_text", _fake_type)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["replay", "--type"])
+    assert result.exit_code == 0
+    assert calls == [seq]

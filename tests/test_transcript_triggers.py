@@ -275,6 +275,60 @@ def test_apply_transcript_triggers_dispatch_execute_types_command_and_requests_e
     assert handler_meta["enter"] is True
 
 
+def test_apply_transcript_triggers_dispatch_type_parses_key_sequence() -> None:
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "type": config.TranscriptVerbConfig(
+                action="type",
+                enabled=True,
+                type="type",
+            )
+        },
+    )
+
+    out, meta = tt.apply_transcript_triggers("zwingli type up arrow up arrow up", commands=commands)
+    assert out == "up up up"
+    assert meta is not None
+    assert meta["ok"] is True
+    assert meta["meta"]["mode"] == "verb"
+    assert meta["meta"]["verb"] == "type"
+    assert meta["meta"]["verb_type"] == "type"
+    assert meta["meta"]["action"] == "type"
+    handler_meta = meta["meta"]["handler_meta"]
+    seq = handler_meta["sequence"]
+    assert isinstance(seq, list)
+    keys = [item.get("key") for item in seq if isinstance(item, dict) and item.get("kind") == "key"]
+    assert keys == ["up", "up", "up"]
+
+
+def test_apply_transcript_triggers_dispatch_type_supports_ctrl_chords() -> None:
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "type": config.TranscriptVerbConfig(
+                action="type",
+                enabled=True,
+                type="type",
+            )
+        },
+    )
+
+    out, meta = tt.apply_transcript_triggers("zwingli type control b d", commands=commands)
+    assert out == "ctrl+b d"
+    assert meta is not None
+    handler_meta = meta["meta"]["handler_meta"]
+    seq = handler_meta["sequence"]
+    assert seq and isinstance(seq, list)
+    first = seq[0]
+    assert isinstance(first, dict)
+    assert first.get("kind") == "key"
+    assert first.get("key") == "b"
+    assert first.get("mods") == ["ctrl"]
+
+
 def test_apply_transcript_triggers_dispatch_shell_timeout_reports_error(monkeypatch) -> None:
     monkeypatch.setenv("VOICEPIPE_SHELL_ALLOW", "1")
 

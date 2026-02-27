@@ -26,7 +26,7 @@ from voicepipe.recording_backend import (
 from voicepipe.session import RecordingSession
 from voicepipe.transcription import transcribe_audio_file_result, transcribe_audio_fileobj_result
 from voicepipe.transcription_result import TranscriptionResult
-from voicepipe.typing import press_enter, type_text
+from voicepipe.typing import perform_type_sequence, press_enter, type_text
 from voicepipe.platform import is_windows
 
 logger = logging.getLogger(__name__)
@@ -39,6 +39,33 @@ def _is_execute_trigger(result: TranscriptionResult) -> bool:
     if not isinstance(meta, dict):
         return False
     return str(meta.get("verb_type") or "").strip().lower() == "execute"
+
+
+def _extract_type_sequence(result: TranscriptionResult) -> list[dict[str, object]] | None:
+    trigger = getattr(result, "transcript_trigger", None)
+    if not isinstance(trigger, dict):
+        return None
+
+    action = str(trigger.get("action") or "").strip().lower()
+    meta = trigger.get("meta")
+    if not isinstance(meta, dict):
+        return None
+
+    # Non-dispatch triggers may map directly to the "type" action.
+    if action == "type":
+        seq = meta.get("sequence")
+        return seq if isinstance(seq, list) else None
+
+    # Dispatch verbs store handler metadata under meta.handler_meta.
+    if action != "dispatch":
+        return None
+    if str(meta.get("action") or "").strip().lower() != "type":
+        return None
+    handler_meta = meta.get("handler_meta")
+    if not isinstance(handler_meta, dict):
+        return None
+    seq = handler_meta.get("sequence")
+    return seq if isinstance(seq, list) else None
 
 def _emit_transcription(
     result,
@@ -111,13 +138,19 @@ def _emit_transcription(
         click.echo(output_text)
 
     if type_:
-        ok, err = type_text(output_text)
-        if not ok:
-            click.echo(f"Error typing text: {err}", err=True)
-        elif _is_execute_trigger(result) and output_text.strip():
-            ok2, err2 = press_enter()
-            if not ok2:
-                click.echo(f"Error pressing Enter: {err2}", err=True)
+        type_sequence = _extract_type_sequence(result)
+        if type_sequence is not None:
+            ok, err = perform_type_sequence(type_sequence)
+            if not ok:
+                click.echo(f"Error typing keys: {err}", err=True)
+        else:
+            ok, err = type_text(output_text)
+            if not ok:
+                click.echo(f"Error typing text: {err}", err=True)
+            elif _is_execute_trigger(result) and output_text.strip():
+                ok2, err2 = press_enter()
+                if not ok2:
+                    click.echo(f"Error pressing Enter: {err2}", err=True)
 
 
 def _transcribe_and_finalize(

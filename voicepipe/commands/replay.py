@@ -8,7 +8,7 @@ import click
 
 from voicepipe.clipboard import copy_to_clipboard
 from voicepipe.last_output import clear_last_output, load_last_output
-from voicepipe.typing import press_enter, type_text
+from voicepipe.typing import perform_type_sequence, press_enter, type_text
 
 
 def _parse_default_actions(raw: str) -> set[str]:
@@ -77,6 +77,34 @@ def _payload_is_execute(payload: object) -> bool:
         return False
 
     return str(meta.get("verb_type") or "").strip().lower() == "execute"
+
+
+def _payload_type_sequence(payload: object) -> list[dict[str, object]] | None:
+    if not isinstance(payload, dict):
+        return None
+
+    trigger = payload.get("transcript_trigger") or payload.get("trigger_meta")
+    if not isinstance(trigger, dict):
+        return None
+
+    action = str(trigger.get("action") or "").strip().lower()
+    meta = trigger.get("meta")
+    if not isinstance(meta, dict):
+        return None
+
+    if action == "type":
+        seq = meta.get("sequence")
+        return seq if isinstance(seq, list) else None
+
+    if action != "dispatch":
+        return None
+    if str(meta.get("action") or "").strip().lower() != "type":
+        return None
+    handler_meta = meta.get("handler_meta")
+    if not isinstance(handler_meta, dict):
+        return None
+    seq = handler_meta.get("sequence")
+    return seq if isinstance(seq, list) else None
 
 
 def _escape_multiline_for_typing(text: str) -> str:
@@ -186,13 +214,19 @@ def replay(type_: bool, clipboard: bool, clear: bool, json_: bool, execute_outpu
             click.echo(f"Error copying to clipboard: {err}", err=True)
 
     if type_:
-        ok, err = type_text(replay_text)
-        if not ok:
-            click.echo(f"Error typing text: {err}", err=True)
-        elif not execute_output and _payload_is_execute(entry.payload) and replay_text.strip():
-            ok2, err2 = press_enter()
-            if not ok2:
-                click.echo(f"Error pressing Enter: {err2}", err=True)
+        type_sequence = None if execute_output else _payload_type_sequence(entry.payload)
+        if type_sequence is not None:
+            ok, err = perform_type_sequence(type_sequence)
+            if not ok:
+                click.echo(f"Error typing keys: {err}", err=True)
+        else:
+            ok, err = type_text(replay_text)
+            if not ok:
+                click.echo(f"Error typing text: {err}", err=True)
+            elif not execute_output and _payload_is_execute(entry.payload) and replay_text.strip():
+                ok2, err2 = press_enter()
+                if not ok2:
+                    click.echo(f"Error pressing Enter: {err2}", err=True)
 
     if clear:
         clear_last_output()

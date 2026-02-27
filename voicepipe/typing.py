@@ -788,3 +788,387 @@ def press_enter(
             return False, f"wtype error: {e}"
 
     return False, backend.error or "No typing backend available"
+
+
+def press_keys(
+    chords: list[dict[str, object]],
+    *,
+    window_id: Optional[str] = None,
+    backend: TypingBackend | None = None,
+) -> tuple[bool, Optional[str]]:
+    """Press a sequence of key chords.
+
+    Each chord is a dict like: {"key": "up", "mods": ["ctrl", "shift"]}.
+    """
+    backend = _resolve_typing_backend_cached() if backend is None else backend
+    if backend.name in ("none", "unavailable"):
+        return False, backend.error or "Typing unavailable"
+
+    def _iter_chords() -> list[tuple[str, list[str]]]:
+        out: list[tuple[str, list[str]]] = []
+        for raw in chords or []:
+            if not isinstance(raw, dict):
+                continue
+            key = str(raw.get("key") or "").strip().lower()
+            if not key:
+                continue
+            mods: list[str] = []
+            raw_mods = raw.get("mods")
+            if isinstance(raw_mods, list):
+                for m in raw_mods:
+                    cleaned = str(m or "").strip().lower()
+                    if cleaned:
+                        mods.append(cleaned)
+            out.append((key, mods))
+        return out
+
+    resolved = _iter_chords()
+    if not resolved:
+        return True, None
+
+    def _map_key(key: str) -> str:
+        special = {
+            "up": "Up",
+            "down": "Down",
+            "left": "Left",
+            "right": "Right",
+            "enter": "Return",
+            "tab": "Tab",
+            "esc": "Escape",
+            "backspace": "BackSpace",
+            "delete": "Delete",
+            "home": "Home",
+            "end": "End",
+            "pageup": "Prior",
+            "pagedown": "Next",
+            "space": "space",
+        }
+        if key in special:
+            return special[key]
+        if key.startswith("f") and key[1:].isdigit():
+            try:
+                n = int(key[1:])
+            except Exception:
+                n = 0
+            if 1 <= n <= 24:
+                return f"F{n}"
+        return key
+
+    if backend.name == "xdotool":
+        specs: list[str] = []
+        mod_map = {
+            "ctrl": "ctrl",
+            "control": "ctrl",
+            "shift": "shift",
+            "alt": "alt",
+            "meta": "meta",
+            "super": "super",
+            "cmd": "super",
+        }
+        for key, mods in resolved:
+            mapped_mods = [mod_map.get(m, m) for m in mods if m]
+            keysym = _map_key(key)
+            spec = "+".join([*mapped_mods, keysym]) if mapped_mods else keysym
+            specs.append(spec)
+        if not specs:
+            return True, None
+        cmd = [backend.path or "xdotool", "key", "--clearmodifiers"]
+        if window_id:
+            cmd += ["--window", str(window_id)]
+        cmd += specs
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+                check=False,
+            )
+            if result.returncode != 0:
+                err = (result.stderr or "").strip()
+                return False, err or f"xdotool failed (rc={result.returncode})"
+            return True, None
+        except subprocess.TimeoutExpired:
+            return False, "xdotool timed out"
+        except Exception as e:
+            return False, f"xdotool error: {e}"
+
+    if backend.name == "wtype":
+        mod_map = {
+            "ctrl": "ctrl",
+            "control": "ctrl",
+            "shift": "shift",
+            "alt": "alt",
+            "meta": "logo",
+            "super": "logo",
+            "cmd": "logo",
+        }
+        argv: list[str] = [backend.path or "wtype"]
+        for key, mods in resolved:
+            mapped_mods = [mod_map.get(m, m) for m in mods if m]
+            for m in mapped_mods:
+                argv += ["-M", m]
+            keysym = _map_key(key)
+            if len(key) == 1 and key.isalnum():
+                argv.append(key)
+            else:
+                argv += ["-P", keysym, "-p", keysym]
+            for m in reversed(mapped_mods):
+                argv += ["-m", m]
+        try:
+            result = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                timeout=2.0,
+                check=False,
+            )
+            if result.returncode == 0:
+                return True, None
+            err = (result.stderr or "").strip()
+            return False, err or f"wtype failed (rc={result.returncode})"
+        except subprocess.TimeoutExpired:
+            return False, "wtype timed out"
+        except Exception as e:
+            return False, f"wtype error: {e}"
+
+    if backend.name == "osascript":
+        if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY") or os.environ.get("SSH_CLIENT"):
+            return False, "osascript typing requires an interactive macOS desktop session (SSH detected)"
+
+        mod_map = {
+            "ctrl": "control down",
+            "control": "control down",
+            "shift": "shift down",
+            "alt": "option down",
+            "meta": "command down",
+            "super": "command down",
+            "cmd": "command down",
+        }
+        key_codes = {
+            "Up": 126,
+            "Down": 125,
+            "Left": 123,
+            "Right": 124,
+            "Return": 36,
+            "Tab": 48,
+            "Escape": 53,
+            "BackSpace": 51,
+            # Forward delete.
+            "Delete": 117,
+        }
+
+        def _using_clause(mods: list[str]) -> str:
+            mapped = [mod_map.get(m, "") for m in mods]
+            mapped = [m for m in mapped if m]
+            if not mapped:
+                return ""
+            return " using {" + ", ".join(mapped) + "}"
+
+        lines: list[str] = ['tell application "System Events"']
+        for key, mods in resolved:
+            keysym = _map_key(key)
+            using = _using_clause(mods)
+            if keysym in key_codes:
+                lines.append(f"    key code {int(key_codes[keysym])}{using}")
+            elif len(key) == 1 and key.isprintable():
+                safe = key.replace("\\", "\\\\").replace('"', '\\"')
+                lines.append(f'    keystroke "{safe}"{using}')
+            elif keysym.lower() == "space":
+                lines.append(f'    keystroke " "{using}')
+            else:
+                # Fallback: try a keystroke of the keysym string (best-effort).
+                safe = keysym.replace("\\", "\\\\").replace('"', '\\"')
+                lines.append(f'    keystroke "{safe}"{using}')
+        lines.append("end tell")
+        script = "\n".join(lines) + "\n"
+        try:
+            result = subprocess.run(
+                [backend.path or "osascript", "-"],
+                input=script,
+                capture_output=True,
+                text=True,
+                timeout=5.0,
+                check=False,
+            )
+            if result.returncode == 0:
+                return True, None
+            err = (result.stderr or "").strip()
+            out = (result.stdout or "").strip()
+            detail = err or out
+            return False, detail or f"osascript failed (rc={result.returncode})"
+        except subprocess.TimeoutExpired:
+            return False, "osascript timed out"
+        except Exception as e:
+            return False, f"osascript error: {e}"
+
+    if backend.name == "sendinput":
+        # Best-effort: send virtual-key events for common keys.
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.WinDLL("user32", use_last_error=True)
+            ULONG_PTR = getattr(wintypes, "ULONG_PTR", ctypes.c_size_t)
+
+            if window_id:
+                _sendinput_focus_window(window_id)
+
+            INPUT_KEYBOARD = 1
+            KEYEVENTF_KEYUP = 0x0002
+
+            VK_CONTROL = 0x11
+            VK_SHIFT = 0x10
+            VK_MENU = 0x12  # Alt
+            VK_LWIN = 0x5B
+
+            vk_map: dict[str, int] = {
+                "Up": 0x26,
+                "Down": 0x28,
+                "Left": 0x25,
+                "Right": 0x27,
+                "Return": 0x0D,
+                "Tab": 0x09,
+                "Escape": 0x1B,
+                "BackSpace": 0x08,
+                "Delete": 0x2E,
+                "Home": 0x24,
+                "End": 0x23,
+                "Prior": 0x21,
+                "Next": 0x22,
+                "space": 0x20,
+            }
+
+            class KEYBDINPUT(ctypes.Structure):
+                _fields_ = [
+                    ("wVk", wintypes.WORD),
+                    ("wScan", wintypes.WORD),
+                    ("dwFlags", wintypes.DWORD),
+                    ("time", wintypes.DWORD),
+                    ("dwExtraInfo", ULONG_PTR),
+                ]
+
+            class _INPUT_UNION(ctypes.Union):
+                _fields_ = [("ki", KEYBDINPUT)]
+
+            class INPUT(ctypes.Structure):
+                _fields_ = [("type", wintypes.DWORD), ("union", _INPUT_UNION)]
+
+            user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
+            user32.SendInput.restype = wintypes.UINT
+
+            def _vk_input(vk: int, *, keyup: bool) -> INPUT:
+                flags = KEYEVENTF_KEYUP if keyup else 0
+                return INPUT(
+                    type=INPUT_KEYBOARD,
+                    union=_INPUT_UNION(
+                        ki=KEYBDINPUT(
+                            wVk=wintypes.WORD(int(vk)),
+                            wScan=0,
+                            dwFlags=flags,
+                            time=0,
+                            dwExtraInfo=0,
+                        )
+                    ),
+                )
+
+            def _send(inputs: list[INPUT]) -> None:
+                if not inputs:
+                    return
+                arr = (INPUT * len(inputs))(*inputs)
+                sent = int(user32.SendInput(len(arr), arr, ctypes.sizeof(INPUT)))
+                if sent != len(arr):
+                    err = ctypes.get_last_error()
+                    raise RuntimeError(
+                        f"SendInput sent {sent}/{len(arr)} events (GetLastError={err})"
+                    )
+
+            def _vk_for_key(key: str) -> int | None:
+                keysym = _map_key(key)
+                if keysym in vk_map:
+                    return int(vk_map[keysym])
+                if keysym.startswith("F") and keysym[1:].isdigit():
+                    n = int(keysym[1:])
+                    if 1 <= n <= 24:
+                        return int(0x70 + (n - 1))
+                if len(key) == 1 and key.isalnum():
+                    return int(ord(key.upper()))
+                return None
+
+            mod_vk_map = {
+                "ctrl": VK_CONTROL,
+                "control": VK_CONTROL,
+                "shift": VK_SHIFT,
+                "alt": VK_MENU,
+                "meta": VK_LWIN,
+                "super": VK_LWIN,
+                "cmd": VK_LWIN,
+            }
+
+            events: list[INPUT] = []
+            for key, mods in resolved:
+                mod_vks = [mod_vk_map.get(m) for m in mods if m in mod_vk_map]
+                mod_vks = [vk for vk in mod_vks if vk is not None]
+                vk = _vk_for_key(key)
+                if vk is None:
+                    continue
+                for mvk in mod_vks:
+                    events.append(_vk_input(mvk, keyup=False))
+                events.append(_vk_input(vk, keyup=False))
+                events.append(_vk_input(vk, keyup=True))
+                for mvk in reversed(mod_vks):
+                    events.append(_vk_input(mvk, keyup=True))
+            _send(events)
+            return True, None
+        except Exception as e:
+            return False, f"sendinput error: {e}"
+
+    return False, backend.error or "No typing backend available"
+
+
+def perform_type_sequence(
+    sequence: list[dict[str, object]],
+    *,
+    window_id: Optional[str] = None,
+    backend: TypingBackend | None = None,
+) -> tuple[bool, Optional[str]]:
+    """Perform a mixed typing sequence of text + keypress chords.
+
+    This is intended for Zwingli's `type` verb metadata.
+    """
+    backend = _resolve_typing_backend_cached() if backend is None else backend
+    if backend.name in ("none", "unavailable"):
+        return False, backend.error or "Typing unavailable"
+
+    pending_keys: list[dict[str, object]] = []
+
+    def _flush_keys() -> tuple[bool, Optional[str]]:
+        nonlocal pending_keys
+        if not pending_keys:
+            return True, None
+        ok, err = press_keys(pending_keys, window_id=window_id, backend=backend)
+        pending_keys = []
+        return ok, err
+
+    for raw in sequence or []:
+        if not isinstance(raw, dict):
+            continue
+        kind = str(raw.get("kind") or "").strip().lower()
+        if kind == "key":
+            pending_keys.append(raw)
+            continue
+        if kind == "text":
+            ok, err = _flush_keys()
+            if not ok:
+                return False, err
+            text = str(raw.get("text") or "")
+            if text:
+                ok2, err2 = type_text(text, window_id=window_id, backend=backend)
+                if not ok2:
+                    return False, err2
+            continue
+
+    ok, err = _flush_keys()
+    if not ok:
+        return False, err
+    return True, None

@@ -217,24 +217,6 @@ def send_transcribe_request_result(audio_file: str, *, source: str) -> "Transcri
         )
 
 
-def _resolve_destination_from_transcript_trigger(meta: object) -> str | None:
-    if not isinstance(meta, dict):
-        return None
-    inner = meta.get("meta")
-    if isinstance(inner, dict):
-        raw = inner.get("destination")
-        if isinstance(raw, str):
-            cleaned = raw.strip().lower()
-            if cleaned:
-                return cleaned
-    raw = meta.get("destination")
-    if isinstance(raw, str):
-        cleaned = raw.strip().lower()
-        if cleaned:
-            return cleaned
-    return None
-
-
 def send_transcribe_request_fileobj(fh: BinaryIO, *, filename: str) -> str:
     """Transcribe audio from a file-like object without writing a temp WAV."""
     # Keep imports out of the `start` hot path.
@@ -385,40 +367,14 @@ def _perform_toggle_post_stop(post: _TogglePostStop) -> None:
         except Exception:
             pass
 
-        dest = _resolve_destination_from_transcript_trigger(trigger_meta)
-        inner_meta = trigger_meta.get("meta") if isinstance(trigger_meta, dict) else None
-        if dest is None and isinstance(inner_meta, dict):
-            # Safety defaults for command-mode outputs: multi-line shell output
-            # or generated scripts should not be typed into a terminal prompt.
-            if inner_meta.get("verb_type") == "execute":
-                dest = "clipboard"
-            elif inner_meta.get("profile") == "shell":
-                dest = "clipboard"
-
-        if dest == "clipboard":
-            try:
-                from voicepipe.clipboard import copy_to_clipboard
-
-                ok, err = copy_to_clipboard(output_text)
-                if not ok:
-                    fast_log(f"[TOGGLE] Warning: clipboard failed: {err}")
-                else:
-                    fast_log("[TOGGLE] Copied output to clipboard")
-            except Exception as e:
-                fast_log(f"[TOGGLE] Warning: clipboard failed: {e}")
-            # Even if clipboard fails, keep the output in the replay buffer and
-            # avoid typing potentially-dangerous multi-line content.
-            transcription_ok = True
-
-        if not transcription_ok:
-            typed_ok, type_err = type_text(
-                output_text,
-                window_id=target_window,
-                backend=typing_backend,  # type: ignore[arg-type]
-            )
-            if not typed_ok:
-                fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
-            transcription_ok = True
+        typed_ok, type_err = type_text(
+            output_text,
+            window_id=target_window,
+            backend=typing_backend,  # type: ignore[arg-type]
+        )
+        if not typed_ok:
+            fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
+        transcription_ok = True
     else:
         fast_log("[TOGGLE] No transcription returned")
 
@@ -740,45 +696,22 @@ def execute_toggle_inprocess() -> None:
                     except Exception:
                         pass
 
-                    dest = _resolve_destination_from_transcript_trigger(trigger_meta)
-                    inner_meta = (
-                        trigger_meta.get("meta") if isinstance(trigger_meta, dict) else None
+                    fast_log(
+                        "[TOGGLE] Typing transcription: "
+                        f"backend={typing_backend.name} window_id={target_window or ''} chars={len(output_text)}"
                     )
-                    if dest is None and isinstance(inner_meta, dict):
-                        if inner_meta.get("verb_type") == "execute":
-                            dest = "clipboard"
-                        elif inner_meta.get("profile") == "shell":
-                            dest = "clipboard"
-
-                    if dest == "clipboard":
-                        try:
-                            from voicepipe.clipboard import copy_to_clipboard
-
-                            ok, err = copy_to_clipboard(output_text)
-                            if not ok:
-                                fast_log(f"[TOGGLE] Warning: clipboard failed: {err}")
-                            else:
-                                fast_log("[TOGGLE] Copied output to clipboard")
-                        except Exception as e:
-                            fast_log(f"[TOGGLE] Warning: clipboard failed: {e}")
-                        transcription_ok = True
+                    t_type0 = time.monotonic()
+                    typed_ok, type_err = type_text(
+                        output_text,
+                        window_id=target_window,
+                        backend=typing_backend,
+                    )
+                    t_type_ms = int((time.monotonic() - t_type0) * 1000)
+                    if not typed_ok:
+                        fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
                     else:
-                        fast_log(
-                            "[TOGGLE] Typing transcription: "
-                            f"backend={typing_backend.name} window_id={target_window or ''} chars={len(output_text)}"
-                        )
-                        t_type0 = time.monotonic()
-                        typed_ok, type_err = type_text(
-                            output_text,
-                            window_id=target_window,
-                            backend=typing_backend,
-                        )
-                        t_type_ms = int((time.monotonic() - t_type0) * 1000)
-                        if not typed_ok:
-                            fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
-                        else:
-                            fast_log(f"[TOGGLE] Typed transcription (ok) in {t_type_ms}ms")
-                        transcription_ok = True
+                        fast_log(f"[TOGGLE] Typed transcription (ok) in {t_type_ms}ms")
+                    transcription_ok = True
                 else:
                     fast_log("[TOGGLE] No transcription returned")
 

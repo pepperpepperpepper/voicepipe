@@ -191,14 +191,12 @@ def test_stop_json_outputs_structured_result(tmp_path: Path, monkeypatch, isolat
     assert "sk-test-secret" not in result.output
 
 
-def test_stop_respects_transcript_trigger_destination_clipboard(
+def test_stop_does_not_respect_transcript_trigger_destination(
     tmp_path: Path,
     monkeypatch,
     isolated_home: Path,
 ) -> None:
     import voicepipe.commands.recording as recording_cmd
-
-    monkeypatch.setenv("VOICEPIPE_COMMANDS_RESPECT_DESTINATION", "1")
 
     audio = tmp_path / "audio.wav"
     audio.write_bytes(b"abc")
@@ -245,4 +243,4 @@ def test_stop_respects_transcript_trigger_destination_clipboard(
     result = runner.invoke(main, ["stop"])
     assert result.exit_code == 0, result.output
     assert result.output.strip() == "hello"
-    assert clipboard_calls == ["hello"]
+    assert clipboard_calls == []

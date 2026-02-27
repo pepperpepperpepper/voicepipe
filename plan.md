@@ -309,8 +309,8 @@ Add runtime toggles:
     - Timeout case harness added; `sleep 2` audio fixture recorded + included (shell execution remains opt-in).
 - Add round 4 fixtures for plugin verbs (pure transforms; no filesystem writes). (DONE: 2026-02-25)
   - Added round 4 live tests for plugin verb gating + metadata invariants (uses round 4 audio fixtures). (DONE: 2026-02-25)
-- Harden command-output routing in typing workflows (DONE: 2026-02-27)
-  - Default `execute` destination to `clipboard` and avoid typing multi-line command/script output into terminals; always persist output for replay.
+- Align Zwingli output destination with VoicePipe invocation (DONE: 2026-02-27)
+  - Zwingli outputs follow the VoicePipe command's output mode (print/type/clipboard); no per-verb destination overrides are applied by default.
 
 ---
 
@@ -537,6 +537,6 @@ then optionally run extra LLM processing before the final destination (typing, e
   - Add a config/default for a transcription prompt (e.g. `VOICEPIPE_TRANSCRIBE_PROMPT`). (DONE: 2026-02-25)
   - Support appending trigger-word hints to the STT prompt (opt-in via `VOICEPIPE_TRANSCRIBE_PROMPT_APPEND_TRIGGERS=1`). (DONE: 2026-02-25)
 - Extend transcript triggers beyond “single pass text rewrite”:
-  - Add per-verb `destination` hints (`print|clipboard|type`) surfaced in dispatch metadata / `--json` (and optionally respected when `VOICEPIPE_COMMANDS_RESPECT_DESTINATION=1`). (DONE: 2026-02-25)
+  - Add per-verb `destination` hints (`print|clipboard|type`) surfaced in dispatch metadata / `--json` (metadata only; output routing stays controlled by VoicePipe flags/mode). (DONE: 2026-02-25)
   - Allow trigger actions to return structured output (e.g. `{destination: "type"|"clipboard"|"shell", text: ...}`).
   - Support multi-step LLM processing for advanced workflows (e.g. command extraction + safety pass) using `zwingli_advanced.wav` as the first regression fixture.

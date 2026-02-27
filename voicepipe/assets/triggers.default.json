@@ -8,10 +8,10 @@
   "verbs": {
     "strip": { "type": "builtin" },
     "rewrite": { "type": "llm", "profile": "rewrite" },
-    "shell": { "type": "llm", "profile": "shell", "destination": "clipboard" },
-    "bash": { "type": "llm", "profile": "shell", "destination": "clipboard" },
+    "shell": { "type": "llm", "profile": "shell" },
+    "bash": { "type": "llm", "profile": "shell" },
     "email": { "type": "llm", "profile": "email_draft" },
-    "execute": { "type": "execute", "enabled": true, "timeout_seconds": 10, "destination": "clipboard" }
+    "execute": { "type": "execute", "enabled": true, "timeout_seconds": 10 }
   },
   "llm_profiles": {
     "rewrite": {

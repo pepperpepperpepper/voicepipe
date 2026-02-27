@@ -328,7 +328,7 @@ def test_get_transcript_commands_config_reads_dispatch_and_verbs(tmp_path: Path,
     assert cfg.llm_profiles["bash"].user_prompt_template == "Write a bash script for: {{text}}"
 
 
-def test_get_transcript_commands_config_defaults_execute_destination_clipboard(
+def test_get_transcript_commands_config_execute_destination_defaults_to_none(
     tmp_path: Path, monkeypatch
 ) -> None:
     config = _reload_config()
@@ -353,7 +353,7 @@ def test_get_transcript_commands_config_defaults_execute_destination_clipboard(
 
     cfg = config.get_transcript_commands_config(load_env=False)
     assert cfg.verbs["execute"].type == "execute"
-    assert cfg.verbs["execute"].destination == "clipboard"
+    assert cfg.verbs["execute"].destination is None
 
 
 def test_get_transcript_commands_config_env_var_overrides_triggers_but_uses_verbs(

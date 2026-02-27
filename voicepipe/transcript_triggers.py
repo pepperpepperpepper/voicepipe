@@ -291,32 +291,12 @@ def _resolve_shell_timeout_seconds(*, timeout_seconds: float | None = None) -> f
     return float(resolved)
 
 
-def _strip_trailing_sentence_punct_from_shell_command(command: str) -> str:
-    """Strip common STT sentence-ending punctuation from the final token.
-
-    Example: "ls -la." -> "ls -la"
-    This is intentionally conservative to avoid changing paths like "..".
-    """
-    cleaned = (command or "").strip()
+def _run_shell_command(
+    command: str, *, timeout_seconds: float | None = None
+) -> tuple[str, str, dict[str, Any]]:
+    cleaned = _strip_trailing_sentence_punct_from_shell_command(command)
     if not cleaned:
-        return ""
-    parts = cleaned.split()
-    if not parts:
-        return cleaned
-    last = parts[-1]
-    if last and all(ch == "." for ch in last):
-        return cleaned
-    trimmed_last = last.rstrip(".?!")
-    if not trimmed_last or trimmed_last == last:
-        return cleaned
-    parts[-1] = trimmed_last
-    return " ".join(parts)
-
-
-def _action_shell(prompt: str, *, timeout_seconds: float | None = None) -> tuple[str, dict[str, Any]]:
-    cleaned = _strip_trailing_sentence_punct_from_shell_command((prompt or ""))
-    if not cleaned:
-        return "", {"returncode": 0, "duration_ms": 0}
+        return "", "", {"returncode": 0, "duration_ms": 0}
 
     if (os.environ.get("VOICEPIPE_SHELL_ALLOW") or "").strip() != "1":
         _write_zwingli_debug_event(
@@ -353,8 +333,6 @@ def _action_shell(prompt: str, *, timeout_seconds: float | None = None) -> tuple
 
         stdout = proc.stdout or ""
         stderr = proc.stderr or ""
-        output = stdout if stdout.strip() else stderr
-        output = output.rstrip("\n")
 
         meta: dict[str, Any] = {
             "returncode": int(proc.returncode),
@@ -363,6 +341,7 @@ def _action_shell(prompt: str, *, timeout_seconds: float | None = None) -> tuple
         }
         if proc.returncode != 0:
             meta["error"] = "nonzero-exit"
+
         _write_zwingli_debug_event(
             {
                 "event": "shell_complete",
@@ -374,7 +353,7 @@ def _action_shell(prompt: str, *, timeout_seconds: float | None = None) -> tuple
                 "stderr": stderr,
             }
         )
-        return output, meta
+        return stdout, stderr, meta
     except subprocess.TimeoutExpired as e:
         duration_ms = int((time.monotonic() - started) * 1000)
         raw_stdout = getattr(e, "stdout", None)
@@ -388,9 +367,6 @@ def _action_shell(prompt: str, *, timeout_seconds: float | None = None) -> tuple
             stdout = stdout.decode("utf-8", errors="replace")
         if isinstance(stderr, bytes):
             stderr = stderr.decode("utf-8", errors="replace")
-
-        output = stdout if str(stdout).strip() else str(stderr)
-        output = str(output).rstrip("\n")
 
         meta = {
             "returncode": None,
@@ -408,7 +384,56 @@ def _action_shell(prompt: str, *, timeout_seconds: float | None = None) -> tuple
                 "stderr": stderr,
             }
         )
-        return output, meta
+        return str(stdout), str(stderr), meta
+
+
+def _strip_trailing_sentence_punct_from_shell_command(command: str) -> str:
+    """Strip common STT sentence-ending punctuation from the final token.
+
+    Example: "ls -la." -> "ls -la"
+    This is intentionally conservative to avoid changing paths like "..".
+    """
+    cleaned = (command or "").strip()
+    if not cleaned:
+        return ""
+    parts = cleaned.split()
+    if not parts:
+        return cleaned
+    last = parts[-1]
+    if last and all(ch == "." for ch in last):
+        return cleaned
+    trimmed_last = last.rstrip(".?!")
+    if not trimmed_last or trimmed_last == last:
+        return cleaned
+    parts[-1] = trimmed_last
+    return " ".join(parts)
+
+
+def _action_shell(prompt: str, *, timeout_seconds: float | None = None) -> tuple[str, dict[str, Any]]:
+    stdout, stderr, meta = _run_shell_command(prompt, timeout_seconds=timeout_seconds)
+    output = stdout if stdout.strip() else stderr
+    output = (output or "").rstrip("\n")
+    return output, meta
+
+
+def _action_execute(prompt: str, *, timeout_seconds: float | None = None) -> tuple[str, dict[str, Any]]:
+    """Execute a shell command, but return the command text (not stdout).
+
+    This avoids typing multi-line stdout into terminals, which can cause the
+    shell to execute each output line as a separate command.
+    """
+
+    cleaned = _strip_trailing_sentence_punct_from_shell_command(prompt)
+    stdout, stderr, meta = _run_shell_command(cleaned, timeout_seconds=timeout_seconds)
+
+    output = stdout if stdout.strip() else stderr
+    output = (output or "").rstrip("\n")
+    if output:
+        meta["output_preview"] = _truncate_for_log(output, max_chars=4000)
+        meta["stdout_len"] = int(len(stdout))
+        meta["stderr_len"] = int(len(stderr))
+
+    return cleaned, meta
 
 
 _PLUGIN_PATH_CACHE: dict[str, tuple[int, Callable[[str], object]]] = {}
@@ -611,7 +636,14 @@ def _dispatch_prompt(prompt: str, *, commands: TranscriptCommandsConfig) -> tupl
                 template_applied = True
             out_text, inner_meta = _action_zwingli_profile(profile_prompt, profile=profile)
         elif action == "shell":
-            out_text, inner_meta = _action_shell(args, timeout_seconds=verb_cfg.timeout_seconds)
+            if str(getattr(verb_cfg, "type", "") or "").strip().lower() == "execute":
+                out_text, inner_meta = _action_execute(
+                    args, timeout_seconds=verb_cfg.timeout_seconds
+                )
+            else:
+                out_text, inner_meta = _action_shell(
+                    args, timeout_seconds=verb_cfg.timeout_seconds
+                )
         else:
             handler = _ACTIONS.get(action)
             if handler is None:

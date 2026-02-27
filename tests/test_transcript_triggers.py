@@ -244,6 +244,46 @@ def test_apply_transcript_triggers_dispatch_shell_uses_verb_timeout_seconds(monk
     assert meta["meta"]["handler_meta"]["timeout_seconds"] == 5.0
 
 
+def test_apply_transcript_triggers_dispatch_execute_runs_but_returns_command(monkeypatch) -> None:
+    monkeypatch.setenv("VOICEPIPE_SHELL_ALLOW", "1")
+
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "execute": config.TranscriptVerbConfig(
+                action="shell",
+                enabled=True,
+                type="execute",
+                timeout_seconds=5.0,
+            )
+        },
+    )
+
+    def _fake_run(cmd, **kwargs):
+        assert cmd == "echo hi"
+        assert kwargs.get("timeout") == 5.0
+        assert kwargs.get("shell") is True
+        assert kwargs.get("capture_output") is True
+        assert kwargs.get("stdin") is subprocess.DEVNULL
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="hello\n", stderr="")
+
+    monkeypatch.setattr(tt.subprocess, "run", _fake_run)
+
+    out, meta = tt.apply_transcript_triggers("zwingli execute echo hi", commands=commands)
+    assert out == "echo hi"
+    assert meta is not None
+    assert meta["ok"] is True
+    assert meta["meta"]["mode"] == "verb"
+    assert meta["meta"]["verb"] == "execute"
+    assert meta["meta"]["verb_type"] == "execute"
+    assert meta["meta"]["action"] == "shell"
+    handler_meta = meta["meta"]["handler_meta"]
+    assert handler_meta["returncode"] == 0
+    assert handler_meta["timeout_seconds"] == 5.0
+    assert handler_meta["output_preview"] == "hello"
+
+
 def test_apply_transcript_triggers_dispatch_shell_timeout_reports_error(monkeypatch) -> None:
     monkeypatch.setenv("VOICEPIPE_SHELL_ALLOW", "1")
 

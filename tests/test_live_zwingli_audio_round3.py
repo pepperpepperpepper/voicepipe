@@ -292,7 +292,7 @@ def test_live_zwingli_audio_round3_execute_enabled_shell_allowed_runs_echo(
     assert handler_meta.get("timeout_seconds") == 2.0
 
     _assert_output_does_not_start_with_trigger(out, commands=commands)
-    _assert_contains_ordered_tokens(out, ["hello", "world"], label="output")
+    _assert_contains_ordered_tokens(out, ["echo", "hello", "world"], label="output")
 
 
 def test_live_zwingli_audio_round3_execute_timeout(

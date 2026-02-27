@@ -50,11 +50,13 @@ jobs:
           python -m pip install .
           python -m pip install pytest
 
-      - name: Check OPENAI_API_KEY
+      - name: Warn if OPENAI_API_KEY missing
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          test -n "$OPENAI_API_KEY"
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "::warning::OPENAI_API_KEY secret is not set; recorded Zwingli audio tests will be skipped."
+          fi
 
       - name: Run recorded Zwingli audio tests
         env:

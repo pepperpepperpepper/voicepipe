@@ -17,6 +17,7 @@ from voicepipe.config import (
     TranscriptLLMProfileConfig,
     TranscriptPluginConfig,
     TranscriptVerbConfig,
+    get_transcript_triggers,
     get_transcript_commands_config,
 )
 
@@ -704,15 +705,21 @@ def apply_transcript_triggers(
 
     If no trigger matches, this returns the original text and `None` metadata.
     """
-    resolved_commands: TranscriptCommandsConfig
+    resolved_triggers: Mapping[str, str]
+    resolved_commands: TranscriptCommandsConfig | None = None
+
     if commands is not None:
         resolved_commands = commands
+        resolved_triggers = commands.triggers
     elif triggers is not None:
-        resolved_commands = _default_commands_for_triggers(triggers)
+        resolved_triggers = triggers
     else:
-        resolved_commands = get_transcript_commands_config(load_env=False)
+        # Lightweight hot path: load trigger prefixes only. Full verbs/profiles
+        # config is loaded lazily only if a trigger matches and requests it
+        # (e.g. action=dispatch).
+        resolved_triggers = get_transcript_triggers(load_env=False)
 
-    match = match_transcript_trigger(text, triggers=resolved_commands.triggers)
+    match = match_transcript_trigger(text, triggers=resolved_triggers)
     if match is None:
         return text, None
 
@@ -728,8 +735,17 @@ def apply_transcript_triggers(
     )
 
     if match.action == "dispatch":
+        if resolved_commands is None:
+            if triggers is not None:
+                resolved_commands = _default_commands_for_triggers(resolved_triggers)
+            else:
+                resolved_commands = get_transcript_commands_config(load_env=False)
+
         try:
-            output_text, meta = _dispatch_prompt(match.remainder, commands=resolved_commands)
+            output_text, meta = _dispatch_prompt(
+                match.remainder,
+                commands=resolved_commands,
+            )
             payload: dict[str, Any] = {
                 "ok": True,
                 "trigger": match.trigger,

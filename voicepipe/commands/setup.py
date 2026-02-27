@@ -224,12 +224,27 @@ def setup(
     else:
         click.echo(f"env file has OPENAI_API_KEY: {has_key_in_file}")
 
+    shell_allow_in_file = (env_values.get("VOICEPIPE_SHELL_ALLOW") or "").strip()
+    if not shell_allow_in_file:
+        from_env = (os.environ.get("VOICEPIPE_SHELL_ALLOW") or "").strip()
+        if from_env:
+            upsert_env_var("VOICEPIPE_SHELL_ALLOW", from_env)
+            click.echo("Configured VOICEPIPE_SHELL_ALLOW in env file (source: env var)")
+        else:
+            upsert_env_var("VOICEPIPE_SHELL_ALLOW", "1")
+            click.echo(
+                "Configured VOICEPIPE_SHELL_ALLOW=1 (enables `zwingli execute` shell execution)."
+            )
+            click.echo(
+                "Warning: this allows running shell commands from transcribed speech. "
+                "Disable by setting VOICEPIPE_SHELL_ALLOW=0.",
+                err=True,
+            )
+
     triggers_path = ensure_triggers_json()
     click.echo(f"triggers config: {triggers_path}")
     if _enable_execute_in_triggers_json(triggers_path):
-        click.echo(
-            "Enabled `execute` verb in triggers.json (shell execution still requires VOICEPIPE_SHELL_ALLOW=1)."
-        )
+        click.echo("Enabled `execute` verb in triggers.json.")
 
     if systemd:
         if is_windows():

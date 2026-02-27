@@ -76,6 +76,11 @@ def _payload_is_execute(payload: object) -> bool:
     if not isinstance(meta, dict):
         return False
 
+    if meta.get("enter") is True:
+        return True
+    handler_meta = meta.get("handler_meta")
+    if isinstance(handler_meta, dict) and handler_meta.get("enter") is True:
+        return True
     return str(meta.get("verb_type") or "").strip().lower() == "execute"
 
 

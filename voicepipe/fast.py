@@ -224,6 +224,11 @@ def _is_execute_trigger(result: object) -> bool:
     meta = trigger.get("meta")
     if not isinstance(meta, dict):
         return False
+    if meta.get("enter") is True:
+        return True
+    handler_meta = meta.get("handler_meta")
+    if isinstance(handler_meta, dict) and handler_meta.get("enter") is True:
+        return True
     return str(meta.get("verb_type") or "").strip().lower() == "execute"
 
 

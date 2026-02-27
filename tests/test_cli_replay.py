@@ -133,6 +133,42 @@ def test_replay_types_enter_for_execute_trigger(monkeypatch, isolated_home) -> N
     assert len(enter_calls) == 1
 
 
+def test_replay_types_enter_when_handler_meta_requests_enter(monkeypatch, isolated_home) -> None:
+    save_last_output(
+        "ls -la",
+        payload={
+            "transcript_trigger": {
+                "meta": {"mode": "verb", "action": "execute", "handler_meta": {"enter": True}}
+            }
+        },
+    )
+
+    calls: list[str] = []
+    enter_calls: list[object] = []
+
+    import importlib
+
+    replay_cmd = importlib.import_module("voicepipe.commands.replay")
+
+    def _fake_type(text: str):
+        calls.append(text)
+        return True, None
+
+    monkeypatch.setattr(replay_cmd, "type_text", _fake_type)
+
+    def _fake_enter(**_kwargs):
+        enter_calls.append(object())
+        return True, None
+
+    monkeypatch.setattr(replay_cmd, "press_enter", _fake_enter)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["replay", "--type"])
+    assert result.exit_code == 0
+    assert calls == ["ls -la"]
+    assert len(enter_calls) == 1
+
+
 def test_replay_types_key_sequence_for_type_trigger(monkeypatch, isolated_home) -> None:
     seq = [
         {"kind": "key", "key": "up", "mods": []},

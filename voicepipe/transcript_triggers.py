@@ -502,6 +502,12 @@ _TYPE_MOD_ALIASES = {
 _TYPE_KEY_ALIASES = {
     "enter": "enter",
     "return": "enter",
+    "submit": "enter",
+    "send": "enter",
+    "go": "enter",
+    "newline": "enter",
+    "linefeed": "enter",
+    "linebreak": "enter",
     "tab": "tab",
     "escape": "esc",
     "esc": "esc",
@@ -538,6 +544,18 @@ def _parse_type_key(tokens: list[str], i: int) -> tuple[str | None, int]:
         return None, 1
 
     tok = tokens[i]
+    if tok == "new" and i + 1 < len(tokens) and tokens[i + 1] == "line":
+        return "enter", 2
+
+    if tok == "line" and i + 1 < len(tokens) and tokens[i + 1] == "break":
+        return "enter", 2
+
+    if tok == "carriage" and i + 1 < len(tokens) and tokens[i + 1] == "return":
+        return "enter", 2
+
+    if tok == "cr" and i + 1 < len(tokens) and tokens[i + 1] == "lf":
+        return "enter", 2
+
     if tok in ("up", "down", "left", "right"):
         return tok, 1
 

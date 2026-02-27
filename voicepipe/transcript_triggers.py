@@ -418,23 +418,20 @@ def _action_shell(prompt: str, *, timeout_seconds: float | None = None) -> tuple
 
 
 def _action_execute(prompt: str, *, timeout_seconds: float | None = None) -> tuple[str, dict[str, Any]]:
-    """Execute a shell command, but return the command text (not stdout).
+    """Prepare a shell command for *typing* into a terminal and pressing Enter.
 
-    This avoids typing multi-line stdout into terminals, which can cause the
-    shell to execute each output line as a separate command.
+    This action must never spawn a subprocess to run the command; it only
+    returns the cleaned command text and metadata indicating that an Enter
+    keystroke should be sent by the caller when typing is the destination.
+
+    `timeout_seconds` is accepted for config compatibility but is unused.
     """
-
+    del timeout_seconds
     cleaned = _strip_trailing_sentence_punct_from_shell_command(prompt)
-    stdout, stderr, meta = _run_shell_command(cleaned, timeout_seconds=timeout_seconds)
-
-    output = stdout if stdout.strip() else stderr
-    output = (output or "").rstrip("\n")
-    if output:
-        meta["output_preview"] = _truncate_for_log(output, max_chars=4000)
-        meta["stdout_len"] = int(len(stdout))
-        meta["stderr_len"] = int(len(stderr))
-
-    return cleaned, meta
+    cleaned = (cleaned or "").strip()
+    if not cleaned:
+        return "", {"enter": False}
+    return cleaned, {"enter": True}
 
 
 _PLUGIN_PATH_CACHE: dict[str, tuple[int, Callable[[str], object]]] = {}
@@ -556,6 +553,7 @@ _ACTIONS: dict[str, Callable[[str], tuple[str, dict[str, Any]]]] = {
     "strip": _action_strip,
     "zwingli": _action_zwingli,
     "shell": _action_shell,
+    "execute": _action_execute,
 }
 
 _DISPATCH_SEPARATORS = (",", ":", ";", ".")
@@ -636,15 +634,10 @@ def _dispatch_prompt(prompt: str, *, commands: TranscriptCommandsConfig) -> tupl
                 )
                 template_applied = True
             out_text, inner_meta = _action_zwingli_profile(profile_prompt, profile=profile)
+        elif action == "execute":
+            out_text, inner_meta = _action_execute(args, timeout_seconds=verb_cfg.timeout_seconds)
         elif action == "shell":
-            if str(getattr(verb_cfg, "type", "") or "").strip().lower() == "execute":
-                out_text, inner_meta = _action_execute(
-                    args, timeout_seconds=verb_cfg.timeout_seconds
-                )
-            else:
-                out_text, inner_meta = _action_shell(
-                    args, timeout_seconds=verb_cfg.timeout_seconds
-                )
+            out_text, inner_meta = _action_shell(args, timeout_seconds=verb_cfg.timeout_seconds)
         else:
             handler = _ACTIONS.get(action)
             if handler is None:

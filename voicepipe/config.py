@@ -549,6 +549,7 @@ _DEFAULT_TRIGGERS_JSON_TEMPLATE_FALLBACK = """{
     \"shell\": { \"type\": \"llm\", \"profile\": \"shell\" },
     \"bash\": { \"type\": \"llm\", \"profile\": \"shell\" },
     \"email\": { \"type\": \"llm\", \"profile\": \"email_draft\" },
+    \"subprocess\": { \"type\": \"shell\", \"enabled\": true, \"timeout_seconds\": 10 },
     \"execute\": { \"type\": \"execute\", \"enabled\": true, \"timeout_seconds\": 10 }
   },
   \"llm_profiles\": {
@@ -1040,8 +1041,10 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
                 action = verb
             elif verb_type == "llm":
                 action = "zwingli"
-            elif verb_type in ("shell", "execute"):
+            elif verb_type == "shell":
                 action = "shell"
+            elif verb_type == "execute":
+                action = "execute"
             else:
                 action = verb
         else:

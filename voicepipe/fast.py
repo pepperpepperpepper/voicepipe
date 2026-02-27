@@ -216,6 +216,16 @@ def send_transcribe_request_result(audio_file: str, *, source: str) -> "Transcri
             warnings=[],
         )
 
+def _is_execute_trigger(result: object) -> bool:
+    trigger = getattr(result, "transcript_trigger", None)
+    if not isinstance(trigger, dict):
+        return False
+
+    meta = trigger.get("meta")
+    if not isinstance(meta, dict):
+        return False
+    return str(meta.get("verb_type") or "").strip().lower() == "execute"
+
 
 def send_transcribe_request_fileobj(fh: BinaryIO, *, filename: str) -> str:
     """Transcribe audio from a file-like object without writing a temp WAV."""
@@ -374,6 +384,14 @@ def _perform_toggle_post_stop(post: _TogglePostStop) -> None:
         )
         if not typed_ok:
             fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
+        elif _is_execute_trigger(result) and output_text.strip():
+            ok2, err2 = type_text(
+                "\n",
+                window_id=target_window,
+                backend=typing_backend,  # type: ignore[arg-type]
+            )
+            if not ok2:
+                fast_log(f"[TOGGLE] Warning: could not press Enter: {err2}")
         transcription_ok = True
     else:
         fast_log("[TOGGLE] No transcription returned")
@@ -711,6 +729,20 @@ def execute_toggle_inprocess() -> None:
                         fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
                     else:
                         fast_log(f"[TOGGLE] Typed transcription (ok) in {t_type_ms}ms")
+                        if (
+                            isinstance(trigger_meta, dict)
+                            and isinstance(trigger_meta.get("meta"), dict)
+                            and str(trigger_meta["meta"].get("verb_type") or "").strip().lower()
+                            == "execute"
+                            and output_text.strip()
+                        ):
+                            ok2, err2 = type_text(
+                                "\n",
+                                window_id=target_window,
+                                backend=typing_backend,
+                            )
+                            if not ok2:
+                                fast_log(f"[TOGGLE] Warning: could not press Enter: {err2}")
                     transcription_ok = True
                 else:
                     fast_log("[TOGGLE] No transcription returned")

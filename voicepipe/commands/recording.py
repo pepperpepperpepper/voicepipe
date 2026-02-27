@@ -31,6 +31,15 @@ from voicepipe.platform import is_windows
 
 logger = logging.getLogger(__name__)
 
+def _is_execute_trigger(result: TranscriptionResult) -> bool:
+    trigger = getattr(result, "transcript_trigger", None)
+    if not isinstance(trigger, dict):
+        return False
+    meta = trigger.get("meta")
+    if not isinstance(meta, dict):
+        return False
+    return str(meta.get("verb_type") or "").strip().lower() == "execute"
+
 def _emit_transcription(
     result,
     *,
@@ -105,6 +114,10 @@ def _emit_transcription(
         ok, err = type_text(output_text)
         if not ok:
             click.echo(f"Error typing text: {err}", err=True)
+        elif _is_execute_trigger(result) and output_text.strip():
+            ok2, err2 = type_text("\n")
+            if not ok2:
+                click.echo(f"Error pressing Enter: {err2}", err=True)
 
 
 def _transcribe_and_finalize(

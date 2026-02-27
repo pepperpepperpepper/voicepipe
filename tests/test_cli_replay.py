@@ -43,3 +43,83 @@ def test_replay_respects_default_clipboard_action(monkeypatch, isolated_home) ->
     assert result.exit_code == 0
     assert result.output.strip() == "hi there"
     assert calls == ["hi there"]
+
+
+def test_replay_execute_output_escapes_newlines_for_typing(monkeypatch, isolated_home) -> None:
+    save_last_output(
+        "echo hi",
+        payload={
+            "transcript_trigger": {
+                "meta": {"handler_meta": {"output_preview": "line1\nline2\n"}}
+            }
+        },
+    )
+
+    calls: list[str] = []
+
+    import importlib
+
+    replay_cmd = importlib.import_module("voicepipe.commands.replay")
+
+    def _fake_type(text: str):
+        calls.append(text)
+        return True, None
+
+    monkeypatch.setattr(replay_cmd, "type_text", _fake_type)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["replay", "--execute-output", "--type"])
+    assert result.exit_code == 0
+    assert calls == ["line1\\nline2"]
+
+
+def test_replay_execute_output_raw_keeps_newlines(monkeypatch, isolated_home) -> None:
+    save_last_output(
+        "echo hi",
+        payload={
+            "transcript_trigger": {
+                "meta": {"handler_meta": {"output_preview": "line1\nline2\n"}}
+            }
+        },
+    )
+
+    calls: list[str] = []
+
+    import importlib
+
+    replay_cmd = importlib.import_module("voicepipe.commands.replay")
+
+    def _fake_type(text: str):
+        calls.append(text)
+        return True, None
+
+    monkeypatch.setattr(replay_cmd, "type_text", _fake_type)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["replay", "--execute-output", "--type", "--raw"])
+    assert result.exit_code == 0
+    assert calls == ["line1\nline2"]
+
+
+def test_replay_types_enter_for_execute_trigger(monkeypatch, isolated_home) -> None:
+    save_last_output(
+        "ls -la",
+        payload={"transcript_trigger": {"meta": {"mode": "verb", "verb_type": "execute"}}},
+    )
+
+    calls: list[str] = []
+
+    import importlib
+
+    replay_cmd = importlib.import_module("voicepipe.commands.replay")
+
+    def _fake_type(text: str):
+        calls.append(text)
+        return True, None
+
+    monkeypatch.setattr(replay_cmd, "type_text", _fake_type)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["replay", "--type"])
+    assert result.exit_code == 0
+    assert calls == ["ls -la", "\n"]

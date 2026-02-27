@@ -11,6 +11,7 @@
     "shell": { "type": "llm", "profile": "shell" },
     "bash": { "type": "llm", "profile": "shell" },
     "email": { "type": "llm", "profile": "email_draft" },
+    "subprocess": { "type": "shell", "enabled": true, "timeout_seconds": 10 },
     "execute": { "type": "execute", "enabled": true, "timeout_seconds": 10 }
   },
   "llm_profiles": {

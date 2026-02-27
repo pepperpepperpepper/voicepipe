@@ -214,7 +214,7 @@ def test_apply_transcript_triggers_dispatch_shell_uses_verb_timeout_seconds(monk
         triggers={"zwingli": "dispatch"},
         dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
         verbs={
-            "execute": config.TranscriptVerbConfig(
+            "subprocess": config.TranscriptVerbConfig(
                 action="shell",
                 enabled=True,
                 type="shell",
@@ -233,26 +233,24 @@ def test_apply_transcript_triggers_dispatch_shell_uses_verb_timeout_seconds(monk
 
     monkeypatch.setattr(tt.subprocess, "run", _fake_run)
 
-    out, meta = tt.apply_transcript_triggers("zwingli execute echo hi", commands=commands)
+    out, meta = tt.apply_transcript_triggers("zwingli subprocess echo hi", commands=commands)
     assert out == "hello"
     assert meta is not None
     assert meta["ok"] is True
     assert meta["meta"]["mode"] == "verb"
-    assert meta["meta"]["verb"] == "execute"
+    assert meta["meta"]["verb"] == "subprocess"
     assert meta["meta"]["action"] == "shell"
     assert meta["meta"]["timeout_seconds"] == 5.0
     assert meta["meta"]["handler_meta"]["timeout_seconds"] == 5.0
 
 
-def test_apply_transcript_triggers_dispatch_execute_runs_but_returns_command(monkeypatch) -> None:
-    monkeypatch.setenv("VOICEPIPE_SHELL_ALLOW", "1")
-
+def test_apply_transcript_triggers_dispatch_execute_types_command_and_requests_enter(monkeypatch) -> None:
     commands = config.TranscriptCommandsConfig(
         triggers={"zwingli": "dispatch"},
         dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
         verbs={
             "execute": config.TranscriptVerbConfig(
-                action="shell",
+                action="execute",
                 enabled=True,
                 type="execute",
                 timeout_seconds=5.0,
@@ -260,28 +258,21 @@ def test_apply_transcript_triggers_dispatch_execute_runs_but_returns_command(mon
         },
     )
 
-    def _fake_run(cmd, **kwargs):
-        assert cmd == "echo hi"
-        assert kwargs.get("timeout") == 5.0
-        assert kwargs.get("shell") is True
-        assert kwargs.get("capture_output") is True
-        assert kwargs.get("stdin") is subprocess.DEVNULL
-        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="hello\n", stderr="")
+    def _fake_run(*_args, **_kwargs):
+        raise AssertionError("execute must not spawn a subprocess")
 
     monkeypatch.setattr(tt.subprocess, "run", _fake_run)
 
-    out, meta = tt.apply_transcript_triggers("zwingli execute echo hi", commands=commands)
+    out, meta = tt.apply_transcript_triggers("zwingli execute echo hi.", commands=commands)
     assert out == "echo hi"
     assert meta is not None
     assert meta["ok"] is True
     assert meta["meta"]["mode"] == "verb"
     assert meta["meta"]["verb"] == "execute"
     assert meta["meta"]["verb_type"] == "execute"
-    assert meta["meta"]["action"] == "shell"
+    assert meta["meta"]["action"] == "execute"
     handler_meta = meta["meta"]["handler_meta"]
-    assert handler_meta["returncode"] == 0
-    assert handler_meta["timeout_seconds"] == 5.0
-    assert handler_meta["output_preview"] == "hello"
+    assert handler_meta["enter"] is True
 
 
 def test_apply_transcript_triggers_dispatch_shell_timeout_reports_error(monkeypatch) -> None:
@@ -291,7 +282,7 @@ def test_apply_transcript_triggers_dispatch_shell_timeout_reports_error(monkeypa
         triggers={"zwingli": "dispatch"},
         dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
         verbs={
-            "execute": config.TranscriptVerbConfig(
+            "subprocess": config.TranscriptVerbConfig(
                 action="shell",
                 enabled=True,
                 type="shell",
@@ -305,11 +296,12 @@ def test_apply_transcript_triggers_dispatch_shell_timeout_reports_error(monkeypa
 
     monkeypatch.setattr(tt.subprocess, "run", _fake_run)
 
-    out, meta = tt.apply_transcript_triggers("zwingli execute echo hi", commands=commands)
+    out, meta = tt.apply_transcript_triggers("zwingli subprocess echo hi", commands=commands)
     assert out == "partial"
     assert meta is not None
     assert meta["ok"] is True
     assert meta["meta"]["mode"] == "verb"
+    assert meta["meta"]["verb"] == "subprocess"
     assert meta["meta"]["action"] == "shell"
     handler_meta = meta["meta"]["handler_meta"]
     assert handler_meta["error"] == "timeout"

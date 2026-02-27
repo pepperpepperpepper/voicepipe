@@ -64,6 +64,21 @@ def _extract_execute_output_preview(payload: object) -> str | None:
     return cleaned or None
 
 
+def _payload_is_execute(payload: object) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    trigger = payload.get("transcript_trigger") or payload.get("trigger_meta")
+    if not isinstance(trigger, dict):
+        return False
+
+    meta = trigger.get("meta")
+    if not isinstance(meta, dict):
+        return False
+
+    return str(meta.get("verb_type") or "").strip().lower() == "execute"
+
+
 def _escape_multiline_for_typing(text: str) -> str:
     # Prevent accidental execution when typing multi-line output into a shell.
     # Keep it readable-ish while preserving a reversible representation.
@@ -174,6 +189,10 @@ def replay(type_: bool, clipboard: bool, clear: bool, json_: bool, execute_outpu
         ok, err = type_text(replay_text)
         if not ok:
             click.echo(f"Error typing text: {err}", err=True)
+        elif not execute_output and _payload_is_execute(entry.payload) and replay_text.strip():
+            ok2, err2 = type_text("\n")
+            if not ok2:
+                click.echo(f"Error pressing Enter: {err2}", err=True)
 
     if clear:
         clear_last_output()

@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import importlib
 import importlib.util
+import json
 import os
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +27,101 @@ class TranscriptTriggerMatch:
     action: str
     remainder: str
     reason: str
+
+
+_ZWINGLI_DEBUG_LOG_MAX_BYTES = 20 * 1024 * 1024
+
+
+def _zwingli_debug_log_enabled() -> bool:
+    raw = (os.environ.get("VOICEPIPE_ZWINGLI_DEBUG_LOG") or "").strip().lower()
+    if raw in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    return True
+
+
+def _zwingli_debug_log_path() -> Path:
+    override = (os.environ.get("VOICEPIPE_ZWINGLI_DEBUG_LOG_FILE") or "").strip()
+    if override:
+        try:
+            return Path(override).expanduser()
+        except Exception:
+            return Path(override)
+    if os.name != "nt":
+        return Path("/tmp/zwingli-debug.log")
+    try:
+        return Path(tempfile.gettempdir()) / "zwingli-debug.log"
+    except Exception:
+        return Path("zwingli-debug.log")
+
+
+def _truncate_for_log(value: object, *, max_chars: int = 20_000) -> object:
+    if not isinstance(value, str):
+        return value
+    if max_chars <= 0:
+        return ""
+    if len(value) <= max_chars:
+        return value
+    return value[: max_chars - 1] + "…"
+
+
+def _maybe_rotate_debug_log(path: Path) -> None:
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return
+    except Exception:
+        return
+
+    try:
+        size = int(getattr(st, "st_size", 0) or 0)
+    except Exception:
+        size = 0
+    if size <= _ZWINGLI_DEBUG_LOG_MAX_BYTES:
+        return
+
+    backup = Path(str(path) + ".1")
+    try:
+        try:
+            backup.unlink(missing_ok=True)
+        except Exception:
+            pass
+        os.replace(path, backup)
+    except Exception:
+        # If rotation fails, carry on; logging should never break core behavior.
+        return
+
+
+def _write_zwingli_debug_event(event: dict[str, Any]) -> None:
+    if not _zwingli_debug_log_enabled():
+        return
+
+    payload = dict(event)
+    payload.setdefault("ts_ms", int(time.time() * 1000))
+    payload.setdefault("pid", int(os.getpid()))
+
+    # Keep the log usable when commands produce large output.
+    for key in ("text", "remainder", "prompt", "args", "command", "stdout", "stderr", "output_text", "error"):
+        if key in payload:
+            payload[key] = _truncate_for_log(payload[key])
+
+    try:
+        path = _zwingli_debug_log_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+
+        _maybe_rotate_debug_log(path)
+
+        line = json.dumps(payload, ensure_ascii=False)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+        try:
+            os.chmod(path, 0o600)
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 
 def match_transcript_trigger(
@@ -200,6 +297,13 @@ def _action_shell(prompt: str, *, timeout_seconds: float | None = None) -> tuple
         return "", {"returncode": 0, "duration_ms": 0}
 
     if (os.environ.get("VOICEPIPE_SHELL_ALLOW") or "").strip() != "1":
+        _write_zwingli_debug_event(
+            {
+                "event": "shell_blocked",
+                "command": cleaned,
+                "shell_allow": (os.environ.get("VOICEPIPE_SHELL_ALLOW") or "").strip(),
+            }
+        )
         raise RuntimeError(
             "Shell trigger action is disabled. Set VOICEPIPE_SHELL_ALLOW=1 to enable."
         )
@@ -207,6 +311,13 @@ def _action_shell(prompt: str, *, timeout_seconds: float | None = None) -> tuple
     timeout_s = _resolve_shell_timeout_seconds(timeout_seconds=timeout_seconds)
 
     started = time.monotonic()
+    _write_zwingli_debug_event(
+        {
+            "event": "shell_start",
+            "command": cleaned,
+            "timeout_seconds": float(timeout_s),
+        }
+    )
     try:
         proc = subprocess.run(
             cleaned,
@@ -230,6 +341,17 @@ def _action_shell(prompt: str, *, timeout_seconds: float | None = None) -> tuple
         }
         if proc.returncode != 0:
             meta["error"] = "nonzero-exit"
+        _write_zwingli_debug_event(
+            {
+                "event": "shell_complete",
+                "command": cleaned,
+                "returncode": int(proc.returncode),
+                "duration_ms": int(duration_ms),
+                "timeout_seconds": float(timeout_s),
+                "stdout": stdout,
+                "stderr": stderr,
+            }
+        )
         return output, meta
     except subprocess.TimeoutExpired as e:
         duration_ms = int((time.monotonic() - started) * 1000)
@@ -254,6 +376,16 @@ def _action_shell(prompt: str, *, timeout_seconds: float | None = None) -> tuple
             "timeout_seconds": float(timeout_s),
             "error": "timeout",
         }
+        _write_zwingli_debug_event(
+            {
+                "event": "shell_timeout",
+                "command": cleaned,
+                "duration_ms": int(duration_ms),
+                "timeout_seconds": float(timeout_s),
+                "stdout": stdout,
+                "stderr": stderr,
+            }
+        )
         return output, meta
 
 
@@ -530,6 +662,17 @@ def apply_transcript_triggers(
     if match is None:
         return text, None
 
+    _write_zwingli_debug_event(
+        {
+            "event": "trigger_match",
+            "text": (text or ""),
+            "trigger": match.trigger,
+            "action": match.action,
+            "reason": match.reason,
+            "remainder": match.remainder,
+        }
+    )
+
     if match.action == "dispatch":
         try:
             output_text, meta = _dispatch_prompt(match.remainder, commands=resolved_commands)
@@ -541,8 +684,27 @@ def apply_transcript_triggers(
             }
             if meta:
                 payload["meta"] = meta
+            _write_zwingli_debug_event(
+                {
+                    "event": "dispatch_ok",
+                    "trigger": match.trigger,
+                    "reason": match.reason,
+                    "remainder": match.remainder,
+                    "output_text": output_text,
+                    "meta": meta,
+                }
+            )
             return output_text, payload
         except Exception as e:
+            _write_zwingli_debug_event(
+                {
+                    "event": "dispatch_error",
+                    "trigger": match.trigger,
+                    "reason": match.reason,
+                    "remainder": match.remainder,
+                    "error": str(e),
+                }
+            )
             return match.remainder, {
                 "ok": False,
                 "trigger": match.trigger,
@@ -553,6 +715,15 @@ def apply_transcript_triggers(
 
     handler = _ACTIONS.get(match.action)
     if handler is None:
+        _write_zwingli_debug_event(
+            {
+                "event": "action_missing",
+                "trigger": match.trigger,
+                "action": match.action,
+                "reason": match.reason,
+                "remainder": match.remainder,
+            }
+        )
         return match.remainder, {
             "ok": False,
             "trigger": match.trigger,
@@ -571,8 +742,29 @@ def apply_transcript_triggers(
         }
         if meta:
             payload["meta"] = meta
+        _write_zwingli_debug_event(
+            {
+                "event": "action_ok",
+                "trigger": match.trigger,
+                "action": match.action,
+                "reason": match.reason,
+                "remainder": match.remainder,
+                "output_text": output_text,
+                "meta": meta,
+            }
+        )
         return output_text, payload
     except Exception as e:
+        _write_zwingli_debug_event(
+            {
+                "event": "action_error",
+                "trigger": match.trigger,
+                "action": match.action,
+                "reason": match.reason,
+                "remainder": match.remainder,
+                "error": str(e),
+            }
+        )
         return match.remainder, {
             "ok": False,
             "trigger": match.trigger,

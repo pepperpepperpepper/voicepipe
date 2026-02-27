@@ -329,6 +329,30 @@ def test_apply_transcript_triggers_dispatch_type_supports_ctrl_chords() -> None:
     assert first.get("mods") == ["ctrl"]
 
 
+def test_apply_transcript_triggers_dispatch_type_normalizes_case_and_ctrl_alias() -> None:
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "type": config.TranscriptVerbConfig(
+                action="type",
+                enabled=True,
+                type="type",
+            )
+        },
+    )
+
+    out, meta = tt.apply_transcript_triggers("Zwingli type CTRL B key", commands=commands)
+    assert out == "ctrl+b"
+    assert meta is not None
+    handler_meta = meta["meta"]["handler_meta"]
+    seq = handler_meta["sequence"]
+    assert isinstance(seq, list)
+    assert seq and seq[0]["kind"] == "key"
+    assert seq[0]["key"] == "b"
+    assert seq[0]["mods"] == ["ctrl"]
+
+
 def test_apply_transcript_triggers_dispatch_shell_timeout_reports_error(monkeypatch) -> None:
     monkeypatch.setenv("VOICEPIPE_SHELL_ALLOW", "1")
 

@@ -462,6 +462,9 @@ _TYPE_IGNORE_TOKENS = {
     "and",
     "then",
     "please",
+    "a",
+    "an",
+    "the",
     "comma",
     "colon",
     "semicolon",
@@ -469,11 +472,22 @@ _TYPE_IGNORE_TOKENS = {
     "full",
     "stop",
     "arrow",
+    "key",
+    "keys",
+    "press",
+    "pressed",
+    "hit",
+    "tap",
+    "push",
+    "hold",
+    "release",
 }
 
 _TYPE_MOD_ALIASES = {
     "control": "ctrl",
     "ctrl": "ctrl",
+    "ctl": "ctrl",
+    "cntrl": "ctrl",
     "shift": "shift",
     "alt": "alt",
     "option": "alt",
@@ -498,6 +512,10 @@ _TYPE_KEY_ALIASES = {
     "end": "end",
     "space": "space",
     "spacebar": "space",
+    "pageup": "pageup",
+    "pagedown": "pagedown",
+    "pgup": "pageup",
+    "pgdn": "pagedown",
     # Common single-token variants.
     "uparrow": "up",
     "downarrow": "down",
@@ -532,6 +550,9 @@ def _parse_type_key(tokens: list[str], i: int) -> tuple[str | None, int]:
 
     if tok == "back" and i + 1 < len(tokens) and tokens[i + 1] == "space":
         return "backspace", 2
+
+    if tok == "space" and i + 1 < len(tokens) and tokens[i + 1] == "bar":
+        return "space", 2
 
     alias = _TYPE_KEY_ALIASES.get(tok)
     if alias is not None:

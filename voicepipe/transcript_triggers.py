@@ -291,8 +291,30 @@ def _resolve_shell_timeout_seconds(*, timeout_seconds: float | None = None) -> f
     return float(resolved)
 
 
+def _strip_trailing_sentence_punct_from_shell_command(command: str) -> str:
+    """Strip common STT sentence-ending punctuation from the final token.
+
+    Example: "ls -la." -> "ls -la"
+    This is intentionally conservative to avoid changing paths like "..".
+    """
+    cleaned = (command or "").strip()
+    if not cleaned:
+        return ""
+    parts = cleaned.split()
+    if not parts:
+        return cleaned
+    last = parts[-1]
+    if last and all(ch == "." for ch in last):
+        return cleaned
+    trimmed_last = last.rstrip(".?!")
+    if not trimmed_last or trimmed_last == last:
+        return cleaned
+    parts[-1] = trimmed_last
+    return " ".join(parts)
+
+
 def _action_shell(prompt: str, *, timeout_seconds: float | None = None) -> tuple[str, dict[str, Any]]:
-    cleaned = (prompt or "").strip()
+    cleaned = _strip_trailing_sentence_punct_from_shell_command((prompt or ""))
     if not cleaned:
         return "", {"returncode": 0, "duration_ms": 0}
 

@@ -135,6 +135,22 @@ def test_apply_transcript_triggers_shell_executes(monkeypatch) -> None:
     assert meta["meta"]["returncode"] == 0
 
 
+def test_apply_transcript_triggers_shell_strips_trailing_sentence_punct(monkeypatch) -> None:
+    monkeypatch.setenv("VOICEPIPE_SHELL_ALLOW", "1")
+
+    def _fake_run(cmd, **kwargs):
+        assert cmd == "echo hi"
+        assert kwargs.get("shell") is True
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="hello\n", stderr="")
+
+    monkeypatch.setattr(tt.subprocess, "run", _fake_run)
+
+    out, meta = tt.apply_transcript_triggers("zwingli echo hi.", triggers={"zwingli": "shell"})
+    assert out == "hello"
+    assert meta is not None
+    assert meta["ok"] is True
+
+
 def test_apply_transcript_triggers_dispatch_unknown_verb_strips_remainder() -> None:
     commands = config.TranscriptCommandsConfig(
         triggers={"zwingli": "dispatch"},

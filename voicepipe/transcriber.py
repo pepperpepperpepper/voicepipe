@@ -84,6 +84,8 @@ Example: If speaker says "open quote hello close quote", transcribe as: "hello" 
             params["language"] = language
         if resolved_prompt:
             params["prompt"] = resolved_prompt
+        if effective_model in ("gpt-4o-transcribe", "gpt-4o-mini-transcribe"):
+            params["chunking_strategy"] = {"type": "server_vad"}
 
         transcript = self.client.audio.transcriptions.create(**params)
         if isinstance(transcript, str):

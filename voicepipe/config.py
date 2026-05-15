@@ -1073,6 +1073,35 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
     return out
 
 
+_USER_PROMPT_TEMPLATE_PLACEHOLDERS: frozenset[str] = frozenset({"{{text}}"})
+
+
+def _validate_user_prompt_template(template: str, *, profile_name: str) -> None:
+    """Reject templates that reference placeholders the renderer doesn't honor.
+
+    The renderer in transcript_triggers only substitutes the placeholders
+    listed in _USER_PROMPT_TEMPLATE_PLACEHOLDERS; any other ``{{...}}`` token
+    would pass through verbatim, which looks like silent misconfiguration
+    rather than a working profile. Raises VoicepipeConfigError on first
+    unsupported placeholder.
+    """
+    import re
+
+    pattern = re.compile(r"\{\{[^{}]*\}\}")
+    seen: set[str] = set()
+    for token in pattern.findall(template):
+        if token in seen:
+            continue
+        seen.add(token)
+        if token not in _USER_PROMPT_TEMPLATE_PLACEHOLDERS:
+            allowed = ", ".join(sorted(_USER_PROMPT_TEMPLATE_PLACEHOLDERS)) or "(none)"
+            raise VoicepipeConfigError(
+                f"Invalid triggers.json: llm profile {profile_name!r} "
+                f"user_prompt_template uses unknown placeholder {token!r}. "
+                f"Supported placeholders: {allowed}."
+            )
+
+
 def _parse_transcript_llm_profiles_json_obj(
     obj: dict[str, Any],
 ) -> dict[str, TranscriptLLMProfileConfig]:
@@ -1118,6 +1147,8 @@ def _parse_transcript_llm_profiles_json_obj(
             else None
         )
         user_prompt_template = (user_prompt_template or "").strip() or None
+        if user_prompt_template is not None:
+            _validate_user_prompt_template(user_prompt_template, profile_name=raw_name)
 
         out[name] = TranscriptLLMProfileConfig(
             model=model,
@@ -1185,14 +1216,20 @@ def get_transcript_commands_config(
     triggers = get_transcript_triggers(default=default_triggers, load_env=load_env)
 
     # Load dispatch/verbs from triggers.json (best-effort). If the file is invalid,
-    # triggers will already be disabled by `get_transcript_triggers()` (fail closed).
+    # triggers will already be disabled by `get_transcript_triggers()` (fail closed)
+    # — but we still surface the error on stderr so users can see why their
+    # config isn't taking effect.
     dispatch = TranscriptDispatchConfig()
     verbs: dict[str, TranscriptVerbConfig] = {}
     llm_profiles: dict[str, TranscriptLLMProfileConfig] = {}
     try:
         loaded = _load_transcript_commands_json()
-    except Exception:
+    except VoicepipeConfigError as e:
         loaded = None
+        print(f"voicepipe: triggers.json ignored: {e}", file=sys.stderr)
+    except Exception as e:
+        loaded = None
+        print(f"voicepipe: triggers.json ignored ({type(e).__name__}: {e})", file=sys.stderr)
     if loaded is not None:
         dispatch, verbs, llm_profiles = loaded
 

@@ -328,6 +328,133 @@ def test_get_transcript_commands_config_reads_dispatch_and_verbs(tmp_path: Path,
     assert cfg.llm_profiles["bash"].user_prompt_template == "Write a bash script for: {{text}}"
 
 
+def test_load_transcript_commands_rejects_unknown_template_placeholder(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = _reload_config()
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = config.config_dir(create=True) / "triggers.json"
+    triggers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "llm_profiles": {
+                    "bash": {
+                        "user_prompt_template": "Write a bash script for: {{description}}",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(config.VoicepipeConfigError) as exc_info:
+        config._load_transcript_commands_json()
+    msg = str(exc_info.value)
+    assert "bash" in msg
+    assert "{{description}}" in msg
+    assert "{{text}}" in msg
+
+
+def test_load_transcript_commands_rejects_spaced_text_placeholder(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """{{ text }} with spaces is NOT substituted by the renderer, so reject it."""
+    config = _reload_config()
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = config.config_dir(create=True) / "triggers.json"
+    triggers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "llm_profiles": {
+                    "rewrite": {
+                        "user_prompt_template": "Rewrite: {{ text }}",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(config.VoicepipeConfigError):
+        config._load_transcript_commands_json()
+
+
+def test_load_transcript_commands_accepts_template_without_placeholders(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Templates without any {{...}} are valid (text gets appended below)."""
+    config = _reload_config()
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = config.config_dir(create=True) / "triggers.json"
+    triggers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "llm_profiles": {
+                    "preamble": {
+                        "user_prompt_template": "Be terse and direct.",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cfg = config.get_transcript_commands_config(load_env=False)
+    assert cfg.llm_profiles["preamble"].user_prompt_template == "Be terse and direct."
+
+
+def test_get_transcript_commands_config_warns_on_invalid_template_to_stderr(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """A broken triggers.json shouldn't crash the runtime but the user must see why."""
+    config = _reload_config()
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = config.config_dir(create=True) / "triggers.json"
+    triggers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "llm_profiles": {
+                    "bash": {
+                        "user_prompt_template": "Write a bash script for: {{description}}",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cfg = config.get_transcript_commands_config(load_env=False)
+    # Verbs/profiles ignored — fail closed.
+    assert cfg.llm_profiles == {}
+    captured = capsys.readouterr()
+    assert "triggers.json ignored" in captured.err
+    assert "{{description}}" in captured.err
+
+
 def test_get_transcript_commands_config_execute_destination_defaults_to_none(
     tmp_path: Path, monkeypatch
 ) -> None:

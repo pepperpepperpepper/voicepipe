@@ -15,17 +15,21 @@ from typing import BinaryIO
 
 import click
 
-from voicepipe.config import get_intent_routing_enabled, get_intent_wake_prefixes, get_transcribe_model
+from voicepipe.config import (
+    get_intent_routing_enabled,
+    get_transcribe_model,
+    get_transcript_triggers,
+)
 from voicepipe.logging_utils import configure_logging
 from voicepipe.paths import preserved_audio_dir
-from voicepipe.intent_router import IntentResult, route_intent
 from voicepipe.recording_backend import (
     AutoRecorderBackend,
     RecordingError,
 )
 from voicepipe.session import RecordingSession
+from voicepipe.transcript_triggers import match_transcript_trigger
 from voicepipe.transcription import transcribe_audio_file_result, transcribe_audio_fileobj_result
-from voicepipe.transcription_result import TranscriptionResult
+from voicepipe.transcription_result import IntentResult, TranscriptionResult
 from voicepipe.typing import perform_type_sequence, press_enter, type_text
 from voicepipe.platform import is_windows
 
@@ -80,10 +84,22 @@ def _emit_transcription(
     clipboard: bool = False,
 ) -> None:
     routing_enabled = get_intent_routing_enabled()
+    text = (result.text or "").strip()
     if routing_enabled:
-        intent = route_intent(result, wake_prefixes=get_intent_wake_prefixes())
+        if not text:
+            intent = IntentResult(mode="unknown", dictation_text="", reason="empty")
+        else:
+            match = match_transcript_trigger(text, triggers=get_transcript_triggers())
+            if match is None:
+                intent = IntentResult(mode="dictation", dictation_text=text, reason="default")
+            else:
+                intent = IntentResult(
+                    mode="command",
+                    command_text=match.remainder,
+                    reason=f"trigger:{match.trigger}",
+                )
     else:
-        intent = IntentResult(mode="dictation", dictation_text=(result.text or "").strip(), reason="disabled")
+        intent = IntentResult(mode="dictation", dictation_text=text, reason="disabled")
 
     output_text = result.text
     if intent.mode == "dictation" and intent.dictation_text is not None:

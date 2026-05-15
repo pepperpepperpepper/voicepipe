@@ -191,6 +191,48 @@ def test_stop_json_outputs_structured_result(tmp_path: Path, monkeypatch, isolat
     assert "sk-test-secret" not in result.output
 
 
+def test_stop_routes_zwingli_command_via_triggers_when_enabled(
+    tmp_path: Path, monkeypatch, isolated_home: Path
+) -> None:
+    import json as _json
+
+    import voicepipe.commands.recording as recording_cmd
+
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"abc")
+
+    class _FakeBackend:
+        def stop(self):
+            return _StopResult(audio_file=str(audio), session=None, recording_id="rid")
+
+    def _fake_transcribe(audio_file: str, **kwargs):
+        return TranscriptionResult(
+            text="zwingli hello world",
+            backend="openai",
+            model="gpt-test",
+            audio_file=audio_file,
+            recording_id=kwargs.get("recording_id"),
+            source=kwargs.get("source"),
+            warnings=[],
+        )
+
+    monkeypatch.setattr(recording_cmd, "AutoRecorderBackend", lambda: _FakeBackend())
+    monkeypatch.setattr(recording_cmd, "transcribe_audio_file_result", _fake_transcribe)
+    monkeypatch.setenv("VOICEPIPE_INTENT_ROUTING_ENABLED", "1")
+    monkeypatch.setenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", "zwingli=strip")
+    monkeypatch.setenv("VOICEPIPE_COMMANDS_STRICT", "1")
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["stop", "--json"])
+    assert result.exit_code == 2, _combined_cli_output(result)
+
+    json_line = result.output.splitlines()[0]
+    payload = _json.loads(json_line)
+    assert payload["intent"]["mode"] == "command"
+    assert payload["intent"]["command_text"] == "hello world"
+    assert payload["intent"]["reason"] == "trigger:zwingli"
+
+
 def test_stop_does_not_respect_transcript_trigger_destination(
     tmp_path: Path,
     monkeypatch,

@@ -789,19 +789,6 @@ def get_intent_routing_enabled(*, default: bool = False, load_env: bool = True) 
     return _as_bool(os.environ.get("VOICEPIPE_INTENT_ROUTING_ENABLED"), default=bool(default))
 
 
-def get_intent_wake_prefixes(
-    *,
-    default: tuple[str, ...] = ("command", "computer"),
-    load_env: bool = True,
-) -> list[str]:
-    if load_env:
-        load_environment()
-    raw = (os.environ.get("VOICEPIPE_INTENT_WAKE_PREFIXES") or "").strip()
-    if not raw:
-        return list(default)
-    parts = [p.strip() for p in raw.split(",")]
-    return [p for p in parts if p]
-
 def get_transcript_triggers(
     *,
     default: dict[str, str] | None = None,

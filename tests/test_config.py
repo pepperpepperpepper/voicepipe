@@ -328,9 +328,44 @@ def test_get_transcript_commands_config_reads_dispatch_and_verbs(tmp_path: Path,
     assert cfg.llm_profiles["bash"].user_prompt_template == "Write a bash script for: {{text}}"
 
 
-def test_load_transcript_commands_rejects_unknown_template_placeholder(
+def test_load_transcript_commands_rejects_malformed_template_placeholder(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """Placeholders must look like {{identifier}}; reject anything else."""
+    config = _reload_config()
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = config.config_dir(create=True) / "triggers.json"
+    triggers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "llm_profiles": {
+                    "bash": {
+                        "user_prompt_template": "Write: {{1bad}}",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(config.VoicepipeConfigError) as exc_info:
+        config._load_transcript_commands_json()
+    msg = str(exc_info.value)
+    assert "bash" in msg
+    assert "{{1bad}}" in msg
+
+
+def test_load_transcript_commands_accepts_identifier_placeholder(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Well-formed {{identifier}} placeholders are accepted; capture substitution
+    happens at render time alongside {{text}}."""
     config = _reload_config()
     monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -353,12 +388,10 @@ def test_load_transcript_commands_rejects_unknown_template_placeholder(
         encoding="utf-8",
     )
 
-    with pytest.raises(config.VoicepipeConfigError) as exc_info:
-        config._load_transcript_commands_json()
-    msg = str(exc_info.value)
-    assert "bash" in msg
-    assert "{{description}}" in msg
-    assert "{{text}}" in msg
+    cfg = config.get_transcript_commands_config(load_env=False)
+    assert cfg.llm_profiles["bash"].user_prompt_template == (
+        "Write a bash script for: {{description}}"
+    )
 
 
 def test_load_transcript_commands_rejects_spaced_text_placeholder(
@@ -439,7 +472,7 @@ def test_get_transcript_commands_config_warns_on_invalid_template_to_stderr(
                 "triggers": {"zwingli": {"action": "dispatch"}},
                 "llm_profiles": {
                     "bash": {
-                        "user_prompt_template": "Write a bash script for: {{description}}",
+                        "user_prompt_template": "Write: {{ text }}",
                     },
                 },
             }
@@ -452,7 +485,7 @@ def test_get_transcript_commands_config_warns_on_invalid_template_to_stderr(
     assert cfg.llm_profiles == {}
     captured = capsys.readouterr()
     assert "triggers.json ignored" in captured.err
-    assert "{{description}}" in captured.err
+    assert "{{ text }}" in captured.err
 
 
 def test_dispatch_error_destination_defaults_to_type(
@@ -587,3 +620,154 @@ def test_get_transcript_commands_config_env_var_overrides_triggers_but_uses_verb
     cfg = config.get_transcript_commands_config(load_env=False)
     assert cfg.triggers == {"env": "dispatch"}
     assert cfg.verbs["strip"].action == "strip"
+
+
+def test_verb_pattern_and_command_template_parse(tmp_path: Path, monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = config.config_dir(create=True) / "triggers.json"
+    triggers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "verbs": {
+                    "timer": {
+                        "type": "shell",
+                        "enabled": True,
+                        "pattern": "set timer for {minutes} minutes",
+                        "command_template": "sleep {minutes}m && notify-send Timer",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cfg = config.get_transcript_commands_config(load_env=False)
+    timer = cfg.verbs["timer"]
+    assert timer.pattern == "set timer for {minutes} minutes"
+    assert timer.command_template == "sleep {minutes}m && notify-send Timer"
+
+
+def test_verb_pattern_rejects_malformed_placeholder(tmp_path: Path, monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = config.config_dir(create=True) / "triggers.json"
+    triggers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "verbs": {
+                    "bad": {
+                        "type": "shell",
+                        "pattern": "set timer for {1minutes} minutes",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(config.VoicepipeConfigError) as exc_info:
+        config._load_transcript_commands_json()
+    assert "bad" in str(exc_info.value)
+    assert "{1minutes}" in str(exc_info.value)
+
+
+def test_verb_pattern_rejects_duplicate_capture_names(tmp_path: Path, monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = config.config_dir(create=True) / "triggers.json"
+    triggers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "verbs": {
+                    "bad": {
+                        "type": "shell",
+                        "pattern": "from {x} to {x}",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(config.VoicepipeConfigError) as exc_info:
+        config._load_transcript_commands_json()
+    msg = str(exc_info.value)
+    assert "bad" in msg
+    assert "x" in msg
+
+
+def test_verb_pattern_rejects_non_string(tmp_path: Path, monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = config.config_dir(create=True) / "triggers.json"
+    triggers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "verbs": {
+                    "bad": {
+                        "type": "shell",
+                        "pattern": 42,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(config.VoicepipeConfigError) as exc_info:
+        config._load_transcript_commands_json()
+    assert "pattern" in str(exc_info.value)
+
+
+def test_verb_command_template_rejects_non_string(tmp_path: Path, monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = config.config_dir(create=True) / "triggers.json"
+    triggers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "verbs": {
+                    "bad": {
+                        "type": "shell",
+                        "command_template": ["sleep", "5"],
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(config.VoicepipeConfigError) as exc_info:
+        config._load_transcript_commands_json()
+    assert "command_template" in str(exc_info.value)

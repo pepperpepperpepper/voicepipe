@@ -874,6 +874,8 @@ class TranscriptVerbConfig:
     plugin: TranscriptPluginConfig | None = None
     destination: str | None = None
     aliases: tuple[str, ...] = ()
+    pattern: str | None = None
+    command_template: str | None = None
 
 
 @dataclass(frozen=True)
@@ -964,6 +966,8 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
         plugin: TranscriptPluginConfig | None = None
         destination: str | None = None
         aliases: tuple[str, ...] = ()
+        pattern: str | None = None
+        command_template: str | None = None
         if isinstance(raw_value, str):
             action = raw_value
             enabled = True
@@ -1023,6 +1027,27 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
                     if phrase:
                         collected.append(phrase)
                 aliases = tuple(collected)
+
+            raw_pattern = raw_value.get("pattern")
+            if raw_pattern is not None:
+                if not isinstance(raw_pattern, str):
+                    raise VoicepipeConfigError(
+                        f"Invalid triggers.json: verb {raw_verb!r} 'pattern' must be a string"
+                    )
+                pattern_clean = raw_pattern.strip()
+                if pattern_clean:
+                    _validate_verb_pattern(pattern_clean, verb_name=raw_verb)
+                    pattern = pattern_clean
+
+            raw_command_template = raw_value.get("command_template")
+            if raw_command_template is not None:
+                if not isinstance(raw_command_template, str):
+                    raise VoicepipeConfigError(
+                        f"Invalid triggers.json: verb {raw_verb!r} 'command_template' must be a string"
+                    )
+                template_clean = raw_command_template.strip()
+                if template_clean:
+                    command_template = template_clean
 
             if verb_type == "plugin":
                 raw_plugin = raw_value.get("plugin")
@@ -1085,38 +1110,71 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
             plugin=plugin,
             destination=destination,
             aliases=aliases,
+            pattern=pattern,
+            command_template=command_template,
         )
 
     return out
 
 
-_USER_PROMPT_TEMPLATE_PLACEHOLDERS: frozenset[str] = frozenset({"{{text}}"})
+_TEMPLATE_PLACEHOLDER_NAME_RE = r"[a-zA-Z_][a-zA-Z0-9_]*"
 
 
 def _validate_user_prompt_template(template: str, *, profile_name: str) -> None:
-    """Reject templates that reference placeholders the renderer doesn't honor.
+    """Reject templates whose ``{{...}}`` placeholders aren't valid identifiers.
 
-    The renderer in transcript_triggers only substitutes the placeholders
-    listed in _USER_PROMPT_TEMPLATE_PLACEHOLDERS; any other ``{{...}}`` token
-    would pass through verbatim, which looks like silent misconfiguration
-    rather than a working profile. Raises VoicepipeConfigError on first
-    unsupported placeholder.
+    The renderer substitutes ``{{text}}`` and ``{{<capture-name>}}`` placeholders;
+    anything else (e.g. ``{{ text }}`` with spaces, ``{{1foo}}``) would leak
+    through verbatim. Capture-name placeholders without a matching pattern
+    capture pass through at render time — that's left to runtime to surface
+    rather than rejected here since the profile validator doesn't see verbs.
     """
     import re
 
-    pattern = re.compile(r"\{\{[^{}]*\}\}")
+    token_re = re.compile(r"\{\{[^{}]*\}\}")
+    placeholder_re = re.compile(rf"\{{\{{({_TEMPLATE_PLACEHOLDER_NAME_RE})\}}\}}")
     seen: set[str] = set()
-    for token in pattern.findall(template):
+    for token in token_re.findall(template):
         if token in seen:
             continue
         seen.add(token)
-        if token not in _USER_PROMPT_TEMPLATE_PLACEHOLDERS:
-            allowed = ", ".join(sorted(_USER_PROMPT_TEMPLATE_PLACEHOLDERS)) or "(none)"
+        if not placeholder_re.fullmatch(token):
             raise VoicepipeConfigError(
                 f"Invalid triggers.json: llm profile {profile_name!r} "
-                f"user_prompt_template uses unknown placeholder {token!r}. "
-                f"Supported placeholders: {allowed}."
+                f"user_prompt_template uses malformed placeholder {token!r}. "
+                f"Expected {{{{text}}}} or {{{{<name>}}}} where <name> is a "
+                f"valid identifier."
             )
+
+
+_PATTERN_PLACEHOLDER_RE = r"\{[^{}]*\}"
+
+
+def _validate_verb_pattern(pattern: str, *, verb_name: str) -> None:
+    """Reject verb patterns with malformed placeholders.
+
+    Pattern syntax: literal text plus ``{name}`` placeholders, where name is
+    a valid identifier. Captured values are routed to handler captures.
+    """
+    import re
+
+    token_re = re.compile(_PATTERN_PLACEHOLDER_RE)
+    placeholder_re = re.compile(rf"\{{({_TEMPLATE_PLACEHOLDER_NAME_RE})\}}")
+    seen: set[str] = set()
+    for token in token_re.findall(pattern):
+        if not placeholder_re.fullmatch(token):
+            raise VoicepipeConfigError(
+                f"Invalid triggers.json: verb {verb_name!r} pattern contains "
+                f"malformed placeholder {token!r}. Expected {{<name>}} where "
+                f"<name> is a valid identifier."
+            )
+        name = token[1:-1]
+        if name in seen:
+            raise VoicepipeConfigError(
+                f"Invalid triggers.json: verb {verb_name!r} pattern has duplicate "
+                f"capture name {name!r}."
+            )
+        seen.add(name)
 
 
 def _parse_transcript_llm_profiles_json_obj(

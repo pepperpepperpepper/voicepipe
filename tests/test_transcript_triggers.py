@@ -790,7 +790,7 @@ def test_apply_transcript_triggers_chain_step_with_explicit_args_ignores_pipe(
 ) -> None:
     seen_inputs: list[str] = []
 
-    def _spy_strip(prompt, *, verb_cfg=None, profiles=None):
+    def _spy_strip(prompt, *, verb_cfg=None, profiles=None, captures=None):
         seen_inputs.append(prompt)
         return (prompt or "").strip(), {}
 
@@ -1137,3 +1137,312 @@ def test_format_zwingli_error_text_uses_prefix() -> None:
     assert tt._format_zwingli_error_text("boom") == "⚠ zwingli: boom"
     # Empty reason still produces a recognizable prefix.
     assert tt._format_zwingli_error_text("").startswith("⚠ zwingli")
+
+
+# --- pattern compilation and matching ---
+
+
+def test_compile_verb_pattern_single_placeholder() -> None:
+    compiled, names = tt._compile_verb_pattern("google {query}")
+    assert names == ("query",)
+    m = compiled.match("google how to make sourdough")
+    assert m is not None
+    assert m.group("query") == "how to make sourdough"
+
+
+def test_compile_verb_pattern_multi_placeholder() -> None:
+    compiled, names = tt._compile_verb_pattern("search {query} on {site}")
+    assert names == ("query", "site")
+    m = compiled.match("search rust async on hackernews")
+    assert m is not None
+    assert m.group("query") == "rust async"
+    assert m.group("site") == "hackernews"
+
+
+def test_compile_verb_pattern_case_insensitive_literals() -> None:
+    compiled, _ = tt._compile_verb_pattern("set timer for {minutes} minutes")
+    assert compiled.match("SET TIMER FOR 5 MINUTES") is not None
+    assert compiled.match("Set Timer For 10 minutes") is not None
+
+
+def test_compile_verb_pattern_flexible_whitespace() -> None:
+    compiled, _ = tt._compile_verb_pattern("set timer for {minutes} minutes")
+    assert compiled.match("set  timer   for 5 minutes") is not None
+    assert compiled.match("set\ttimer for 5 minutes") is not None
+
+
+def test_compile_verb_pattern_requires_non_empty_capture() -> None:
+    compiled, _ = tt._compile_verb_pattern("google {query}")
+    assert compiled.match("google ") is None
+    assert compiled.match("google") is None
+
+
+def test_compile_verb_pattern_duplicate_capture_name_raises() -> None:
+    import pytest
+
+    with pytest.raises(ValueError):
+        tt._compile_verb_pattern("from {x} to {x}")
+
+
+def test_compile_verb_pattern_escapes_regex_metachars() -> None:
+    # The "." in "google.com" must match literally, not any-char.
+    compiled, _ = tt._compile_verb_pattern("open google.com")
+    assert compiled.match("open google.com") is not None
+    assert compiled.match("open googleXcom") is None
+
+
+def test_find_pattern_match_returns_first_match() -> None:
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "timer": config.TranscriptVerbConfig(
+                action="shell",
+                enabled=True,
+                type="shell",
+                pattern="set timer for {minutes} minutes",
+            ),
+            "google": config.TranscriptVerbConfig(
+                action="shell",
+                enabled=True,
+                type="shell",
+                pattern="google {query}",
+            ),
+        },
+    )
+
+    result = tt._find_pattern_match("google rust async", commands=commands)
+    assert result is not None
+    verb, captures = result
+    assert verb == "google"
+    assert captures == {"query": "rust async"}
+
+
+def test_find_pattern_match_skips_disabled_verbs() -> None:
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "timer": config.TranscriptVerbConfig(
+                action="shell",
+                enabled=False,  # disabled
+                type="shell",
+                pattern="set timer for {minutes} minutes",
+            ),
+        },
+    )
+    assert tt._find_pattern_match("set timer for 5 minutes", commands=commands) is None
+
+
+def test_find_pattern_match_skips_verbs_without_pattern() -> None:
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "plain": config.TranscriptVerbConfig(action="strip", enabled=True),
+        },
+    )
+    assert tt._find_pattern_match("plain hello", commands=commands) is None
+
+
+# --- pattern dispatch end-to-end ---
+
+
+def test_apply_transcript_triggers_pattern_substitutes_shell_command_template(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("VOICEPIPE_SHELL_ALLOW", "1")
+    captured: list[str] = []
+
+    def _fake_run(cmd, **kwargs):
+        captured.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(tt.subprocess, "run", _fake_run)
+
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "timer": config.TranscriptVerbConfig(
+                action="shell",
+                enabled=True,
+                type="shell",
+                pattern="set timer for {minutes} minutes",
+                command_template="sleep {minutes}m && notify-send Timer",
+            ),
+        },
+    )
+
+    out, meta = tt.apply_transcript_triggers(
+        "zwingli set timer for 5 minutes", commands=commands
+    )
+    assert out == "ok"
+    assert captured == ["sleep 5m && notify-send Timer"]
+    assert meta is not None
+    assert meta["ok"] is True
+    assert meta["meta"]["verb"] == "timer"
+    assert meta["meta"]["captures"] == {"minutes": "5"}
+
+
+def test_apply_transcript_triggers_pattern_wins_over_name_match(
+    monkeypatch,
+) -> None:
+    """If a chunk matches a verb's pattern, that verb runs even if the first
+    word would resolve to a different verb."""
+    monkeypatch.setenv("VOICEPIPE_SHELL_ALLOW", "1")
+    captured: list[str] = []
+
+    def _fake_run(cmd, **kwargs):
+        captured.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(tt.subprocess, "run", _fake_run)
+
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            # If we name-matched, "set" would not resolve and we'd hit
+            # unknown_verb=strip. The pattern below ensures the timer verb wins.
+            "timer": config.TranscriptVerbConfig(
+                action="shell",
+                enabled=True,
+                type="shell",
+                pattern="set timer for {minutes} minutes",
+                command_template="sleep {minutes}m",
+            ),
+            "set": config.TranscriptVerbConfig(
+                action="strip",
+                enabled=True,
+                type="builtin",
+            ),
+        },
+    )
+
+    out, meta = tt.apply_transcript_triggers(
+        "zwingli set timer for 7 minutes", commands=commands
+    )
+    assert meta is not None
+    assert meta["meta"]["verb"] == "timer"
+    assert captured == ["sleep 7m"]
+
+
+def test_apply_transcript_triggers_pattern_falls_back_to_name_match() -> None:
+    """If no pattern matches, name-based dispatch still works."""
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "timer": config.TranscriptVerbConfig(
+                action="strip",
+                enabled=True,
+                pattern="set timer for {minutes} minutes",
+            ),
+            "echo": config.TranscriptVerbConfig(
+                action="strip",
+                enabled=True,
+                type="builtin",
+            ),
+        },
+    )
+
+    out, meta = tt.apply_transcript_triggers("zwingli echo hello", commands=commands)
+    assert out == "hello"
+    assert meta is not None
+    assert meta["meta"]["verb"] == "echo"
+    assert "captures" not in meta["meta"]
+
+
+def test_apply_transcript_triggers_pattern_substitutes_llm_template(
+    monkeypatch,
+) -> None:
+    seen: dict[str, str] = {}
+
+    def _fake_process(prompt, **kwargs):
+        seen["prompt"] = prompt
+        return "result", {"provider": "fake"}
+
+    import voicepipe.zwingli as zwingli
+
+    monkeypatch.setattr(zwingli, "process_zwingli_prompt_result", _fake_process)
+
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "rewrite": config.TranscriptVerbConfig(
+                action="zwingli",
+                enabled=True,
+                type="llm",
+                profile="rewrite",
+                pattern="rewrite {style}: {text}",
+            ),
+        },
+        llm_profiles={
+            "rewrite": config.TranscriptLLMProfileConfig(
+                system_prompt="Rewrite text.",
+                user_prompt_template="In {{style}} style, rewrite: {{text}}",
+            ),
+        },
+    )
+
+    out, meta = tt.apply_transcript_triggers(
+        "zwingli rewrite formal: hello world", commands=commands
+    )
+    assert out == "result"
+    assert seen["prompt"] == "In formal style, rewrite: hello world"
+    assert meta is not None
+    assert meta["meta"]["verb"] == "rewrite"
+    assert meta["meta"]["captures"] == {"style": "formal", "text": "hello world"}
+
+
+def test_render_user_prompt_template_leaves_unknown_placeholders_literal() -> None:
+    rendered = tt._render_user_prompt_template(
+        "Hello {{name}}, your text: {{text}}", text="howdy", captures={"name": "Alice"}
+    )
+    assert rendered == "Hello Alice, your text: howdy"
+
+    # Unknown placeholder remains literal.
+    rendered2 = tt._render_user_prompt_template(
+        "User {{name}} said: {{text}}", text="hi", captures={}
+    )
+    assert rendered2 == "User {{name}} said: hi"
+
+
+def test_apply_transcript_triggers_pattern_exposes_captures_for_clipboard(
+    monkeypatch,
+) -> None:
+    """Verbs without a template still expose captures in meta."""
+    copied: list[str] = []
+
+    def _fake_copy(text: str) -> tuple[bool, str | None]:
+        copied.append(text)
+        return True, None
+
+    import voicepipe.clipboard as clipboard_mod
+
+    monkeypatch.setattr(clipboard_mod, "copy_to_clipboard", _fake_copy)
+
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "note": config.TranscriptVerbConfig(
+                action="clipboard",
+                enabled=True,
+                type="builtin",
+                pattern="note {what}",
+            ),
+        },
+    )
+
+    out, meta = tt.apply_transcript_triggers(
+        "zwingli note buy more coffee", commands=commands
+    )
+    assert meta is not None
+    assert meta["meta"]["verb"] == "note"
+    assert meta["meta"]["captures"] == {"what": "buy more coffee"}
+    # The clipboard handler still copies the full chunk (its existing behavior);
+    # captures are surfaced for plugins / handlers that opt in later.
+    assert copied == ["note buy more coffee"]

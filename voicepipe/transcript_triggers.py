@@ -5,6 +5,7 @@ import importlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -307,8 +308,9 @@ def _action_strip(
     *,
     verb_cfg: TranscriptVerbConfig | None = None,
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    del verb_cfg, profiles
+    del verb_cfg, profiles, captures
     return (prompt or "").strip(), {}
 
 
@@ -317,6 +319,7 @@ def _action_zwingli(
     *,
     verb_cfg: TranscriptVerbConfig | None = None,
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     from voicepipe.zwingli import process_zwingli_prompt_result
 
@@ -332,7 +335,7 @@ def _action_zwingli(
     template_applied = False
     if profile is not None and profile.user_prompt_template:
         rendered_prompt = _render_user_prompt_template(
-            profile.user_prompt_template, text=prompt
+            profile.user_prompt_template, text=prompt, captures=captures
         )
         template_applied = True
 
@@ -359,19 +362,128 @@ def _action_zwingli(
     return text, meta
 
 
-def _render_user_prompt_template(template: str, *, text: str) -> str:
+_TEMPLATE_PLACEHOLDER_RE = re.compile(r"\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}")
+
+
+def _render_user_prompt_template(
+    template: str,
+    *,
+    text: str,
+    captures: Mapping[str, str] | None = None,
+) -> str:
     cleaned_template = (template or "").strip()
     cleaned_text = (text or "").strip()
     if not cleaned_template:
         return cleaned_text
 
-    if "{{text}}" in cleaned_template:
-        return cleaned_template.replace("{{text}}", cleaned_text)
+    substitutions: dict[str, str] = {"text": cleaned_text}
+    if captures:
+        for name, value in captures.items():
+            substitutions[name] = "" if value is None else str(value)
 
-    if cleaned_text:
-        return cleaned_template.rstrip() + "\n\n" + cleaned_text
+    used_text = False
 
-    return cleaned_template
+    def _resolve(match: re.Match[str]) -> str:
+        nonlocal used_text
+        name = match.group(1)
+        if name == "text":
+            used_text = True
+        if name in substitutions:
+            return substitutions[name]
+        return match.group(0)
+
+    rendered = _TEMPLATE_PLACEHOLDER_RE.sub(_resolve, cleaned_template)
+
+    if not used_text and cleaned_text:
+        return rendered.rstrip() + "\n\n" + cleaned_text
+    return rendered
+
+
+_PATTERN_COMPILE_CACHE: dict[str, tuple["re.Pattern[str]", tuple[str, ...]]] = {}
+
+
+def _compile_verb_pattern(pattern: str) -> tuple["re.Pattern[str]", tuple[str, ...]]:
+    """Compile a verb pattern into a regex + capture-name tuple.
+
+    Pattern syntax: literal text + ``{name}`` placeholders. Literals match
+    case-insensitively with flexible whitespace; placeholders capture
+    non-empty content up to the next literal or end of input. The compiled
+    regex anchors on the whole input.
+    """
+    cached = _PATTERN_COMPILE_CACHE.get(pattern)
+    if cached is not None:
+        return cached
+
+    placeholder_re = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+    parts: list[str] = []
+    names: list[str] = []
+    last = 0
+    for m in placeholder_re.finditer(pattern):
+        literal = pattern[last : m.start()]
+        if literal.strip():
+            parts.append(r"\s+".join(re.escape(w) for w in literal.split()))
+        name = m.group(1)
+        if name in names:
+            raise ValueError(f"Duplicate capture name {name!r} in pattern {pattern!r}")
+        names.append(name)
+        # Require at least one non-whitespace char so empty/whitespace captures
+        # don't match.
+        parts.append(rf"(?P<{name}>\S(?:.*?\S)?)")
+        last = m.end()
+    trailing = pattern[last:]
+    if trailing.strip():
+        parts.append(r"\s+".join(re.escape(w) for w in trailing.split()))
+
+    body = r"\s*".join(parts) if parts else ""
+    compiled = re.compile(rf"^\s*{body}\s*$", re.IGNORECASE)
+    result = (compiled, tuple(names))
+    _PATTERN_COMPILE_CACHE[pattern] = result
+    return result
+
+
+def _find_pattern_match(
+    chunk: str, *, commands: TranscriptCommandsConfig
+) -> tuple[str, dict[str, str]] | None:
+    """Return (verb_name, captures) for the first enabled verb whose pattern
+    matches the chunk, or None when no pattern matches.
+
+    Iteration order follows the verbs dict (insertion order). Disabled verbs
+    are skipped. Verbs without a pattern are skipped.
+    """
+    text = (chunk or "").strip()
+    if not text:
+        return None
+    for verb_name, verb_cfg in commands.verbs.items():
+        if not bool(verb_cfg.enabled):
+            continue
+        pattern = getattr(verb_cfg, "pattern", None)
+        if not pattern:
+            continue
+        try:
+            compiled, _names = _compile_verb_pattern(pattern)
+        except Exception:
+            continue
+        m = compiled.match(text)
+        if m is None:
+            continue
+        captures: dict[str, str] = {}
+        for name, value in m.groupdict().items():
+            captures[name] = "" if value is None else value.strip()
+        return verb_name, captures
+    return None
+
+
+def _substitute_command_template(template: str, captures: Mapping[str, str]) -> str:
+    """Replace ``{name}`` tokens in a shell command_template with captures."""
+    placeholder_re = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+
+    def _resolve(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name in captures:
+            return str(captures[name])
+        return match.group(0)
+
+    return placeholder_re.sub(_resolve, template)
 
 
 def _parse_positive_float(value: object) -> float | None:
@@ -522,10 +634,16 @@ def _action_shell(
     *,
     verb_cfg: TranscriptVerbConfig | None = None,
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     del profiles
     timeout_seconds = getattr(verb_cfg, "timeout_seconds", None) if verb_cfg else None
-    stdout, stderr, meta = _run_shell_command(prompt, timeout_seconds=timeout_seconds)
+    command_template = getattr(verb_cfg, "command_template", None) if verb_cfg else None
+    if command_template and captures is not None:
+        command = _substitute_command_template(command_template, captures)
+    else:
+        command = prompt
+    stdout, stderr, meta = _run_shell_command(command, timeout_seconds=timeout_seconds)
     output = stdout if stdout.strip() else stderr
     output = (output or "").rstrip("\n")
     return output, meta
@@ -536,6 +654,7 @@ def _action_execute(
     *,
     verb_cfg: TranscriptVerbConfig | None = None,
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Prepare a shell command for *typing* into a terminal and pressing Enter.
 
@@ -543,8 +662,13 @@ def _action_execute(
     returns the cleaned command text and metadata indicating that an Enter
     keystroke should be sent by the caller when typing is the destination.
     """
-    del verb_cfg, profiles
-    cleaned = _strip_trailing_sentence_punct_from_shell_command(prompt)
+    del profiles
+    command_template = getattr(verb_cfg, "command_template", None) if verb_cfg else None
+    if command_template and captures is not None:
+        source = _substitute_command_template(command_template, captures)
+    else:
+        source = prompt
+    cleaned = _strip_trailing_sentence_punct_from_shell_command(source)
     cleaned = (cleaned or "").strip()
     if not cleaned:
         return "", {"enter": False}
@@ -556,13 +680,14 @@ def _action_clipboard(
     *,
     verb_cfg: TranscriptVerbConfig | None = None,
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Copy the prompt to the system clipboard.
 
     Returns the text plus a meta flag instructing callers not to also type
     or otherwise re-emit the same text.
     """
-    del verb_cfg, profiles
+    del verb_cfg, profiles, captures
     from voicepipe.clipboard import copy_to_clipboard
 
     text = (prompt or "").strip()
@@ -775,6 +900,7 @@ def _action_type(
     *,
     verb_cfg: TranscriptVerbConfig | None = None,
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Type a sequence of keypresses and/or literal words.
 
@@ -783,7 +909,7 @@ def _action_type(
       - "up arrow up arrow"
       - "control b d"
     """
-    del verb_cfg, profiles
+    del verb_cfg, profiles, captures
     tokens = _tokenize_type_prompt(prompt)
     sequence: list[dict[str, Any]] = []
     pending_mods: list[str] = []
@@ -946,8 +1072,9 @@ def _action_plugin(
     *,
     verb_cfg: TranscriptVerbConfig | None = None,
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    del profiles
+    del profiles, captures
     cleaned = (prompt or "").strip()
     plugin = getattr(verb_cfg, "plugin", None) if verb_cfg else None
     if plugin is None:
@@ -1074,6 +1201,55 @@ def _resolve_verb_and_args(
     return verb, args
 
 
+def _invoke_verb_handler(
+    verb: str,
+    verb_cfg: TranscriptVerbConfig,
+    args: str,
+    *,
+    commands: TranscriptCommandsConfig,
+    captures: Mapping[str, str] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Run a verb's action handler and build its top-level meta payload."""
+    action = _resolve_action_from_verb_config(verb, verb_cfg)
+    handler = _ACTIONS.get(action)
+    if handler is None:
+        raise RuntimeError(f"Unknown verb action: {action!r} (verb={verb!r})")
+    out_text, inner_meta = handler(
+        args,
+        verb_cfg=verb_cfg,
+        profiles=commands.llm_profiles,
+        captures=captures,
+    )
+
+    meta: dict[str, Any] = {
+        "mode": "verb",
+        "verb": verb,
+        "verb_type": getattr(verb_cfg, "type", None),
+        "action": action,
+    }
+    if captures:
+        meta["captures"] = dict(captures)
+    if getattr(verb_cfg, "destination", None):
+        meta["destination"] = verb_cfg.destination
+    if getattr(verb_cfg, "profile", None):
+        meta["profile"] = verb_cfg.profile
+    if getattr(verb_cfg, "timeout_seconds", None) is not None:
+        meta["timeout_seconds"] = verb_cfg.timeout_seconds
+    plugin = getattr(verb_cfg, "plugin", None)
+    if plugin is not None:
+        meta["plugin"] = {
+            "module": plugin.module,
+            "path": plugin.path,
+            "callable": plugin.callable,
+        }
+    for key in _PROMOTED_META_KEYS:
+        if key in inner_meta:
+            meta[key] = inner_meta.pop(key)
+    if inner_meta:
+        meta["handler_meta"] = inner_meta
+    return out_text, meta
+
+
 def _dispatch_single_step(
     verb: str,
     args: str,
@@ -1082,52 +1258,33 @@ def _dispatch_single_step(
     commands: TranscriptCommandsConfig,
 ) -> tuple[str, dict[str, Any]]:
     """Run one dispatch step. `raw_chunk` is the original chunk before verb
-    extraction; it is used when falling back through the unknown-verb path so
-    the verb token isn't silently dropped (mirroring the pre-chain behavior).
+    extraction; it is used both for pattern matching against the whole chunk
+    and as input to the unknown-verb fallback handler so the verb token isn't
+    silently dropped.
     """
+    pattern_match = _find_pattern_match(raw_chunk, commands=commands)
+    if pattern_match is not None:
+        pattern_verb, captures = pattern_match
+        pattern_verb_cfg = commands.verbs[pattern_verb]
+        return _invoke_verb_handler(
+            pattern_verb,
+            pattern_verb_cfg,
+            raw_chunk,
+            commands=commands,
+            captures=captures,
+        )
+
     verb_cfg = commands.verbs.get(verb) if verb else None
 
     if verb_cfg is not None and bool(verb_cfg.enabled):
-        action = _resolve_action_from_verb_config(verb, verb_cfg)
-        handler = _ACTIONS.get(action)
-        if handler is None:
-            raise RuntimeError(f"Unknown verb action: {action!r} (verb={verb!r})")
-        out_text, inner_meta = handler(
-            args, verb_cfg=verb_cfg, profiles=commands.llm_profiles
-        )
-
-        meta: dict[str, Any] = {
-            "mode": "verb",
-            "verb": verb,
-            "verb_type": getattr(verb_cfg, "type", None),
-            "action": action,
-        }
-        if getattr(verb_cfg, "destination", None):
-            meta["destination"] = verb_cfg.destination
-        if getattr(verb_cfg, "profile", None):
-            meta["profile"] = verb_cfg.profile
-        if getattr(verb_cfg, "timeout_seconds", None) is not None:
-            meta["timeout_seconds"] = verb_cfg.timeout_seconds
-        plugin = getattr(verb_cfg, "plugin", None)
-        if plugin is not None:
-            meta["plugin"] = {
-                "module": plugin.module,
-                "path": plugin.path,
-                "callable": plugin.callable,
-            }
-        for key in _PROMOTED_META_KEYS:
-            if key in inner_meta:
-                meta[key] = inner_meta.pop(key)
-        if inner_meta:
-            meta["handler_meta"] = inner_meta
-        return out_text, meta
+        return _invoke_verb_handler(verb, verb_cfg, args, commands=commands)
 
     unknown_action = (commands.dispatch.unknown_verb or "").strip().lower() or "strip"
     handler = _ACTIONS.get(unknown_action)
     if handler is None:
         raise RuntimeError(f"Unknown dispatch.unknown_verb action: {unknown_action!r}")
     out_text, inner_meta = handler(
-        raw_chunk, verb_cfg=None, profiles=commands.llm_profiles
+        raw_chunk, verb_cfg=None, profiles=commands.llm_profiles, captures=None
     )
     meta: dict[str, Any] = {
         "mode": "unknown-verb",

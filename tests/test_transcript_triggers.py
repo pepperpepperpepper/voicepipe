@@ -353,6 +353,167 @@ def test_apply_transcript_triggers_dispatch_type_normalizes_case_and_ctrl_alias(
     assert seq[0]["mods"] == ["ctrl"]
 
 
+# --- type-verb parser: focused unit tests ---
+#
+# The three test_apply_transcript_triggers_dispatch_type_* tests above cover
+# the dispatch-layer wiring. The tests below call _action_type directly to
+# exercise tokenizer/parser edges (filler tokens, separators, multi-word
+# keys, chord syntax) without re-piping every case through dispatch.
+
+
+def _type_keys(meta: dict) -> list[tuple[str, tuple[str, ...]]]:
+    return [
+        (item["key"], tuple(item.get("mods", [])))
+        for item in meta["sequence"]
+        if isinstance(item, dict) and item.get("kind") == "key"
+    ]
+
+
+def _type_texts(meta: dict) -> list[str]:
+    return [
+        item["text"]
+        for item in meta["sequence"]
+        if isinstance(item, dict) and item.get("kind") == "text"
+    ]
+
+
+def test_type_action_ignores_common_filler_tokens() -> None:
+    # Exercises: please, press, the, key, and, then, hit, a, arrow.
+    out, meta = tt._action_type("please press the up key and then hit a down arrow")
+    assert _type_keys(meta) == [("up", ()), ("down", ())]
+    assert out == "up down"
+
+
+def test_type_action_ignores_less_common_filler_tokens() -> None:
+    # Exercises: tap, full, stop, keys, pressed, an, push, hold, release.
+    out, meta = tt._action_type("tap full stop keys pressed an enter key push hold release")
+    assert _type_keys(meta) == [("enter", ())]
+    assert _type_texts(meta) == []
+    assert out == "enter"
+
+
+def test_type_action_ignores_word_form_punctuation_tokens() -> None:
+    # comma/colon/semicolon/period are in _TYPE_IGNORE_TOKENS so the model
+    # can spell punctuation out as words and still produce clean key events.
+    out, meta = tt._action_type("hit escape comma colon semicolon period tab")
+    assert _type_keys(meta) == [("esc", ()), ("tab", ())]
+    assert out == "esc tab"
+
+
+def test_type_action_translates_literal_punctuation_to_separators() -> None:
+    # _TYPE_TOKEN_TRANSLATION maps , . : ; ! ? ( ) [ ] { } " ' \\ / and
+    # whitespace to spaces before splitting.
+    out, meta = tt._action_type('up, down. left: right; (enter) [tab] "esc"')
+    assert _type_keys(meta) == [
+        ("up", ()),
+        ("down", ()),
+        ("left", ()),
+        ("right", ()),
+        ("enter", ()),
+        ("tab", ()),
+        ("esc", ()),
+    ]
+    assert out == "up down left right enter tab esc"
+
+
+def test_type_action_handles_hyphen_and_underscore_separators() -> None:
+    # Tokenizer replaces - and _ with spaces so "up-arrow", "up_arrow", and
+    # "up arrow" all reduce to the up key (with "arrow" as filler).
+    out, meta = tt._action_type("up-arrow up_arrow up arrow")
+    assert _type_keys(meta) == [("up", ()), ("up", ()), ("up", ())]
+    assert out == "up up up"
+
+
+def test_type_action_recognizes_function_keys_in_range() -> None:
+    out, meta = tt._action_type("f1 f12 f24")
+    assert _type_keys(meta) == [("f1", ()), ("f12", ()), ("f24", ())]
+    assert out == "f1 f12 f24"
+
+
+def test_type_action_falls_back_to_text_for_out_of_range_function_keys() -> None:
+    # The fN parser only accepts 1..24; f0 and f25 fall through to text.
+    out, meta = tt._action_type("f0 f25")
+    assert _type_keys(meta) == []
+    assert _type_texts(meta) == ["f0 f25"]
+    assert out == "f0 f25"
+
+
+def test_type_action_parses_multi_word_keys() -> None:
+    out, meta = tt._action_type(
+        "new line line break carriage return page up page down back space space bar"
+    )
+    assert _type_keys(meta) == [
+        ("enter", ()),
+        ("enter", ()),
+        ("enter", ()),
+        ("pageup", ()),
+        ("pagedown", ()),
+        ("backspace", ()),
+        ("space", ()),
+    ]
+
+
+def test_type_action_parses_explicit_plus_chord_syntax() -> None:
+    out, meta = tt._action_type("shift+a control+enter")
+    assert _type_keys(meta) == [
+        ("a", ("shift",)),
+        ("enter", ("ctrl",)),
+    ]
+    assert out == "shift+a ctrl+enter"
+
+
+def test_type_action_explicit_plus_chord_with_unknown_modifier_keeps_modifier_as_text() -> None:
+    # Unknown mod prefix is preserved as pending text rather than silently
+    # dropped, so the user sees what was misread.
+    out, meta = tt._action_type("foo+a")
+    assert _type_keys(meta) == [("a", ())]
+    assert _type_texts(meta) == ["foo"]
+    assert out == "foo a"
+
+
+def test_type_action_lone_modifier_with_no_following_key_falls_to_text() -> None:
+    # A trailing modifier with no key flushes back as the alias text.
+    out, meta = tt._action_type("control")
+    assert _type_keys(meta) == []
+    assert _type_texts(meta) == ["ctrl"]
+    assert out == "ctrl"
+
+
+def test_type_action_empty_prompt_returns_empty_sequence() -> None:
+    out, meta = tt._action_type("")
+    assert meta["sequence"] == []
+    assert out == ""
+
+
+def test_type_action_all_filler_prompt_returns_empty_sequence() -> None:
+    out, meta = tt._action_type("please and the")
+    assert meta["sequence"] == []
+    assert out == ""
+
+
+def test_type_action_preserves_text_interleaved_with_keys() -> None:
+    out, meta = tt._action_type("hello world enter goodbye")
+    seq = meta["sequence"]
+    assert [item.get("kind") for item in seq] == ["text", "key", "text"]
+    assert seq[0] == {"kind": "text", "text": "hello world"}
+    assert seq[1] == {"kind": "key", "key": "enter", "mods": []}
+    assert seq[2] == {"kind": "text", "text": "goodbye"}
+    assert out == "hello world enter goodbye"
+
+
+def test_type_action_modifier_applies_to_multi_word_key() -> None:
+    out, meta = tt._action_type("control new line")
+    assert _type_keys(meta) == [("enter", ("ctrl",))]
+    assert out == "ctrl+enter"
+
+
+def test_type_action_supports_multiple_stacked_modifiers() -> None:
+    # Use "b" rather than "a" — "a" is an article and lives in the filler set.
+    out, meta = tt._action_type("shift control b")
+    assert _type_keys(meta) == [("b", ("shift", "ctrl"))]
+    assert out == "shift+ctrl+b"
+
+
 def test_apply_transcript_triggers_dispatch_shell_timeout_reports_error(monkeypatch) -> None:
     monkeypatch.setenv("VOICEPIPE_SHELL_ALLOW", "1")
 

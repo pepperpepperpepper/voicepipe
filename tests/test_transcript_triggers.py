@@ -103,19 +103,23 @@ def test_apply_transcript_triggers_invokes_handler(monkeypatch) -> None:
 
 def test_apply_transcript_triggers_unknown_action_falls_back() -> None:
     out, meta = tt.apply_transcript_triggers("zwingly do it", triggers={"zwingly": "nope"})
-    assert out == "do it"
+    assert out.startswith("⚠ zwingli: ")
+    assert "Unknown transcript trigger action" in out
     assert meta is not None
     assert meta["ok"] is False
     assert meta["error"]
+    assert meta["meta"]["error_destination"] == "type"
 
 
 def test_apply_transcript_triggers_shell_disabled(monkeypatch) -> None:
     monkeypatch.delenv("VOICEPIPE_SHELL_ALLOW", raising=False)
     out, meta = tt.apply_transcript_triggers("zwingli echo hi", triggers={"zwingli": "shell"})
-    assert out == "echo hi"
+    assert out.startswith("⚠ zwingli: ")
+    assert "VOICEPIPE_SHELL_ALLOW" in out
     assert meta is not None
     assert meta["ok"] is False
     assert "VOICEPIPE_SHELL_ALLOW" in meta["error"]
+    assert meta["meta"]["error_destination"] == "type"
 
 
 def test_apply_transcript_triggers_shell_executes(monkeypatch) -> None:
@@ -923,10 +927,12 @@ def test_apply_transcript_triggers_dispatch_plugin_disabled(monkeypatch, tmp_pat
     )
 
     out, meta = tt.apply_transcript_triggers("zwingli upper hello", commands=commands)
-    assert out == "upper hello"
+    assert out.startswith("⚠ zwingli: ")
+    assert "VOICEPIPE_PLUGIN_ALLOW" in out
     assert meta is not None
     assert meta["ok"] is False
     assert "VOICEPIPE_PLUGIN_ALLOW" in meta["error"]
+    assert meta["meta"]["error_destination"] == "type"
 
 
 def test_apply_transcript_triggers_dispatch_plugin_executes(monkeypatch, tmp_path) -> None:
@@ -972,3 +978,162 @@ def test_apply_transcript_triggers_dispatch_plugin_executes(monkeypatch, tmp_pat
     assert meta["meta"]["plugin"]["callable"] == "handle"
     handler_meta = meta["meta"]["handler_meta"]
     assert isinstance(handler_meta["duration_ms"], int)
+
+
+# --- error_destination behavior ---
+
+
+def _commands_with_error_destination(destination: str) -> "config.TranscriptCommandsConfig":
+    return config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(
+            unknown_verb="strip", error_destination=destination
+        ),
+        verbs={
+            "boom": config.TranscriptVerbConfig(
+                action="shell", enabled=True, type="shell"
+            )
+        },
+    )
+
+
+def test_apply_transcript_triggers_error_default_destination_types_no_clipboard(
+    monkeypatch,
+) -> None:
+    # Shell verb without VOICEPIPE_SHELL_ALLOW raises; should produce a typed
+    # error and NOT touch the clipboard.
+    monkeypatch.delenv("VOICEPIPE_SHELL_ALLOW", raising=False)
+    copied: list[str] = []
+
+    def _fake_copy(text: str) -> tuple[bool, str | None]:
+        copied.append(text)
+        return True, None
+
+    import voicepipe.clipboard as clipboard_mod
+
+    monkeypatch.setattr(clipboard_mod, "copy_to_clipboard", _fake_copy)
+
+    commands = _commands_with_error_destination("type")
+    out, meta = tt.apply_transcript_triggers("zwingli boom echo hi", commands=commands)
+
+    assert out.startswith("⚠ zwingli: ")
+    assert "VOICEPIPE_SHELL_ALLOW" in out
+    assert meta is not None
+    assert meta["ok"] is False
+    assert meta["meta"]["error_destination"] == "type"
+    assert "suppress_type" not in meta["meta"]
+    assert "clipboard" not in meta["meta"]
+    assert copied == []
+
+
+def test_apply_transcript_triggers_error_destination_clipboard_suppresses_typing(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("VOICEPIPE_SHELL_ALLOW", raising=False)
+    copied: list[str] = []
+
+    def _fake_copy(text: str) -> tuple[bool, str | None]:
+        copied.append(text)
+        return True, None
+
+    import voicepipe.clipboard as clipboard_mod
+
+    monkeypatch.setattr(clipboard_mod, "copy_to_clipboard", _fake_copy)
+
+    commands = _commands_with_error_destination("clipboard")
+    out, meta = tt.apply_transcript_triggers("zwingli boom echo hi", commands=commands)
+
+    assert out.startswith("⚠ zwingli: ")
+    assert meta is not None
+    assert meta["meta"]["error_destination"] == "clipboard"
+    assert meta["meta"]["suppress_type"] is True
+    assert meta["meta"]["clipboard"] is True
+    assert copied == [out]
+
+
+def test_apply_transcript_triggers_error_destination_both_types_and_copies(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("VOICEPIPE_SHELL_ALLOW", raising=False)
+    copied: list[str] = []
+
+    def _fake_copy(text: str) -> tuple[bool, str | None]:
+        copied.append(text)
+        return True, None
+
+    import voicepipe.clipboard as clipboard_mod
+
+    monkeypatch.setattr(clipboard_mod, "copy_to_clipboard", _fake_copy)
+
+    commands = _commands_with_error_destination("both")
+    out, meta = tt.apply_transcript_triggers("zwingli boom echo hi", commands=commands)
+
+    assert out.startswith("⚠ zwingli: ")
+    assert meta is not None
+    assert meta["meta"]["error_destination"] == "both"
+    assert "suppress_type" not in meta["meta"]  # still types
+    assert meta["meta"]["clipboard"] is True
+    assert copied == [out]
+
+
+def test_apply_transcript_triggers_error_destination_clipboard_failure_still_yields_error_text(
+    monkeypatch,
+) -> None:
+    # If copy_to_clipboard returns failure, the error text still flows back
+    # to the caller — we don't silently swallow.
+    monkeypatch.delenv("VOICEPIPE_SHELL_ALLOW", raising=False)
+
+    def _fake_copy(text: str) -> tuple[bool, str | None]:
+        return False, "clipboard backend missing"
+
+    import voicepipe.clipboard as clipboard_mod
+
+    monkeypatch.setattr(clipboard_mod, "copy_to_clipboard", _fake_copy)
+
+    commands = _commands_with_error_destination("clipboard")
+    out, meta = tt.apply_transcript_triggers("zwingli boom echo hi", commands=commands)
+
+    assert out.startswith("⚠ zwingli: ")
+    assert meta is not None
+    assert meta["meta"]["error_destination"] == "clipboard"
+    assert meta["meta"]["clipboard"] is False
+    assert meta["meta"]["suppress_type"] is True
+
+
+def test_apply_transcript_triggers_unknown_action_honors_error_destination(
+    monkeypatch,
+) -> None:
+    # Non-dispatch failure path (unknown action). Pass commands explicitly so
+    # the destination flag is consulted from there rather than disk.
+    copied: list[str] = []
+
+    def _fake_copy(text: str) -> tuple[bool, str | None]:
+        copied.append(text)
+        return True, None
+
+    import voicepipe.clipboard as clipboard_mod
+
+    monkeypatch.setattr(clipboard_mod, "copy_to_clipboard", _fake_copy)
+
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingly": "nope"},
+        dispatch=config.TranscriptDispatchConfig(
+            unknown_verb="strip", error_destination="clipboard"
+        ),
+    )
+    out, meta = tt.apply_transcript_triggers("zwingly do it", commands=commands)
+
+    assert out.startswith("⚠ zwingli: ")
+    assert "Unknown transcript trigger action" in out
+    assert meta is not None
+    assert meta["ok"] is False
+    assert meta["meta"]["error_destination"] == "clipboard"
+    assert meta["meta"]["suppress_type"] is True
+    assert copied == [out]
+
+
+def test_format_zwingli_error_text_uses_prefix() -> None:
+    assert tt._format_zwingli_error_text("boom").startswith("⚠ zwingli: ")
+    assert tt._format_zwingli_error_text("boom") == "⚠ zwingli: boom"
+    # Empty reason still produces a recognizable prefix.
+    assert tt._format_zwingli_error_text("").startswith("⚠ zwingli")

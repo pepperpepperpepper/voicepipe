@@ -455,6 +455,85 @@ def test_get_transcript_commands_config_warns_on_invalid_template_to_stderr(
     assert "{{description}}" in captured.err
 
 
+def test_dispatch_error_destination_defaults_to_type(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = _reload_config()
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = config.config_dir(create=True) / "triggers.json"
+    triggers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "dispatch": {"unknown_verb": "strip"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cfg = config.get_transcript_commands_config(load_env=False)
+    assert cfg.dispatch.error_destination == "type"
+
+
+def test_dispatch_error_destination_accepts_valid_values(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = _reload_config()
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = config.config_dir(create=True) / "triggers.json"
+    for value in ("type", "clipboard", "both", "TYPE", "Both"):
+        triggers_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "triggers": {"zwingli": {"action": "dispatch"}},
+                    "dispatch": {"error_destination": value},
+                }
+            ),
+            encoding="utf-8",
+        )
+        config.invalidate_transcript_commands_cache()
+        cfg = config.get_transcript_commands_config(load_env=False)
+        assert cfg.dispatch.error_destination == value.lower()
+
+
+def test_dispatch_error_destination_rejects_invalid_value(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = _reload_config()
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = config.config_dir(create=True) / "triggers.json"
+    triggers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "dispatch": {"error_destination": "notify"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(config.VoicepipeConfigError) as exc_info:
+        config._load_transcript_commands_json()
+    msg = str(exc_info.value)
+    assert "error_destination" in msg
+    assert "notify" in msg
+
+
 def test_get_transcript_commands_config_execute_destination_defaults_to_none(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -848,9 +848,13 @@ def get_transcript_triggers(
     return out
 
 
+_ERROR_DESTINATION_CHOICES = frozenset({"type", "clipboard", "both"})
+
+
 @dataclass(frozen=True)
 class TranscriptDispatchConfig:
     unknown_verb: str = "strip"
+    error_destination: str = "type"
 
 
 @dataclass(frozen=True)
@@ -926,7 +930,20 @@ def _parse_transcript_dispatch_json_obj(obj: dict[str, Any]) -> TranscriptDispat
         raise VoicepipeConfigError("Invalid triggers.json: 'dispatch.unknown_verb' must be a string")
 
     resolved = (unknown or "").strip().lower() or "strip"
-    return TranscriptDispatchConfig(unknown_verb=resolved)
+
+    raw_error_dest = section.get("error_destination", "type")
+    if not isinstance(raw_error_dest, str):
+        raise VoicepipeConfigError(
+            "Invalid triggers.json: 'dispatch.error_destination' must be a string"
+        )
+    error_dest = raw_error_dest.strip().lower() or "type"
+    if error_dest not in _ERROR_DESTINATION_CHOICES:
+        raise VoicepipeConfigError(
+            f"Invalid triggers.json: 'dispatch.error_destination' must be one of "
+            f"{sorted(_ERROR_DESTINATION_CHOICES)}; got {raw_error_dest!r}"
+        )
+
+    return TranscriptDispatchConfig(unknown_verb=resolved, error_destination=error_dest)
 
 
 def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, TranscriptVerbConfig]:

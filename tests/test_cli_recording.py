@@ -191,6 +191,66 @@ def test_stop_json_outputs_structured_result(tmp_path: Path, monkeypatch, isolat
     assert "sk-test-secret" not in result.output
 
 
+def test_stop_clipboard_verb_skips_typing_and_copies(
+    tmp_path: Path, monkeypatch, isolated_home: Path
+) -> None:
+    import voicepipe.commands.recording as recording_cmd
+
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"abc")
+
+    class _FakeBackend:
+        def stop(self):
+            return _StopResult(audio_file=str(audio), session=None, recording_id="rid")
+
+    triggered: dict[str, str] = {}
+
+    def _fake_copy(text: str):
+        triggered["copied"] = text
+        return True, None
+
+    typed: list[str] = []
+
+    def _fake_type(text: str, **kwargs):
+        typed.append(text)
+        return True, None
+
+    def _fake_transcribe(audio_file: str, **kwargs):
+        # Simulate that apply_transcript_triggers ran upstream and attached
+        # the clipboard verb's trigger metadata + suppress_type flag.
+        return TranscriptionResult(
+            text="hello world",
+            backend="openai",
+            model="gpt-test",
+            audio_file=audio_file,
+            recording_id=kwargs.get("recording_id"),
+            source=kwargs.get("source"),
+            warnings=[],
+            transcript_trigger={
+                "action": "dispatch",
+                "meta": {
+                    "mode": "verb",
+                    "verb": "copy",
+                    "action": "clipboard",
+                    "handler_meta": {"clipboard": True, "suppress_type": True},
+                },
+            },
+        )
+
+    monkeypatch.setattr(recording_cmd, "AutoRecorderBackend", lambda: _FakeBackend())
+    monkeypatch.setattr(recording_cmd, "transcribe_audio_file_result", _fake_transcribe)
+    monkeypatch.setattr(recording_cmd, "type_text", _fake_type)
+
+    import voicepipe.clipboard as clipboard_mod
+
+    monkeypatch.setattr(clipboard_mod, "copy_to_clipboard", _fake_copy)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["stop", "--type"])
+    assert result.exit_code == 0, _combined_cli_output(result)
+    assert typed == []
+
+
 def test_stop_routes_zwingli_command_via_triggers_when_enabled(
     tmp_path: Path, monkeypatch, isolated_home: Path
 ) -> None:

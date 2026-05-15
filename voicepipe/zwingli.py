@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import threading
 import time
 import os
+from collections import deque
 from typing import Optional
 
 from voicepipe.config import (
@@ -14,6 +16,70 @@ from voicepipe.config import (
     get_zwingli_temperature,
     get_zwingli_user_prompt,
 )
+
+
+_RATE_LIMIT_LOCK = threading.Lock()
+_RATE_LIMIT_HITS: deque[float] = deque()
+_RATE_LIMIT_WINDOW_SECONDS = 60.0
+_RATE_LIMIT_DEFAULT_PER_MIN = 10
+
+
+class ZwingliRateLimitError(RuntimeError):
+    """Raised when too many Zwingli LLM calls happen within the rate-limit window."""
+
+    def __init__(self, message: str, *, retry_after_seconds: float) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = float(retry_after_seconds)
+
+
+def _rate_limit_per_minute() -> int:
+    raw = (os.environ.get("VOICEPIPE_ZWINGLI_RATE_LIMIT_PER_MIN") or "").strip()
+    if not raw:
+        return _RATE_LIMIT_DEFAULT_PER_MIN
+    try:
+        value = int(raw)
+    except ValueError:
+        return _RATE_LIMIT_DEFAULT_PER_MIN
+    if value < 0:
+        return _RATE_LIMIT_DEFAULT_PER_MIN
+    return value
+
+
+def _check_rate_limit(now: Optional[float] = None) -> None:
+    """Raise ZwingliRateLimitError if the current call would exceed the per-minute cap.
+
+    A cap of 0 disables the limit entirely (matches "off"). Otherwise this is a
+    sliding-window counter: we drop hits older than the window and reject the
+    call if the window already holds `cap` hits.
+    """
+    cap = _rate_limit_per_minute()
+    if cap <= 0:
+        return
+
+    current = float(now) if now is not None else time.monotonic()
+    cutoff = current - _RATE_LIMIT_WINDOW_SECONDS
+
+    with _RATE_LIMIT_LOCK:
+        while _RATE_LIMIT_HITS and _RATE_LIMIT_HITS[0] < cutoff:
+            _RATE_LIMIT_HITS.popleft()
+
+        if len(_RATE_LIMIT_HITS) >= cap:
+            oldest = _RATE_LIMIT_HITS[0]
+            retry_after = max(0.0, (oldest + _RATE_LIMIT_WINDOW_SECONDS) - current)
+            raise ZwingliRateLimitError(
+                f"Zwingli rate-limit exceeded ({cap}/min); retry in "
+                f"{retry_after:.1f}s. Set VOICEPIPE_ZWINGLI_RATE_LIMIT_PER_MIN "
+                "to raise or disable (0).",
+                retry_after_seconds=retry_after,
+            )
+
+        _RATE_LIMIT_HITS.append(current)
+
+
+def _reset_rate_limit_state_for_tests() -> None:
+    """Test helper: clear the sliding window so tests don't contaminate each other."""
+    with _RATE_LIMIT_LOCK:
+        _RATE_LIMIT_HITS.clear()
 
 try:
     from openai import OpenAI
@@ -97,6 +163,8 @@ def process_zwingli_prompt_result(
     if resolved_user_prompt:
         messages.append({"role": "user", "content": resolved_user_prompt})
     messages.append({"role": "user", "content": cleaned})
+
+    _check_rate_limit()
 
     started = time.monotonic()
     client_kwargs: dict[str, str] = {"api_key": api_key}

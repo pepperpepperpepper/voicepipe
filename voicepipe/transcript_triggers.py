@@ -471,6 +471,31 @@ def _action_execute(
     return cleaned, {"enter": True}
 
 
+def _action_clipboard(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Copy the prompt to the system clipboard.
+
+    Returns the text plus a meta flag instructing callers not to also type
+    or otherwise re-emit the same text.
+    """
+    del verb_cfg, profiles
+    from voicepipe.clipboard import copy_to_clipboard
+
+    text = (prompt or "").strip()
+    if not text:
+        return "", {"clipboard": False, "suppress_type": True}
+
+    ok, err = copy_to_clipboard(text)
+    meta: dict[str, Any] = {"clipboard": bool(ok), "suppress_type": True}
+    if not ok and err:
+        meta["error"] = err
+    return text, meta
+
+
 _TYPE_TOKEN_TRANSLATION = str.maketrans(
     {
         ",": " ",
@@ -873,6 +898,7 @@ _ACTIONS: dict[str, ActionHandler] = {
     "execute": _action_execute,
     "type": _action_type,
     "plugin": _action_plugin,
+    "clipboard": _action_clipboard,
 }
 
 # Keys returned by handlers in their inner_meta that the dispatcher should

@@ -527,21 +527,84 @@ def test_apply_transcript_triggers_dispatch_alias_with_separator() -> None:
     assert meta["meta"]["verb"] == "plugin"
 
 
+def test_apply_transcript_triggers_dispatch_clipboard_copies_and_signals_suppression(
+    monkeypatch,
+) -> None:
+    copied: dict[str, str] = {}
+
+    def _fake_copy(text: str) -> tuple[bool, str | None]:
+        copied["text"] = text
+        return True, None
+
+    import voicepipe.clipboard as clipboard_mod
+
+    monkeypatch.setattr(clipboard_mod, "copy_to_clipboard", _fake_copy)
+
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "copy": config.TranscriptVerbConfig(
+                action="clipboard", enabled=True, type="builtin"
+            )
+        },
+    )
+
+    out, meta = tt.apply_transcript_triggers("zwingli copy hello world", commands=commands)
+    assert out == "hello world"
+    assert copied.get("text") == "hello world"
+    assert meta is not None
+    assert meta["meta"]["verb"] == "copy"
+    assert meta["meta"]["action"] == "clipboard"
+    assert meta["meta"]["handler_meta"]["clipboard"] is True
+    assert meta["meta"]["handler_meta"]["suppress_type"] is True
+
+
+def test_apply_transcript_triggers_dispatch_clipboard_empty_prompt_no_copy(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+
+    def _fake_copy(text: str) -> tuple[bool, str | None]:
+        calls.append(text)
+        return True, None
+
+    import voicepipe.clipboard as clipboard_mod
+
+    monkeypatch.setattr(clipboard_mod, "copy_to_clipboard", _fake_copy)
+
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "copy": config.TranscriptVerbConfig(
+                action="clipboard", enabled=True, type="builtin"
+            )
+        },
+    )
+
+    out, meta = tt.apply_transcript_triggers("zwingli copy", commands=commands)
+    assert out == ""
+    assert calls == []
+    assert meta["meta"]["handler_meta"]["suppress_type"] is True
+
+
 def test_apply_transcript_triggers_dispatch_alias_does_not_shadow_existing_verb() -> None:
     commands = config.TranscriptCommandsConfig(
         triggers={"zwingli": "dispatch"},
         dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
         verbs={
-            "shell": config.TranscriptVerbConfig(action="shell", enabled=True, type="shell"),
-            "execute": config.TranscriptVerbConfig(
-                action="execute", enabled=True, type="execute", aliases=("shell",)
+            "keep": config.TranscriptVerbConfig(action="strip", enabled=True, type="builtin"),
+            "drop": config.TranscriptVerbConfig(
+                action="strip", enabled=True, type="builtin", aliases=("keep",)
             ),
         },
     )
-    out, meta = tt.apply_transcript_triggers("zwingli shell echo hi", commands=commands)
+    out, meta = tt.apply_transcript_triggers("zwingli keep hello", commands=commands)
+    assert out == "hello"
     assert meta is not None
-    assert meta["meta"]["verb"] == "shell"
-    assert meta["meta"]["action"] == "shell"
+    assert meta["meta"]["verb"] == "keep"
+    assert meta["meta"]["action"] == "strip"
 
 
 def test_apply_transcript_triggers_dispatch_plugin_disabled(monkeypatch, tmp_path) -> None:

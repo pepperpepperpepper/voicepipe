@@ -50,6 +50,22 @@ def _is_execute_trigger(result: TranscriptionResult) -> bool:
     return str(meta.get("verb_type") or "").strip().lower() == "execute"
 
 
+def _suppress_type_for_trigger(result: TranscriptionResult) -> bool:
+    """True if the trigger handler already emitted output (e.g. clipboard verb)."""
+    trigger = getattr(result, "transcript_trigger", None)
+    if not isinstance(trigger, dict):
+        return False
+    meta = trigger.get("meta")
+    if not isinstance(meta, dict):
+        return False
+    if meta.get("suppress_type") is True:
+        return True
+    handler_meta = meta.get("handler_meta")
+    if isinstance(handler_meta, dict) and handler_meta.get("suppress_type") is True:
+        return True
+    return False
+
+
 def _extract_type_sequence(result: TranscriptionResult) -> list[dict[str, object]] | None:
     trigger = getattr(result, "transcript_trigger", None)
     if not isinstance(trigger, dict):
@@ -158,7 +174,7 @@ def _emit_transcription(
     else:
         click.echo(output_text)
 
-    if type_:
+    if type_ and not _suppress_type_for_trigger(result):
         type_sequence = _extract_type_sequence(result)
         if type_sequence is not None:
             ok, err = perform_type_sequence(type_sequence)

@@ -280,6 +280,21 @@ def _extract_type_sequence_from_payload(payload: object) -> list[dict[str, objec
     seq = handler_meta.get("sequence")
     return seq if isinstance(seq, list) else None
 
+
+def _suppress_type_from_payload(payload: object) -> bool:
+    """True if the trigger handler signaled it already emitted output."""
+    if not isinstance(payload, dict):
+        return False
+    meta = payload.get("meta")
+    if not isinstance(meta, dict):
+        return False
+    if meta.get("suppress_type") is True:
+        return True
+    handler_meta = meta.get("handler_meta")
+    if isinstance(handler_meta, dict) and handler_meta.get("suppress_type") is True:
+        return True
+    return False
+
 def send_transcribe_request_fileobj(fh: BinaryIO, *, filename: str) -> str:
     """Transcribe audio from a file-like object without writing a temp WAV."""
     # Keep imports out of the `start` hot path.
@@ -776,25 +791,31 @@ def execute_toggle_inprocess() -> None:
                     except Exception:
                         pass
 
-                    fast_log(
-                        "[TOGGLE] Typing transcription: "
-                        f"backend={typing_backend.name} window_id={target_window or ''} chars={len(output_text)}"
-                    )
-                    t_type0 = time.monotonic()
-                    type_sequence = _extract_type_sequence_from_payload(trigger_meta)
-                    if type_sequence is not None:
-                        typed_ok, type_err = perform_type_sequence(
-                            type_sequence,
-                            window_id=target_window,
-                            backend=typing_backend,
-                        )
+                    if _suppress_type_from_payload(trigger_meta):
+                        fast_log("[TOGGLE] Skipping type: trigger handler already emitted output")
+                        typed_ok, type_err = True, None
+                        t_type_ms = 0
+                        type_sequence = None
                     else:
-                        typed_ok, type_err = type_text(
-                            output_text,
-                            window_id=target_window,
-                            backend=typing_backend,
+                        fast_log(
+                            "[TOGGLE] Typing transcription: "
+                            f"backend={typing_backend.name} window_id={target_window or ''} chars={len(output_text)}"
                         )
-                    t_type_ms = int((time.monotonic() - t_type0) * 1000)
+                        t_type0 = time.monotonic()
+                        type_sequence = _extract_type_sequence_from_payload(trigger_meta)
+                        if type_sequence is not None:
+                            typed_ok, type_err = perform_type_sequence(
+                                type_sequence,
+                                window_id=target_window,
+                                backend=typing_backend,
+                            )
+                        else:
+                            typed_ok, type_err = type_text(
+                                output_text,
+                                window_id=target_window,
+                                backend=typing_backend,
+                            )
+                        t_type_ms = int((time.monotonic() - t_type0) * 1000)
                     if not typed_ok:
                         fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
                     else:

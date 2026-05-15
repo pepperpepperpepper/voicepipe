@@ -994,10 +994,17 @@ def _resolve_verb_and_args(
     return verb, args
 
 
-def _dispatch_prompt(prompt: str, *, commands: TranscriptCommandsConfig) -> tuple[str, dict[str, Any]]:
-    cleaned = (prompt or "").strip()
-    verb, args = _resolve_verb_and_args(cleaned, commands=commands)
-
+def _dispatch_single_step(
+    verb: str,
+    args: str,
+    raw_chunk: str,
+    *,
+    commands: TranscriptCommandsConfig,
+) -> tuple[str, dict[str, Any]]:
+    """Run one dispatch step. `raw_chunk` is the original chunk before verb
+    extraction; it is used when falling back through the unknown-verb path so
+    the verb token isn't silently dropped (mirroring the pre-chain behavior).
+    """
     verb_cfg = commands.verbs.get(verb) if verb else None
 
     if verb_cfg is not None and bool(verb_cfg.enabled):
@@ -1040,7 +1047,7 @@ def _dispatch_prompt(prompt: str, *, commands: TranscriptCommandsConfig) -> tupl
     if handler is None:
         raise RuntimeError(f"Unknown dispatch.unknown_verb action: {unknown_action!r}")
     out_text, inner_meta = handler(
-        cleaned, verb_cfg=None, profiles=commands.llm_profiles
+        raw_chunk, verb_cfg=None, profiles=commands.llm_profiles
     )
     meta: dict[str, Any] = {
         "mode": "unknown-verb",
@@ -1052,6 +1059,98 @@ def _dispatch_prompt(prompt: str, *, commands: TranscriptCommandsConfig) -> tupl
     if inner_meta:
         meta["handler_meta"] = inner_meta
     return out_text, meta
+
+
+_CHAIN_KEYWORD = " then "
+
+
+def _find_chain_boundaries(
+    text: str, *, commands: TranscriptCommandsConfig
+) -> list[tuple[int, int]]:
+    """Locate ' then <verb>' boundaries where <verb> resolves via the verbs map.
+
+    Returns a list of (split_start, next_chunk_start) byte positions. Empty
+    list means no chain.
+    """
+    out: list[tuple[int, int]] = []
+    lowered = text.lower()
+    search_start = 0
+    n = len(text)
+    while True:
+        idx = lowered.find(_CHAIN_KEYWORD, search_start)
+        if idx == -1:
+            return out
+        after = idx + len(_CHAIN_KEYWORD)
+        # Skip any extra whitespace before the candidate verb token.
+        while after < n and text[after].isspace():
+            after += 1
+        if after >= n:
+            return out
+        candidate = text[after:]
+        candidate_verb, _ = _resolve_verb_and_args(candidate, commands=commands)
+        if candidate_verb and candidate_verb in commands.verbs:
+            out.append((idx, after))
+            search_start = after
+        else:
+            search_start = idx + 1
+
+
+def _split_chain_chunks(
+    cleaned: str, *, commands: TranscriptCommandsConfig
+) -> list[str]:
+    """Split the post-trigger prompt into chain chunks. Single chunk = no chain."""
+    boundaries = _find_chain_boundaries(cleaned, commands=commands)
+    if not boundaries:
+        return [cleaned]
+    chunks: list[str] = []
+    last = 0
+    for split_start, next_start in boundaries:
+        chunks.append(cleaned[last:split_start].strip())
+        last = next_start
+    chunks.append(cleaned[last:].strip())
+    return chunks
+
+
+def _dispatch_prompt(prompt: str, *, commands: TranscriptCommandsConfig) -> tuple[str, dict[str, Any]]:
+    cleaned = (prompt or "").strip()
+    chunks = _split_chain_chunks(cleaned, commands=commands)
+
+    if len(chunks) == 1:
+        verb, args = _resolve_verb_and_args(chunks[0], commands=commands)
+        return _dispatch_single_step(verb, args, chunks[0], commands=commands)
+
+    chain_metas: list[dict[str, Any]] = []
+    prior_output = ""
+    final_text = ""
+    final_meta: dict[str, Any] = {}
+
+    for i, chunk in enumerate(chunks):
+        verb, split_args = _resolve_verb_and_args(chunk, commands=commands)
+        if i == 0:
+            step_input = split_args
+            step_chunk = chunk
+        elif split_args.strip():
+            # Explicit args after the chain verb: honor them, ignore prior output.
+            step_input = split_args
+            step_chunk = chunk
+        else:
+            # Verb-only chain step: pipe the previous output in.
+            step_input = prior_output
+            step_chunk = prior_output
+
+        step_text, step_meta = _dispatch_single_step(
+            verb, step_input, step_chunk, commands=commands
+        )
+        prior_output = step_text
+
+        if i < len(chunks) - 1:
+            chain_metas.append(step_meta)
+        else:
+            final_text = step_text
+            final_meta = step_meta
+
+    final_meta["chain"] = chain_metas
+    return final_text, final_meta
 
 
 def apply_transcript_triggers(

@@ -527,6 +527,128 @@ def test_apply_transcript_triggers_dispatch_alias_with_separator() -> None:
     assert meta["meta"]["verb"] == "plugin"
 
 
+def test_apply_transcript_triggers_chain_pipes_output_to_next_step(
+    monkeypatch,
+) -> None:
+    copied: dict[str, str] = {}
+
+    def _fake_copy(text: str) -> tuple[bool, str | None]:
+        copied["text"] = text
+        return True, None
+
+    import voicepipe.clipboard as clipboard_mod
+
+    monkeypatch.setattr(clipboard_mod, "copy_to_clipboard", _fake_copy)
+
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "echo": config.TranscriptVerbConfig(action="strip", enabled=True, type="builtin"),
+            "copy": config.TranscriptVerbConfig(
+                action="clipboard", enabled=True, type="builtin"
+            ),
+        },
+    )
+
+    out, meta = tt.apply_transcript_triggers(
+        "zwingli echo hello world then copy", commands=commands
+    )
+    assert out == "hello world"
+    assert copied.get("text") == "hello world"
+    assert meta is not None
+    assert meta["meta"]["verb"] == "copy"
+    assert meta["meta"]["action"] == "clipboard"
+    chain = meta["meta"]["chain"]
+    assert len(chain) == 1
+    assert chain[0]["verb"] == "echo"
+    assert chain[0]["action"] == "strip"
+
+
+def test_apply_transcript_triggers_chain_three_steps(monkeypatch) -> None:
+    copied: dict[str, str] = {}
+
+    def _fake_copy(text: str) -> tuple[bool, str | None]:
+        copied["text"] = text
+        return True, None
+
+    import voicepipe.clipboard as clipboard_mod
+
+    monkeypatch.setattr(clipboard_mod, "copy_to_clipboard", _fake_copy)
+
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "echo": config.TranscriptVerbConfig(action="strip", enabled=True, type="builtin"),
+            "tag": config.TranscriptVerbConfig(action="strip", enabled=True, type="builtin"),
+            "copy": config.TranscriptVerbConfig(
+                action="clipboard", enabled=True, type="builtin"
+            ),
+        },
+    )
+
+    # echo "alpha" -> "alpha"; then tag (no args, pipes "alpha") -> "alpha"; then copy
+    out, meta = tt.apply_transcript_triggers(
+        "zwingli echo alpha then tag then copy", commands=commands
+    )
+    assert out == "alpha"
+    assert copied.get("text") == "alpha"
+    assert meta is not None
+    chain = meta["meta"]["chain"]
+    assert [step["verb"] for step in chain] == ["echo", "tag"]
+
+
+def test_apply_transcript_triggers_chain_keyword_without_known_verb_is_inline(
+    monkeypatch,
+) -> None:
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "echo": config.TranscriptVerbConfig(action="strip", enabled=True, type="builtin"),
+        },
+    )
+
+    # "then summarize" is not a chain: "summarize" is not a registered verb,
+    # so the whole thing stays in the echo args.
+    out, meta = tt.apply_transcript_triggers(
+        "zwingli echo rewrite this then summarize", commands=commands
+    )
+    assert out == "rewrite this then summarize"
+    assert meta is not None
+    assert "chain" not in meta["meta"]
+
+
+def test_apply_transcript_triggers_chain_step_with_explicit_args_ignores_pipe(
+    monkeypatch,
+) -> None:
+    seen_inputs: list[str] = []
+
+    def _spy_strip(prompt, *, verb_cfg=None, profiles=None):
+        seen_inputs.append(prompt)
+        return (prompt or "").strip(), {}
+
+    monkeypatch.setitem(tt._ACTIONS, "strip", _spy_strip)
+
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "echo": config.TranscriptVerbConfig(action="strip", enabled=True, type="builtin"),
+            "tag": config.TranscriptVerbConfig(action="strip", enabled=True, type="builtin"),
+        },
+    )
+
+    out, meta = tt.apply_transcript_triggers(
+        "zwingli echo alpha then tag beta", commands=commands
+    )
+    # Step 1 was called with "alpha"; step 2 was called with "beta" (its own
+    # args), not "alpha" (the pipe).
+    assert seen_inputs == ["alpha", "beta"]
+    assert out == "beta"
+
+
 def test_apply_transcript_triggers_dispatch_clipboard_copies_and_signals_suppression(
     monkeypatch,
 ) -> None:

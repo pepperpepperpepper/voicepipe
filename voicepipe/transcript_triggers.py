@@ -30,7 +30,33 @@ class TranscriptTriggerMatch:
     reason: str
 
 
-_ZWINGLI_DEBUG_LOG_MAX_BYTES = 20 * 1024 * 1024
+_ZWINGLI_DEBUG_LOG_DEFAULT_MAX_BYTES = 20 * 1024 * 1024
+
+
+def _zwingli_debug_log_max_bytes() -> int:
+    """Resolve the debug-log rotation threshold from the environment.
+
+    Accepts raw bytes ("1048576") or a K/M/G suffix ("20M", "1.5G"). A value
+    of 0 disables rotation (file grows without bound). Empty, malformed, or
+    negative values fall back to the default.
+    """
+    raw = (os.environ.get("VOICEPIPE_ZWINGLI_DEBUG_LOG_MAX_BYTES") or "").strip()
+    if not raw:
+        return _ZWINGLI_DEBUG_LOG_DEFAULT_MAX_BYTES
+
+    multiplier = 1
+    suffix = raw[-1:].lower()
+    if suffix in ("k", "m", "g"):
+        multiplier = {"k": 1024, "m": 1024 ** 2, "g": 1024 ** 3}[suffix]
+        raw = raw[:-1].strip()
+
+    try:
+        value = float(raw)
+    except ValueError:
+        return _ZWINGLI_DEBUG_LOG_DEFAULT_MAX_BYTES
+    if value < 0:
+        return _ZWINGLI_DEBUG_LOG_DEFAULT_MAX_BYTES
+    return int(value * multiplier)
 
 
 def _zwingli_debug_log_enabled() -> bool:
@@ -66,6 +92,10 @@ def _truncate_for_log(value: object, *, max_chars: int = 20_000) -> object:
 
 
 def _maybe_rotate_debug_log(path: Path) -> None:
+    max_bytes = _zwingli_debug_log_max_bytes()
+    if max_bytes <= 0:
+        return
+
     try:
         st = path.stat()
     except FileNotFoundError:
@@ -77,7 +107,7 @@ def _maybe_rotate_debug_log(path: Path) -> None:
         size = int(getattr(st, "st_size", 0) or 0)
     except Exception:
         size = 0
-    if size <= _ZWINGLI_DEBUG_LOG_MAX_BYTES:
+    if size <= max_bytes:
         return
 
     backup = Path(str(path) + ".1")

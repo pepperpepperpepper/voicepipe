@@ -222,16 +222,60 @@ def match_transcript_trigger(
     return None
 
 
-def _action_strip(prompt: str) -> tuple[str, dict[str, Any]]:
+def _action_strip(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    del verb_cfg, profiles
     return (prompt or "").strip(), {}
 
 
-def _action_zwingli(prompt: str) -> tuple[str, dict[str, Any]]:
+def _action_zwingli(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+) -> tuple[str, dict[str, Any]]:
     from voicepipe.zwingli import process_zwingli_prompt_result
 
-    text, meta = process_zwingli_prompt_result(prompt)
+    profile_name = ""
+    if verb_cfg is not None:
+        profile_name = (getattr(verb_cfg, "profile", "") or "").strip().lower()
+
+    profile: TranscriptLLMProfileConfig | None = None
+    if profile_name and profiles is not None:
+        profile = profiles.get(profile_name)
+
+    rendered_prompt = prompt
+    template_applied = False
+    if profile is not None and profile.user_prompt_template:
+        rendered_prompt = _render_user_prompt_template(
+            profile.user_prompt_template, text=prompt
+        )
+        template_applied = True
+
+    if profile is not None:
+        text, meta = process_zwingli_prompt_result(
+            rendered_prompt,
+            model=profile.model,
+            temperature=profile.temperature,
+            system_prompt=profile.system_prompt,
+            user_prompt=profile.user_prompt,
+        )
+    else:
+        text, meta = process_zwingli_prompt_result(rendered_prompt)
+
     if not isinstance(meta, dict):
         meta = {"meta": meta}
+    else:
+        meta = dict(meta)
+
+    if profile_name:
+        meta["profile_found"] = profile is not None
+    if template_applied:
+        meta["template_applied"] = True
     return text, meta
 
 
@@ -248,23 +292,6 @@ def _render_user_prompt_template(template: str, *, text: str) -> str:
         return cleaned_template.rstrip() + "\n\n" + cleaned_text
 
     return cleaned_template
-
-
-def _action_zwingli_profile(
-    prompt: str, *, profile: TranscriptLLMProfileConfig
-) -> tuple[str, dict[str, Any]]:
-    from voicepipe.zwingli import process_zwingli_prompt_result
-
-    text, meta = process_zwingli_prompt_result(
-        prompt,
-        model=profile.model,
-        temperature=profile.temperature,
-        system_prompt=profile.system_prompt,
-        user_prompt=profile.user_prompt,
-    )
-    if not isinstance(meta, dict):
-        meta = {"meta": meta}
-    return text, meta
 
 
 def _parse_positive_float(value: object) -> float | None:
@@ -410,23 +437,33 @@ def _strip_trailing_sentence_punct_from_shell_command(command: str) -> str:
     return " ".join(parts)
 
 
-def _action_shell(prompt: str, *, timeout_seconds: float | None = None) -> tuple[str, dict[str, Any]]:
+def _action_shell(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    del profiles
+    timeout_seconds = getattr(verb_cfg, "timeout_seconds", None) if verb_cfg else None
     stdout, stderr, meta = _run_shell_command(prompt, timeout_seconds=timeout_seconds)
     output = stdout if stdout.strip() else stderr
     output = (output or "").rstrip("\n")
     return output, meta
 
 
-def _action_execute(prompt: str, *, timeout_seconds: float | None = None) -> tuple[str, dict[str, Any]]:
+def _action_execute(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+) -> tuple[str, dict[str, Any]]:
     """Prepare a shell command for *typing* into a terminal and pressing Enter.
 
     This action must never spawn a subprocess to run the command; it only
     returns the cleaned command text and metadata indicating that an Enter
     keystroke should be sent by the caller when typing is the destination.
-
-    `timeout_seconds` is accepted for config compatibility but is unused.
     """
-    del timeout_seconds
+    del verb_cfg, profiles
     cleaned = _strip_trailing_sentence_punct_from_shell_command(prompt)
     cleaned = (cleaned or "").strip()
     if not cleaned:
@@ -628,7 +665,12 @@ def _render_type_sequence(sequence: list[dict[str, Any]]) -> str:
     return " ".join(parts).strip()
 
 
-def _action_type(prompt: str) -> tuple[str, dict[str, Any]]:
+def _action_type(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+) -> tuple[str, dict[str, Any]]:
     """Type a sequence of keypresses and/or literal words.
 
     Example transcripts:
@@ -636,6 +678,7 @@ def _action_type(prompt: str) -> tuple[str, dict[str, Any]]:
       - "up arrow up arrow"
       - "control b d"
     """
+    del verb_cfg, profiles
     tokens = _tokenize_type_prompt(prompt)
     sequence: list[dict[str, Any]] = []
     pending_mods: list[str] = []
@@ -793,9 +836,15 @@ def _normalize_plugin_result(result: object) -> tuple[str, dict[str, Any]]:
     return str(result), {}
 
 
-def _action_plugin(prompt: str, *, verb_cfg: TranscriptVerbConfig) -> tuple[str, dict[str, Any]]:
+def _action_plugin(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    del profiles
     cleaned = (prompt or "").strip()
-    plugin = getattr(verb_cfg, "plugin", None)
+    plugin = getattr(verb_cfg, "plugin", None) if verb_cfg else None
     if plugin is None:
         raise RuntimeError("Plugin verb is missing configuration (plugin={...})")
 
@@ -815,13 +864,20 @@ def _action_plugin(prompt: str, *, verb_cfg: TranscriptVerbConfig) -> tuple[str,
     return out_text, meta
 
 
-_ACTIONS: dict[str, Callable[[str], tuple[str, dict[str, Any]]]] = {
+ActionHandler = Callable[..., tuple[str, dict[str, Any]]]
+
+_ACTIONS: dict[str, ActionHandler] = {
     "strip": _action_strip,
     "zwingli": _action_zwingli,
     "shell": _action_shell,
     "execute": _action_execute,
     "type": _action_type,
+    "plugin": _action_plugin,
 }
+
+# Keys returned by handlers in their inner_meta that the dispatcher should
+# surface at the top level of verb metadata rather than under "handler_meta".
+_PROMOTED_META_KEYS: tuple[str, ...] = ("profile_found", "template_applied")
 
 _DISPATCH_SEPARATORS = (",", ":", ";", ".")
 
@@ -884,32 +940,12 @@ def _dispatch_prompt(prompt: str, *, commands: TranscriptCommandsConfig) -> tupl
 
     if verb_cfg is not None and bool(verb_cfg.enabled):
         action = _resolve_action_from_verb_config(verb, verb_cfg)
-
-        inner_meta: dict[str, Any]
-        profile_found = False
-        template_applied = False
-        profile_name = (getattr(verb_cfg, "profile", None) or "").strip().lower()
-        profile = commands.llm_profiles.get(profile_name) if profile_name else None
-        if action == "plugin":
-            out_text, inner_meta = _action_plugin(args, verb_cfg=verb_cfg)
-        elif action == "zwingli" and profile is not None:
-            profile_found = True
-            profile_prompt = args
-            if profile.user_prompt_template:
-                profile_prompt = _render_user_prompt_template(
-                    profile.user_prompt_template, text=args
-                )
-                template_applied = True
-            out_text, inner_meta = _action_zwingli_profile(profile_prompt, profile=profile)
-        elif action == "execute":
-            out_text, inner_meta = _action_execute(args, timeout_seconds=verb_cfg.timeout_seconds)
-        elif action == "shell":
-            out_text, inner_meta = _action_shell(args, timeout_seconds=verb_cfg.timeout_seconds)
-        else:
-            handler = _ACTIONS.get(action)
-            if handler is None:
-                raise RuntimeError(f"Unknown verb action: {action!r} (verb={verb!r})")
-            out_text, inner_meta = handler(args)
+        handler = _ACTIONS.get(action)
+        if handler is None:
+            raise RuntimeError(f"Unknown verb action: {action!r} (verb={verb!r})")
+        out_text, inner_meta = handler(
+            args, verb_cfg=verb_cfg, profiles=commands.llm_profiles
+        )
 
         meta: dict[str, Any] = {
             "mode": "verb",
@@ -921,10 +957,6 @@ def _dispatch_prompt(prompt: str, *, commands: TranscriptCommandsConfig) -> tupl
             meta["destination"] = verb_cfg.destination
         if getattr(verb_cfg, "profile", None):
             meta["profile"] = verb_cfg.profile
-            if action == "zwingli":
-                meta["profile_found"] = profile_found
-            if template_applied:
-                meta["template_applied"] = True
         if getattr(verb_cfg, "timeout_seconds", None) is not None:
             meta["timeout_seconds"] = verb_cfg.timeout_seconds
         plugin = getattr(verb_cfg, "plugin", None)
@@ -934,6 +966,9 @@ def _dispatch_prompt(prompt: str, *, commands: TranscriptCommandsConfig) -> tupl
                 "path": plugin.path,
                 "callable": plugin.callable,
             }
+        for key in _PROMOTED_META_KEYS:
+            if key in inner_meta:
+                meta[key] = inner_meta.pop(key)
         if inner_meta:
             meta["handler_meta"] = inner_meta
         return out_text, meta
@@ -942,7 +977,9 @@ def _dispatch_prompt(prompt: str, *, commands: TranscriptCommandsConfig) -> tupl
     handler = _ACTIONS.get(unknown_action)
     if handler is None:
         raise RuntimeError(f"Unknown dispatch.unknown_verb action: {unknown_action!r}")
-    out_text, inner_meta = handler(cleaned)
+    out_text, inner_meta = handler(
+        cleaned, verb_cfg=None, profiles=commands.llm_profiles
+    )
     meta: dict[str, Any] = {
         "mode": "unknown-verb",
         "verb": verb,

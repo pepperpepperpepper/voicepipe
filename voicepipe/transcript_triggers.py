@@ -910,31 +910,67 @@ def _resolve_action_from_verb_config(_verb: str, cfg: TranscriptVerbConfig) -> s
     return (cfg.action or "").strip().lower() or "strip"
 
 
+def _build_verb_alias_map(
+    verbs: Mapping[str, TranscriptVerbConfig],
+) -> dict[str, str]:
+    """Return a phrase -> canonical-verb map built from each verb's aliases.
+
+    Aliases that collide with an existing verb name or with another alias
+    are skipped (first-write wins) to keep verb resolution deterministic.
+    """
+    out: dict[str, str] = {}
+    for verb, cfg in verbs.items():
+        for alias in getattr(cfg, "aliases", ()) or ():
+            phrase = " ".join((alias or "").strip().lower().split())
+            if not phrase or phrase == verb or phrase in verbs:
+                continue
+            out.setdefault(phrase, verb)
+    return out
+
+
+def _resolve_verb_and_args(
+    cleaned: str, *, commands: TranscriptCommandsConfig
+) -> tuple[str, str]:
+    """Split a post-trigger prompt into (verb, args), honoring verb aliases."""
+    if not cleaned:
+        return "", ""
+
+    alias_map = _build_verb_alias_map(commands.verbs)
+
+    if alias_map:
+        lowered = cleaned.lower()
+        # Try multi-word aliases first, longest match wins.
+        for alias in sorted(
+            (a for a in alias_map if " " in a), key=lambda a: -len(a)
+        ):
+            if lowered == alias:
+                return alias_map[alias], ""
+            if not lowered.startswith(alias):
+                continue
+            tail_idx = len(alias)
+            tail_ch = cleaned[tail_idx]
+            if not (tail_ch.isspace() or tail_ch in _DISPATCH_SEPARATORS):
+                continue
+            j = tail_idx
+            if cleaned[j] in _DISPATCH_SEPARATORS:
+                j += 1
+            while j < len(cleaned) and cleaned[j].isspace():
+                j += 1
+            if j < len(cleaned) and cleaned[j] in _DISPATCH_SEPARATORS:
+                j += 1
+            while j < len(cleaned) and cleaned[j].isspace():
+                j += 1
+            return alias_map[alias], cleaned[j:]
+
+    verb, args = _split_dispatch_verb(cleaned)
+    if verb and verb in alias_map:
+        return alias_map[verb], args
+    return verb, args
+
+
 def _dispatch_prompt(prompt: str, *, commands: TranscriptCommandsConfig) -> tuple[str, dict[str, Any]]:
     cleaned = (prompt or "").strip()
-    verb, args = _split_dispatch_verb(cleaned)
-
-    # Normalize common STT variants that turn a single-word verb into two words.
-    # Example: "plugin" -> "plug in".
-    if verb == "plug" and "plugin" in commands.verbs and "plug" not in commands.verbs:
-        stripped_args = args.lstrip()
-        lowered_args = stripped_args.lower()
-        if lowered_args == "in":
-            args = ""
-            verb = "plugin"
-        elif lowered_args.startswith("in"):
-            next_ch = stripped_args[2:3]
-            if not next_ch:
-                args = ""
-                verb = "plugin"
-            elif next_ch.isspace() or next_ch in _DISPATCH_SEPARATORS:
-                j = 2
-                if j < len(stripped_args) and stripped_args[j] in _DISPATCH_SEPARATORS:
-                    j += 1
-                while j < len(stripped_args) and stripped_args[j].isspace():
-                    j += 1
-                args = stripped_args[j:]
-                verb = "plugin"
+    verb, args = _resolve_verb_and_args(cleaned, commands=commands)
 
     verb_cfg = commands.verbs.get(verb) if verb else None
 

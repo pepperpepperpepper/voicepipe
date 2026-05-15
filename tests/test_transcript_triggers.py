@@ -467,7 +467,7 @@ def test_apply_transcript_triggers_dispatch_parses_verb_separators() -> None:
     assert meta["meta"]["mode"] == "verb"
 
 
-def test_apply_transcript_triggers_dispatch_normalizes_plug_in_to_plugin() -> None:
+def test_apply_transcript_triggers_dispatch_resolves_multi_word_alias() -> None:
     commands = config.TranscriptCommandsConfig(
         triggers={"zwingli": "dispatch"},
         dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
@@ -476,6 +476,7 @@ def test_apply_transcript_triggers_dispatch_normalizes_plug_in_to_plugin() -> No
                 action="strip",
                 enabled=True,
                 type="builtin",
+                aliases=("plug in",),
             ),
         },
     )
@@ -486,6 +487,61 @@ def test_apply_transcript_triggers_dispatch_normalizes_plug_in_to_plugin() -> No
     assert meta["action"] == "dispatch"
     assert meta["meta"]["mode"] == "verb"
     assert meta["meta"]["verb"] == "plugin"
+
+
+def test_apply_transcript_triggers_dispatch_resolves_single_word_alias() -> None:
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "python": config.TranscriptVerbConfig(
+                action="strip",
+                enabled=True,
+                type="builtin",
+                aliases=("py",),
+            ),
+        },
+    )
+    out, meta = tt.apply_transcript_triggers("zwingli py print hello", commands=commands)
+    assert out == "print hello"
+    assert meta is not None
+    assert meta["meta"]["verb"] == "python"
+
+
+def test_apply_transcript_triggers_dispatch_alias_with_separator() -> None:
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "plugin": config.TranscriptVerbConfig(
+                action="strip",
+                enabled=True,
+                type="builtin",
+                aliases=("plug in",),
+            ),
+        },
+    )
+    out, meta = tt.apply_transcript_triggers("zwingli plug in, hello", commands=commands)
+    assert out == "hello"
+    assert meta is not None
+    assert meta["meta"]["verb"] == "plugin"
+
+
+def test_apply_transcript_triggers_dispatch_alias_does_not_shadow_existing_verb() -> None:
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "shell": config.TranscriptVerbConfig(action="shell", enabled=True, type="shell"),
+            "execute": config.TranscriptVerbConfig(
+                action="execute", enabled=True, type="execute", aliases=("shell",)
+            ),
+        },
+    )
+    out, meta = tt.apply_transcript_triggers("zwingli shell echo hi", commands=commands)
+    assert meta is not None
+    assert meta["meta"]["verb"] == "shell"
+    assert meta["meta"]["action"] == "shell"
 
 
 def test_apply_transcript_triggers_dispatch_plugin_disabled(monkeypatch, tmp_path) -> None:

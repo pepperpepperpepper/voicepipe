@@ -869,6 +869,7 @@ class TranscriptVerbConfig:
     timeout_seconds: float | None = None
     plugin: TranscriptPluginConfig | None = None
     destination: str | None = None
+    aliases: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -945,6 +946,7 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
 
         plugin: TranscriptPluginConfig | None = None
         destination: str | None = None
+        aliases: tuple[str, ...] = ()
         if isinstance(raw_value, str):
             action = raw_value
             enabled = True
@@ -987,6 +989,23 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
             raw_timeout = raw_value.get("timeout_seconds")
             if isinstance(raw_timeout, (int, float)) and not isinstance(raw_timeout, bool):
                 timeout_seconds = float(raw_timeout)
+
+            raw_aliases = raw_value.get("aliases")
+            if raw_aliases is not None:
+                if not isinstance(raw_aliases, list):
+                    raise VoicepipeConfigError(
+                        f"Invalid triggers.json: verb {raw_verb!r} 'aliases' must be a list of strings"
+                    )
+                collected: list[str] = []
+                for raw_alias in raw_aliases:
+                    if not isinstance(raw_alias, str):
+                        raise VoicepipeConfigError(
+                            f"Invalid triggers.json: verb {raw_verb!r} 'aliases' must contain strings"
+                        )
+                    phrase = " ".join(raw_alias.strip().lower().split())
+                    if phrase:
+                        collected.append(phrase)
+                aliases = tuple(collected)
 
             if verb_type == "plugin":
                 raw_plugin = raw_value.get("plugin")
@@ -1048,6 +1067,7 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
             timeout_seconds=timeout_seconds,
             plugin=plugin,
             destination=destination,
+            aliases=aliases,
         )
 
     return out

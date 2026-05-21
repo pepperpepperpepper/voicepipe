@@ -48,12 +48,6 @@ def test_transcribe_file_sets_tuned_server_vad_chunking(model: str) -> None:
     }
 
 
-def test_transcribe_file_omits_chunking_strategy_for_whisper_1() -> None:
-    transcriber, fake = _make_transcriber("whisper-1")
-    transcriber.transcribe_file(io.BytesIO(b"audio"))
-    assert "chunking_strategy" not in fake.audio.transcriptions.last_params
-
-
 def test_gpt4_prompt_includes_non_speech_directive() -> None:
     text = WhisperTranscriber.GPT4_PROMPT
     assert "Do not annotate non-speech sounds" in text

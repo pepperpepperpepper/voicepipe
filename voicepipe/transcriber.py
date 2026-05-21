@@ -18,10 +18,7 @@ else:
 
 class WhisperTranscriber:
     """Handles transcription using OpenAI's Whisper API."""
-    
-    # Default prompts for different models
-    WHISPER_PROMPT = 'She said, "Hello, how are you?" Then she asked, "What\'s your name?" I replied, "My name is John."'
-    
+
     GPT4_PROMPT = """Please transcribe in dictation mode. When the speaker says punctuation commands, convert them to actual punctuation:
 - "open quote" or "quotation mark" → "
 - "close quote" or "end quote" → "
@@ -50,8 +47,6 @@ Transcribe spoken words only. Do not annotate non-speech sounds such as breaths,
         builtin: Optional[str] = None
         if effective_model.startswith("gpt-4"):
             builtin = self.GPT4_PROMPT
-        elif effective_model == "whisper-1":
-            builtin = self.WHISPER_PROMPT
 
         cleaned = (prompt or "").strip()
         if cleaned:

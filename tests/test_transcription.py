@@ -198,8 +198,8 @@ def test_transcribe_audio_file_model_prefix_overrides_backend(monkeypatch) -> No
 
     monkeypatch.setattr("voicepipe.transcriber.WhisperTranscriber", _FakeWhisper)
 
-    out = transcribe_audio_file("a.wav", model="openai:whisper-1", prefer_daemon=False)
-    assert out == "ok-openai:a.wav:whisper-1"
+    out = transcribe_audio_file("a.wav", model="openai:gpt-4o-mini-transcribe", prefer_daemon=False)
+    assert out == "ok-openai:a.wav:gpt-4o-mini-transcribe"
 
 
 def test_transcribe_audio_file_sends_abs_path_and_backend_prefixed_model_to_daemon(

@@ -140,7 +140,7 @@ sudo apt-get install portaudio19-dev xdotool wtype
 
 Voicepipe supports multiple transcription backends:
 
-- `openai` (default): models like `gpt-4o-transcribe`, `whisper-1`
+- `openai` (default): models like `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`
 - `elevenlabs`: models like `scribe_v1`
 
 Configure in your `voicepipe.env` file:
@@ -153,7 +153,7 @@ Note: the default `voicepipe.env` location is OS-dependent (Linux: `~/.config/vo
 
 You can also override per command by prefixing the model:
 ```bash
-voicepipe stop --model openai:whisper-1
+voicepipe stop --model openai:gpt-4o-mini-transcribe
 voicepipe stop --model elevenlabs:scribe_v1
 ```
 
@@ -348,7 +348,6 @@ Voicepipe supports multiple backends and models:
 - OpenAI (`VOICEPIPE_TRANSCRIBE_BACKEND=openai`):
   - `gpt-4o-transcribe`: best quality (typically higher cost)
   - `gpt-4o-mini-transcribe`: faster/cheaper (typically lower quality)
-  - `whisper-1`: legacy Whisper model
 - ElevenLabs (`VOICEPIPE_TRANSCRIBE_BACKEND=elevenlabs`):
   - `scribe_v1`: default
   - `scribe_v1_experimental`: experimental
@@ -357,7 +356,6 @@ Voicepipe supports multiple backends and models:
 voicepipe start
 voicepipe stop --model gpt-4o-transcribe
 voicepipe stop --model gpt-4o-mini-transcribe
-voicepipe stop --model whisper-1
 voicepipe stop --model elevenlabs:scribe_v1
 ```
 

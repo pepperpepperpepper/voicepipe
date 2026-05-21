@@ -387,7 +387,7 @@ def transcribe_audio_file(
     raise TranscriptionError(
         "Unsupported transcription backend.\n\n"
         "Set VOICEPIPE_TRANSCRIBE_BACKEND to one of: openai, elevenlabs\n"
-        "Or prefix the model like: openai:whisper-1 or elevenlabs:scribe_v1\n"
+        "Or prefix the model like: openai:gpt-4o-mini-transcribe or elevenlabs:scribe_v1\n"
         f"Got backend={backend!r} model={model!r}"
     )
 
@@ -451,7 +451,7 @@ def transcribe_audio_bytes(
     raise TranscriptionError(
         "Unsupported transcription backend.\n\n"
         "Set VOICEPIPE_TRANSCRIBE_BACKEND to one of: openai, elevenlabs\n"
-        "Or prefix the model like: openai:whisper-1 or elevenlabs:scribe_v1\n"
+        "Or prefix the model like: openai:gpt-4o-mini-transcribe or elevenlabs:scribe_v1\n"
         f"Got backend={backend!r} model={model!r}"
     )
 
@@ -516,7 +516,7 @@ def transcribe_audio_fileobj(
     raise TranscriptionError(
         "Unsupported transcription backend.\n\n"
         "Set VOICEPIPE_TRANSCRIBE_BACKEND to one of: openai, elevenlabs\n"
-        "Or prefix the model like: openai:whisper-1 or elevenlabs:scribe_v1\n"
+        "Or prefix the model like: openai:gpt-4o-mini-transcribe or elevenlabs:scribe_v1\n"
         f"Got backend={backend!r} model={model!r}"
     )
 
@@ -632,7 +632,7 @@ def transcribe_audio_file_result(
     raise TranscriptionError(
         "Unsupported transcription backend.\n\n"
         "Set VOICEPIPE_TRANSCRIBE_BACKEND to one of: openai, elevenlabs\n"
-        "Or prefix the model like: openai:whisper-1 or elevenlabs:scribe_v1\n"
+        "Or prefix the model like: openai:gpt-4o-mini-transcribe or elevenlabs:scribe_v1\n"
         f"Got backend={backend!r} model={model!r}"
     )
 

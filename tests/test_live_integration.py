@@ -48,7 +48,7 @@ def test_live_transcribe_known_sample_contains_expected_phrase() -> None:
     audio = _asset_path("test.mp3")
     expected = _asset_path("test.expected.txt").read_text(encoding="utf-8").strip()
 
-    model = (os.environ.get("VOICEPIPE_LIVE_TRANSCRIBE_MODEL") or "whisper-1").strip()
+    model = (os.environ.get("VOICEPIPE_LIVE_TRANSCRIBE_MODEL") or "gpt-4o-transcribe").strip()
     text = transcribe_audio_file(
         str(audio),
         model=model,

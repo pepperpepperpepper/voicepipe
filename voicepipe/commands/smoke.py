@@ -76,7 +76,7 @@ def _normalize(text: str) -> str:
     help=(
         "Transcription model to use (defaults to VOICEPIPE_TRANSCRIBE_MODEL / "
         "VOICEPIPE_MODEL; backend via VOICEPIPE_TRANSCRIBE_BACKEND). "
-        "You can also prefix: openai:whisper-1 or elevenlabs:scribe_v1"
+        "You can also prefix: openai:gpt-4o-mini-transcribe or elevenlabs:scribe_v1"
     ),
 )
 @click.option(

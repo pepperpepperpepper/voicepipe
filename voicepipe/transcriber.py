@@ -30,7 +30,9 @@ class WhisperTranscriber:
 - "question mark" → ?
 - "exclamation mark" → !
 
-Example: If speaker says "open quote hello close quote", transcribe as: "hello" """
+Example: If speaker says "open quote hello close quote", transcribe as: "hello"
+
+Transcribe spoken words only. Do not annotate non-speech sounds such as breaths, sighs, yawns, coughs, pauses, laughter, sniffs, or background noise. Do not include bracketed or parenthesized annotations like [pause], (sighs), [Music], or [BLANK_AUDIO]."""
     
     def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o-transcribe"):
         """Initialize the transcriber with API key and model."""
@@ -85,7 +87,12 @@ Example: If speaker says "open quote hello close quote", transcribe as: "hello" 
         if resolved_prompt:
             params["prompt"] = resolved_prompt
         if effective_model in ("gpt-4o-transcribe", "gpt-4o-mini-transcribe"):
-            params["chunking_strategy"] = {"type": "server_vad"}
+            params["chunking_strategy"] = {
+                "type": "server_vad",
+                "threshold": 0.6,
+                "silence_duration_ms": 700,
+                "prefix_padding_ms": 300,
+            }
 
         transcript = self.client.audio.transcriptions.create(**params)
         if isinstance(transcript, str):

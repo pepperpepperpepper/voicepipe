@@ -550,7 +550,8 @@ _DEFAULT_TRIGGERS_JSON_TEMPLATE_FALLBACK = """{
     \"bash\": { \"type\": \"llm\", \"profile\": \"shell\" },
     \"email\": { \"type\": \"llm\", \"profile\": \"email_draft\" },
     \"subprocess\": { \"type\": \"shell\", \"enabled\": true, \"timeout_seconds\": 10 },
-    \"execute\": { \"type\": \"execute\", \"enabled\": true, \"timeout_seconds\": 10 }
+    \"execute\": { \"type\": \"execute\", \"enabled\": true, \"timeout_seconds\": 10 },
+    \"help\": { \"type\": \"builtin\", \"action\": \"help\" }
   },
   \"llm_profiles\": {
     \"rewrite\": {
@@ -1115,6 +1116,11 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
             aliases=aliases,
             pattern=pattern,
             command_template=command_template,
+        )
+
+    if "help" not in out:
+        out["help"] = TranscriptVerbConfig(
+            action="help", enabled=True, type="builtin"
         )
 
     return out

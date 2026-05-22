@@ -13,7 +13,8 @@
     "email": { "type": "llm", "profile": "email_draft" },
     "subprocess": { "type": "shell", "enabled": true, "timeout_seconds": 10 },
     "execute": { "type": "execute", "enabled": true, "timeout_seconds": 10 },
-    "type": { "type": "type", "enabled": true }
+    "type": { "type": "type", "enabled": true },
+    "help": { "type": "builtin", "action": "help" }
   },
   "llm_profiles": {
     "rewrite": {

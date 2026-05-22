@@ -309,8 +309,9 @@ def _action_strip(
     verb_cfg: TranscriptVerbConfig | None = None,
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
     captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    del verb_cfg, profiles, captures
+    del verb_cfg, profiles, captures, commands
     return (prompt or "").strip(), {}
 
 
@@ -320,7 +321,9 @@ def _action_zwingli(
     verb_cfg: TranscriptVerbConfig | None = None,
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
     captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
 ) -> tuple[str, dict[str, Any]]:
+    del commands
     from voicepipe.zwingli import process_zwingli_prompt_result
 
     profile_name = ""
@@ -635,8 +638,9 @@ def _action_shell(
     verb_cfg: TranscriptVerbConfig | None = None,
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
     captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    del profiles
+    del profiles, commands
     timeout_seconds = getattr(verb_cfg, "timeout_seconds", None) if verb_cfg else None
     command_template = getattr(verb_cfg, "command_template", None) if verb_cfg else None
     if command_template and captures is not None:
@@ -655,6 +659,7 @@ def _action_execute(
     verb_cfg: TranscriptVerbConfig | None = None,
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
     captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Prepare a shell command for *typing* into a terminal and pressing Enter.
 
@@ -662,7 +667,7 @@ def _action_execute(
     returns the cleaned command text and metadata indicating that an Enter
     keystroke should be sent by the caller when typing is the destination.
     """
-    del profiles
+    del profiles, commands
     command_template = getattr(verb_cfg, "command_template", None) if verb_cfg else None
     if command_template and captures is not None:
         source = _substitute_command_template(command_template, captures)
@@ -681,10 +686,11 @@ def _action_clipboard(
     verb_cfg: TranscriptVerbConfig | None = None,
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
     captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Passthrough handler: the actual clipboard copy is performed by the
     emission layer via verb destination routing (see verb_cfg.destination)."""
-    del verb_cfg, profiles, captures
+    del verb_cfg, profiles, captures, commands
     return (prompt or "").strip(), {}
 
 
@@ -888,6 +894,7 @@ def _action_type(
     verb_cfg: TranscriptVerbConfig | None = None,
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
     captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Type a sequence of keypresses and/or literal words.
 
@@ -896,7 +903,7 @@ def _action_type(
       - "up arrow up arrow"
       - "control b d"
     """
-    del verb_cfg, profiles, captures
+    del verb_cfg, profiles, captures, commands
     tokens = _tokenize_type_prompt(prompt)
     sequence: list[dict[str, Any]] = []
     pending_mods: list[str] = []
@@ -1060,8 +1067,9 @@ def _action_plugin(
     verb_cfg: TranscriptVerbConfig | None = None,
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
     captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    del profiles, captures
+    del profiles, captures, commands
     cleaned = (prompt or "").strip()
     plugin = getattr(verb_cfg, "plugin", None) if verb_cfg else None
     if plugin is None:
@@ -1083,6 +1091,100 @@ def _action_plugin(
     return out_text, meta
 
 
+def _describe_verb_one_line(verb: str, cfg: TranscriptVerbConfig) -> str:
+    parts = [verb]
+    type_label = (cfg.type or "").strip().lower()
+    action_label = (cfg.action or "").strip().lower()
+    if type_label == "llm" and cfg.profile:
+        parts.append(f"(llm:{cfg.profile})")
+    elif type_label and type_label != action_label:
+        parts.append(f"({type_label}:{action_label})")
+    elif action_label:
+        parts.append(f"({action_label})")
+    effective_destination = cfg.destination
+    if not effective_destination and action_label == "clipboard":
+        effective_destination = "clipboard"
+    if effective_destination:
+        parts.append(f"-> {effective_destination}")
+    if cfg.aliases:
+        parts.append("aliases: " + ", ".join(cfg.aliases))
+    if not cfg.enabled:
+        parts.append("[disabled]")
+    return "  " + " ".join(parts)
+
+
+def _describe_verb_full(verb: str, cfg: TranscriptVerbConfig) -> str:
+    lines = [f"{verb}:"]
+    lines.append(f"  type: {cfg.type or '(unset)'}")
+    lines.append(f"  action: {cfg.action or '(unset)'}")
+    lines.append(f"  enabled: {cfg.enabled}")
+    effective_destination = cfg.destination
+    if not effective_destination and (cfg.action or "").strip().lower() == "clipboard":
+        effective_destination = "clipboard"
+    if effective_destination:
+        lines.append(f"  destination: {effective_destination}")
+    if cfg.profile:
+        lines.append(f"  profile: {cfg.profile}")
+    if cfg.timeout_seconds is not None:
+        lines.append(f"  timeout_seconds: {cfg.timeout_seconds}")
+    if cfg.aliases:
+        lines.append(f"  aliases: {', '.join(cfg.aliases)}")
+    if cfg.pattern:
+        lines.append(f"  pattern: {cfg.pattern}")
+    if cfg.command_template:
+        lines.append(f"  command_template: {cfg.command_template}")
+    if cfg.plugin is not None:
+        src = cfg.plugin.module or cfg.plugin.path or "(unset)"
+        lines.append(f"  plugin: {src}::{cfg.plugin.callable or '(unset)'}")
+    return "\n".join(lines)
+
+
+def _action_help(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
+) -> tuple[str, dict[str, Any]]:
+    del verb_cfg, profiles, captures
+    import os
+
+    args = (prompt or "").strip().lower()
+    verbs = dict(commands.verbs) if commands else {}
+
+    if args:
+        # Resolve aliases to canonical verb.
+        target = args
+        if target not in verbs:
+            for name, cfg in verbs.items():
+                if args in (a.lower() for a in (cfg.aliases or ())):
+                    target = name
+                    break
+        if target in verbs:
+            return _describe_verb_full(target, verbs[target]), {"help_target": target}
+        known = ", ".join(sorted(verbs)) or "(none)"
+        return (
+            f"voicepipe help: unknown verb {args!r}.\nKnown verbs: {known}",
+            {"help_target": args, "help_unknown": True},
+        )
+
+    backend = os.environ.get("VOICEPIPE_TRANSCRIBE_BACKEND") or "openai"
+    model = os.environ.get("VOICEPIPE_TRANSCRIBE_MODEL") or os.environ.get(
+        "VOICEPIPE_MODEL"
+    ) or "(default)"
+    lines = [f"voicepipe — backend: {backend}, model: {model}", ""]
+    if verbs:
+        lines.append("Verbs:")
+        for name in sorted(verbs):
+            lines.append(_describe_verb_one_line(name, verbs[name]))
+    else:
+        lines.append("Verbs: (none configured)")
+    lines.append("")
+    lines.append("Say 'zwingli help <verb>' for details on a specific verb.")
+    return "\n".join(lines), {"help_target": None}
+
+
 ActionHandler = Callable[..., tuple[str, dict[str, Any]]]
 
 _ACTIONS: dict[str, ActionHandler] = {
@@ -1093,6 +1195,7 @@ _ACTIONS: dict[str, ActionHandler] = {
     "type": _action_type,
     "plugin": _action_plugin,
     "clipboard": _action_clipboard,
+    "help": _action_help,
 }
 
 # Keys returned by handlers in their inner_meta that the dispatcher should
@@ -1206,6 +1309,7 @@ def _invoke_verb_handler(
         verb_cfg=verb_cfg,
         profiles=commands.llm_profiles,
         captures=captures,
+        commands=commands,
     )
 
     meta: dict[str, Any] = {
@@ -1274,7 +1378,11 @@ def _dispatch_single_step(
     if handler is None:
         raise RuntimeError(f"Unknown dispatch.unknown_verb action: {unknown_action!r}")
     out_text, inner_meta = handler(
-        raw_chunk, verb_cfg=None, profiles=commands.llm_profiles, captures=None
+        raw_chunk,
+        verb_cfg=None,
+        profiles=commands.llm_profiles,
+        captures=None,
+        commands=commands,
     )
     meta: dict[str, Any] = {
         "mode": "unknown-verb",

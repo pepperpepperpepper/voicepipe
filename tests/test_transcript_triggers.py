@@ -770,7 +770,7 @@ def test_apply_transcript_triggers_chain_step_with_explicit_args_ignores_pipe(
 ) -> None:
     seen_inputs: list[str] = []
 
-    def _spy_strip(prompt, *, verb_cfg=None, profiles=None, captures=None):
+    def _spy_strip(prompt, *, verb_cfg=None, profiles=None, captures=None, commands=None):
         seen_inputs.append(prompt)
         return (prompt or "").strip(), {}
 
@@ -1390,3 +1390,140 @@ def test_apply_transcript_triggers_pattern_exposes_captures_for_clipboard() -> N
     assert meta["meta"]["captures"] == {"what": "buy more coffee"}
     # Destination metadata is what tells the emission layer to copy.
     assert meta["meta"]["destination"] == "clipboard"
+
+
+# --- help verb ---
+
+
+def _commands_with_verbs(verbs: dict[str, config.TranscriptVerbConfig]) -> config.TranscriptCommandsConfig:
+    return config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs=verbs,
+    )
+
+
+def test_help_verb_no_args_lists_backend_and_verbs(monkeypatch) -> None:
+    monkeypatch.setenv("VOICEPIPE_TRANSCRIBE_BACKEND", "openai")
+    monkeypatch.setenv("VOICEPIPE_TRANSCRIBE_MODEL", "gpt-4o-transcribe")
+    commands = _commands_with_verbs(
+        {
+            "help": config.TranscriptVerbConfig(action="help", enabled=True, type="builtin"),
+            "copy": config.TranscriptVerbConfig(
+                action="clipboard", enabled=True, type="builtin",
+                aliases=("clip", "paste"),
+            ),
+            "shell": config.TranscriptVerbConfig(
+                action="zwingli", enabled=True, type="llm", profile="shell"
+            ),
+        }
+    )
+    out, meta = tt.apply_transcript_triggers("zwingli help", commands=commands)
+    assert "backend: openai" in out
+    assert "model: gpt-4o-transcribe" in out
+    assert "copy" in out
+    assert "shell" in out
+    assert "clip, paste" in out
+    assert "destination" not in meta["meta"]  # help verb has no destination by default
+    assert meta["meta"]["handler_meta"]["help_target"] is None
+
+
+def test_help_verb_with_known_verb_shows_details() -> None:
+    commands = _commands_with_verbs(
+        {
+            "help": config.TranscriptVerbConfig(action="help", enabled=True, type="builtin"),
+            "copy": config.TranscriptVerbConfig(
+                action="clipboard", enabled=True, type="builtin",
+                aliases=("clip",),
+            ),
+        }
+    )
+    out, meta = tt.apply_transcript_triggers("zwingli help copy", commands=commands)
+    assert out.startswith("copy:")
+    assert "action: clipboard" in out
+    assert "destination: clipboard" in out  # default destination for clipboard action
+    assert "aliases: clip" in out
+    assert meta["meta"]["handler_meta"]["help_target"] == "copy"
+
+
+def test_help_verb_resolves_alias() -> None:
+    commands = _commands_with_verbs(
+        {
+            "help": config.TranscriptVerbConfig(action="help", enabled=True, type="builtin"),
+            "copy": config.TranscriptVerbConfig(
+                action="clipboard", enabled=True, type="builtin",
+                aliases=("clip",),
+            ),
+        }
+    )
+    out, meta = tt.apply_transcript_triggers("zwingli help clip", commands=commands)
+    assert out.startswith("copy:")
+    assert meta["meta"]["handler_meta"]["help_target"] == "copy"
+
+
+def test_help_verb_unknown_returns_friendly_error() -> None:
+    commands = _commands_with_verbs(
+        {
+            "help": config.TranscriptVerbConfig(action="help", enabled=True, type="builtin"),
+            "copy": config.TranscriptVerbConfig(action="clipboard", enabled=True, type="builtin"),
+        }
+    )
+    out, meta = tt.apply_transcript_triggers("zwingli help flarble", commands=commands)
+    assert "unknown verb" in out.lower()
+    assert "flarble" in out
+    assert "copy" in out  # lists known verbs
+    assert meta["meta"]["handler_meta"]["help_unknown"] is True
+
+
+def test_help_verb_injected_when_not_in_user_config(tmp_path, monkeypatch) -> None:
+    import json
+
+    import voicepipe.config as cfg
+
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = cfg.config_dir(create=True) / "triggers.json"
+    triggers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "verbs": {"strip": {"type": "builtin"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg.invalidate_transcript_commands_cache()
+    loaded = cfg.get_transcript_commands_config(load_env=False)
+    assert "help" in loaded.verbs
+    assert loaded.verbs["help"].action == "help"
+    assert loaded.verbs["help"].type == "builtin"
+
+
+def test_help_verb_user_override_wins(tmp_path, monkeypatch) -> None:
+    import json
+
+    import voicepipe.config as cfg
+
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = cfg.config_dir(create=True) / "triggers.json"
+    triggers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "verbs": {"help": {"type": "builtin", "action": "strip"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg.invalidate_transcript_commands_cache()
+    loaded = cfg.get_transcript_commands_config(load_env=False)
+    assert loaded.verbs["help"].action == "strip"

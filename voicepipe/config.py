@@ -849,6 +849,7 @@ def get_transcript_triggers(
 
 
 _ERROR_DESTINATION_CHOICES = frozenset({"type", "clipboard", "both"})
+_VERB_DESTINATION_CHOICES = frozenset({"type", "clipboard", "both"})
 
 
 @dataclass(frozen=True)
@@ -992,11 +993,11 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
             if isinstance(raw_destination, str):
                 cleaned = raw_destination.strip().lower()
                 if cleaned:
-                    if cleaned not in {"print", "clipboard", "type"}:
+                    if cleaned not in _VERB_DESTINATION_CHOICES:
                         raise VoicepipeConfigError(
                             "Invalid triggers.json: verb "
                             f"{raw_verb!r} has invalid destination {cleaned!r} "
-                            "(expected: print, clipboard, type)"
+                            f"(expected: {sorted(_VERB_DESTINATION_CHOICES)})"
                         )
                     destination = cleaned
 

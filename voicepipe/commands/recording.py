@@ -66,6 +66,42 @@ def _suppress_type_for_trigger(result: TranscriptionResult) -> bool:
     return False
 
 
+_VERB_DESTINATIONS = frozenset({"type", "clipboard", "both"})
+
+
+def _extract_verb_destination(result: TranscriptionResult) -> str | None:
+    trigger = getattr(result, "transcript_trigger", None)
+    if not isinstance(trigger, dict):
+        return None
+    meta = trigger.get("meta")
+    if not isinstance(meta, dict):
+        return None
+    raw = meta.get("destination")
+    if not isinstance(raw, str):
+        return None
+    cleaned = raw.strip().lower()
+    return cleaned if cleaned in _VERB_DESTINATIONS else None
+
+
+def _resolve_emission_targets(
+    result: TranscriptionResult, *, type_flag: bool, clipboard_flag: bool
+) -> tuple[bool, bool]:
+    """Decide whether to type and/or copy to clipboard.
+
+    Verb destination, when set, overrides the CLI --type/--clipboard flags. With
+    no verb destination, fall back to CLI flags and honor handler suppress_type.
+    """
+    destination = _extract_verb_destination(result)
+    if destination == "clipboard":
+        return False, True
+    if destination == "type":
+        return True, False
+    if destination == "both":
+        return True, True
+    type_ = bool(type_flag) and not _suppress_type_for_trigger(result)
+    return type_, bool(clipboard_flag)
+
+
 def _extract_type_sequence(result: TranscriptionResult) -> list[dict[str, object]] | None:
     trigger = getattr(result, "transcript_trigger", None)
     if not isinstance(trigger, dict):
@@ -159,7 +195,11 @@ def _emit_transcription(
     except Exception:
         pass
 
-    if clipboard:
+    effective_type, effective_clipboard = _resolve_emission_targets(
+        result, type_flag=type_, clipboard_flag=clipboard
+    )
+
+    if effective_clipboard:
         try:
             from voicepipe.clipboard import copy_to_clipboard
 
@@ -174,7 +214,7 @@ def _emit_transcription(
     else:
         click.echo(output_text)
 
-    if type_ and not _suppress_type_for_trigger(result):
+    if effective_type:
         type_sequence = _extract_type_sequence(result)
         if type_sequence is not None:
             ok, err = perform_type_sequence(type_sequence)

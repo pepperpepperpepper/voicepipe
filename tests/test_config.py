@@ -595,6 +595,62 @@ def test_get_transcript_commands_config_execute_destination_defaults_to_none(
     assert cfg.verbs["execute"].destination is None
 
 
+def test_verb_destination_accepts_type_clipboard_both(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config = _reload_config()
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = config.config_dir(create=True) / "triggers.json"
+    for value in ("type", "clipboard", "both", "TYPE", "Both"):
+        triggers_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "triggers": {"zwingli": {"action": "dispatch"}},
+                    "verbs": {
+                        "shout": {"type": "action", "action": "strip", "destination": value},
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        config.invalidate_transcript_commands_cache()
+        cfg = config.get_transcript_commands_config(load_env=False)
+        assert cfg.verbs["shout"].destination == value.lower()
+
+
+def test_verb_destination_rejects_print(tmp_path: Path, monkeypatch) -> None:
+    config = _reload_config()
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = config.config_dir(create=True) / "triggers.json"
+    triggers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "verbs": {
+                    "shout": {"type": "action", "action": "strip", "destination": "print"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(config.VoicepipeConfigError) as exc_info:
+        config._load_transcript_commands_json()
+    msg = str(exc_info.value)
+    assert "destination" in msg
+    assert "print" in msg
+
+
 def test_get_transcript_commands_config_env_var_overrides_triggers_but_uses_verbs(
     tmp_path: Path, monkeypatch
 ) -> None:

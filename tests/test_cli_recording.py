@@ -293,15 +293,13 @@ def test_stop_routes_zwingli_command_via_triggers_when_enabled(
     assert payload["intent"]["reason"] == "trigger:zwingli"
 
 
-def test_stop_does_not_respect_transcript_trigger_destination(
-    tmp_path: Path,
+def _install_destination_fakes(
     monkeypatch,
-    isolated_home: Path,
-) -> None:
+    audio: Path,
+    destination: str,
+) -> tuple[list[str], list[str]]:
+    import voicepipe.clipboard as clipboard_mod
     import voicepipe.commands.recording as recording_cmd
-
-    audio = tmp_path / "audio.wav"
-    audio.write_bytes(b"abc")
 
     session_dict = {"pid": 1, "audio_file": str(audio)}
 
@@ -310,16 +308,19 @@ def test_stop_does_not_respect_transcript_trigger_destination(
             return _StopResult(audio_file=str(audio), session=session_dict)
 
     clipboard_calls: list[str] = []
-
-    import voicepipe.clipboard as clipboard
+    typed: list[str] = []
 
     def _fake_copy(text: str):
         clipboard_calls.append(text)
         return True, None
 
-    monkeypatch.setattr(clipboard, "copy_to_clipboard", _fake_copy)
+    def _fake_type(text: str, **_kwargs):
+        typed.append(text)
+        return True, None
 
+    monkeypatch.setattr(clipboard_mod, "copy_to_clipboard", _fake_copy)
     monkeypatch.setattr(recording_cmd, "AutoRecorderBackend", lambda: _FakeBackend())
+    monkeypatch.setattr(recording_cmd, "type_text", _fake_type)
     monkeypatch.setattr(
         recording_cmd,
         "transcribe_audio_file_result",
@@ -335,14 +336,95 @@ def test_stop_does_not_respect_transcript_trigger_destination(
                 "action": "dispatch",
                 "trigger": "zwingli",
                 "reason": "prefix",
-                "meta": {"destination": "clipboard"},
+                "meta": {"destination": destination},
             },
             warnings=[],
         ),
     )
+    return clipboard_calls, typed
+
+
+def test_stop_clipboard_destination_copies_without_flags(
+    tmp_path: Path,
+    monkeypatch,
+    isolated_home: Path,
+) -> None:
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"abc")
+
+    clipboard_calls, typed = _install_destination_fakes(monkeypatch, audio, "clipboard")
 
     runner = CliRunner()
     result = runner.invoke(main, ["stop"])
     assert result.exit_code == 0, result.output
     assert result.output.strip() == "hello"
+    assert clipboard_calls == ["hello"]
+    assert typed == []
+
+
+def test_stop_clipboard_destination_overrides_type_flag(
+    tmp_path: Path,
+    monkeypatch,
+    isolated_home: Path,
+) -> None:
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"abc")
+
+    clipboard_calls, typed = _install_destination_fakes(monkeypatch, audio, "clipboard")
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["stop", "--type"])
+    assert result.exit_code == 0, _combined_cli_output(result)
+    assert clipboard_calls == ["hello"]
+    assert typed == []
+
+
+def test_stop_type_destination_types_without_flag(
+    tmp_path: Path,
+    monkeypatch,
+    isolated_home: Path,
+) -> None:
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"abc")
+
+    clipboard_calls, typed = _install_destination_fakes(monkeypatch, audio, "type")
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["stop"])
+    assert result.exit_code == 0, _combined_cli_output(result)
+    assert typed == ["hello"]
     assert clipboard_calls == []
+
+
+def test_stop_type_destination_overrides_clipboard_flag(
+    tmp_path: Path,
+    monkeypatch,
+    isolated_home: Path,
+) -> None:
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"abc")
+
+    clipboard_calls, typed = _install_destination_fakes(monkeypatch, audio, "type")
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["stop", "--clipboard"])
+    assert result.exit_code == 0, _combined_cli_output(result)
+    assert typed == ["hello"]
+    assert clipboard_calls == []
+
+
+def test_stop_both_destination_types_and_copies(
+    tmp_path: Path,
+    monkeypatch,
+    isolated_home: Path,
+) -> None:
+    audio = tmp_path / "audio.wav"
+    audio.write_bytes(b"abc")
+
+    clipboard_calls, typed = _install_destination_fakes(monkeypatch, audio, "both")
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["stop"])
+    assert result.exit_code == 0, _combined_cli_output(result)
+    assert typed == ["hello"]
+    assert clipboard_calls == ["hello"]

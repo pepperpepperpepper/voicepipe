@@ -27,6 +27,7 @@ from voicepipe.recording_backend import (
     RecordingError,
 )
 from voicepipe.session import RecordingSession
+from voicepipe import trigger_meta
 from voicepipe.transcript_triggers import match_transcript_trigger
 from voicepipe.transcription import transcribe_audio_file_result, transcribe_audio_fileobj_result
 from voicepipe.transcription_result import IntentResult, TranscriptionResult
@@ -35,98 +36,6 @@ from voicepipe.platform import is_windows
 
 logger = logging.getLogger(__name__)
 
-def _is_execute_trigger(result: TranscriptionResult) -> bool:
-    trigger = getattr(result, "transcript_trigger", None)
-    if not isinstance(trigger, dict):
-        return False
-    meta = trigger.get("meta")
-    if not isinstance(meta, dict):
-        return False
-    if meta.get("enter") is True:
-        return True
-    handler_meta = meta.get("handler_meta")
-    if isinstance(handler_meta, dict) and handler_meta.get("enter") is True:
-        return True
-    return str(meta.get("verb_type") or "").strip().lower() == "execute"
-
-
-def _suppress_type_for_trigger(result: TranscriptionResult) -> bool:
-    """True if the trigger handler already emitted output (e.g. clipboard verb)."""
-    trigger = getattr(result, "transcript_trigger", None)
-    if not isinstance(trigger, dict):
-        return False
-    meta = trigger.get("meta")
-    if not isinstance(meta, dict):
-        return False
-    if meta.get("suppress_type") is True:
-        return True
-    handler_meta = meta.get("handler_meta")
-    if isinstance(handler_meta, dict) and handler_meta.get("suppress_type") is True:
-        return True
-    return False
-
-
-_VERB_DESTINATIONS = frozenset({"type", "clipboard", "both"})
-
-
-def _extract_verb_destination(result: TranscriptionResult) -> str | None:
-    trigger = getattr(result, "transcript_trigger", None)
-    if not isinstance(trigger, dict):
-        return None
-    meta = trigger.get("meta")
-    if not isinstance(meta, dict):
-        return None
-    raw = meta.get("destination")
-    if not isinstance(raw, str):
-        return None
-    cleaned = raw.strip().lower()
-    return cleaned if cleaned in _VERB_DESTINATIONS else None
-
-
-def _resolve_emission_targets(
-    result: TranscriptionResult, *, type_flag: bool, clipboard_flag: bool
-) -> tuple[bool, bool]:
-    """Decide whether to type and/or copy to clipboard.
-
-    Verb destination, when set, overrides the CLI --type/--clipboard flags. With
-    no verb destination, fall back to CLI flags and honor handler suppress_type.
-    """
-    destination = _extract_verb_destination(result)
-    if destination == "clipboard":
-        return False, True
-    if destination == "type":
-        return True, False
-    if destination == "both":
-        return True, True
-    type_ = bool(type_flag) and not _suppress_type_for_trigger(result)
-    return type_, bool(clipboard_flag)
-
-
-def _extract_type_sequence(result: TranscriptionResult) -> list[dict[str, object]] | None:
-    trigger = getattr(result, "transcript_trigger", None)
-    if not isinstance(trigger, dict):
-        return None
-
-    action = str(trigger.get("action") or "").strip().lower()
-    meta = trigger.get("meta")
-    if not isinstance(meta, dict):
-        return None
-
-    # Non-dispatch triggers may map directly to the "type" action.
-    if action == "type":
-        seq = meta.get("sequence")
-        return seq if isinstance(seq, list) else None
-
-    # Dispatch verbs store handler metadata under meta.handler_meta.
-    if action != "dispatch":
-        return None
-    if str(meta.get("action") or "").strip().lower() != "type":
-        return None
-    handler_meta = meta.get("handler_meta")
-    if not isinstance(handler_meta, dict):
-        return None
-    seq = handler_meta.get("sequence")
-    return seq if isinstance(seq, list) else None
 
 def _emit_transcription(
     result,
@@ -195,8 +104,9 @@ def _emit_transcription(
     except Exception:
         pass
 
-    effective_type, effective_clipboard = _resolve_emission_targets(
-        result, type_flag=type_, clipboard_flag=clipboard
+    trigger = getattr(result, "transcript_trigger", None)
+    effective_type, effective_clipboard = trigger_meta.resolve_emission_targets(
+        trigger, type_flag=type_, clipboard_flag=clipboard
     )
 
     if effective_clipboard:
@@ -215,7 +125,7 @@ def _emit_transcription(
         click.echo(output_text)
 
     if effective_type:
-        type_sequence = _extract_type_sequence(result)
+        type_sequence = trigger_meta.extract_type_sequence(trigger)
         if type_sequence is not None:
             ok, err = perform_type_sequence(type_sequence)
             if not ok:
@@ -224,7 +134,7 @@ def _emit_transcription(
             ok, err = type_text(output_text)
             if not ok:
                 click.echo(f"Error typing text: {err}", err=True)
-            elif _is_execute_trigger(result) and output_text.strip():
+            elif trigger_meta.is_execute(trigger) and output_text.strip():
                 ok2, err2 = press_enter()
                 if not ok2:
                     click.echo(f"Error pressing Enter: {err2}", err=True)

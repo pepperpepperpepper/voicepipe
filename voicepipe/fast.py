@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 from typing import BinaryIO, Optional
 
+from voicepipe import trigger_meta
 from voicepipe.config import get_transcribe_model, load_environment
 from voicepipe.locks import LockHeld, PidFileLock
 from voicepipe.paths import logs_dir, preserved_audio_dir, runtime_app_dir
@@ -216,117 +217,6 @@ def send_transcribe_request_result(audio_file: str, *, source: str) -> "Transcri
             warnings=[],
         )
 
-def _is_execute_trigger(result: object) -> bool:
-    trigger = getattr(result, "transcript_trigger", None)
-    if not isinstance(trigger, dict):
-        return False
-
-    meta = trigger.get("meta")
-    if not isinstance(meta, dict):
-        return False
-    if meta.get("enter") is True:
-        return True
-    handler_meta = meta.get("handler_meta")
-    if isinstance(handler_meta, dict) and handler_meta.get("enter") is True:
-        return True
-    return str(meta.get("verb_type") or "").strip().lower() == "execute"
-
-
-def _extract_type_sequence(result: object) -> list[dict[str, object]] | None:
-    trigger = getattr(result, "transcript_trigger", None)
-    if not isinstance(trigger, dict):
-        return None
-
-    action = str(trigger.get("action") or "").strip().lower()
-    meta = trigger.get("meta")
-    if not isinstance(meta, dict):
-        return None
-
-    if action == "type":
-        seq = meta.get("sequence")
-        return seq if isinstance(seq, list) else None
-
-    if action != "dispatch":
-        return None
-    if str(meta.get("action") or "").strip().lower() != "type":
-        return None
-    handler_meta = meta.get("handler_meta")
-    if not isinstance(handler_meta, dict):
-        return None
-    seq = handler_meta.get("sequence")
-    return seq if isinstance(seq, list) else None
-
-
-def _extract_type_sequence_from_payload(payload: object) -> list[dict[str, object]] | None:
-    if not isinstance(payload, dict):
-        return None
-
-    action = str(payload.get("action") or "").strip().lower()
-    meta = payload.get("meta")
-    if not isinstance(meta, dict):
-        return None
-
-    if action == "type":
-        seq = meta.get("sequence")
-        return seq if isinstance(seq, list) else None
-
-    if action != "dispatch":
-        return None
-    if str(meta.get("action") or "").strip().lower() != "type":
-        return None
-    handler_meta = meta.get("handler_meta")
-    if not isinstance(handler_meta, dict):
-        return None
-    seq = handler_meta.get("sequence")
-    return seq if isinstance(seq, list) else None
-
-
-def _suppress_type_from_payload(payload: object) -> bool:
-    """True if the trigger handler signaled it already emitted output."""
-    if not isinstance(payload, dict):
-        return False
-    meta = payload.get("meta")
-    if not isinstance(meta, dict):
-        return False
-    if meta.get("suppress_type") is True:
-        return True
-    handler_meta = meta.get("handler_meta")
-    if isinstance(handler_meta, dict) and handler_meta.get("suppress_type") is True:
-        return True
-    return False
-
-
-_VERB_DESTINATIONS_FAST = frozenset({"type", "clipboard", "both"})
-
-
-def _extract_verb_destination_from_payload(payload: object) -> str | None:
-    if not isinstance(payload, dict):
-        return None
-    meta = payload.get("meta")
-    if not isinstance(meta, dict):
-        return None
-    raw = meta.get("destination")
-    if not isinstance(raw, str):
-        return None
-    cleaned = raw.strip().lower()
-    return cleaned if cleaned in _VERB_DESTINATIONS_FAST else None
-
-
-def _resolve_emission_targets_from_payload(
-    payload: object, *, type_flag: bool, clipboard_flag: bool
-) -> tuple[bool, bool]:
-    """Mirror voicepipe.commands.recording._resolve_emission_targets for the
-    fast/in-process toggle path."""
-    destination = _extract_verb_destination_from_payload(payload)
-    if destination == "clipboard":
-        return False, True
-    if destination == "type":
-        return True, False
-    if destination == "both":
-        return True, True
-    type_ = bool(type_flag) and not _suppress_type_from_payload(payload)
-    return type_, bool(clipboard_flag)
-
 def send_transcribe_request_fileobj(fh: BinaryIO, *, filename: str) -> str:
     """Transcribe audio from a file-like object without writing a temp WAV."""
     # Keep imports out of the `start` hot path.
@@ -463,9 +353,9 @@ def _perform_toggle_post_stop(post: _TogglePostStop) -> None:
     if result.text:
         output_text = (result.text or "").rstrip()
         fast_log(f"[TOGGLE] Transcription: {output_text}")
-        trigger_meta = result.transcript_trigger
-        if trigger_meta is not None:
-            fast_log(f"[TOGGLE] Transcript trigger: {trigger_meta}")
+        trigger = result.transcript_trigger
+        if trigger is not None:
+            fast_log(f"[TOGGLE] Transcript trigger: {trigger}")
 
         # Always persist the last output for replay/recovery workflows.
         try:
@@ -477,8 +367,26 @@ def _perform_toggle_post_stop(post: _TogglePostStop) -> None:
         except Exception:
             pass
 
-        type_sequence = _extract_type_sequence(result)
-        if type_sequence is not None:
+        effective_type, effective_clipboard = trigger_meta.resolve_emission_targets(
+            trigger, type_flag=True, clipboard_flag=False
+        )
+
+        if effective_clipboard:
+            try:
+                from voicepipe.clipboard import copy_to_clipboard
+
+                ok_cb, cb_err = copy_to_clipboard(output_text)
+                if not ok_cb:
+                    fast_log(f"[TOGGLE] Warning: clipboard copy failed: {cb_err}")
+                else:
+                    fast_log(f"[TOGGLE] Copied to clipboard ({len(output_text)} chars)")
+            except Exception as e:
+                fast_log(f"[TOGGLE] Warning: clipboard copy raised: {e}")
+
+        type_sequence = trigger_meta.extract_type_sequence(trigger) if effective_type else None
+        if not effective_type:
+            typed_ok, type_err = True, None
+        elif type_sequence is not None:
             typed_ok, type_err = perform_type_sequence(
                 type_sequence,
                 window_id=target_window,
@@ -492,7 +400,12 @@ def _perform_toggle_post_stop(post: _TogglePostStop) -> None:
             )
         if not typed_ok:
             fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
-        elif type_sequence is None and _is_execute_trigger(result) and output_text.strip():
+        elif (
+            effective_type
+            and type_sequence is None
+            and trigger_meta.is_execute(trigger)
+            and output_text.strip()
+        ):
             ok2, err2 = press_enter(
                 window_id=target_window,
                 backend=typing_backend,  # type: ignore[arg-type]
@@ -805,9 +718,9 @@ def execute_toggle_inprocess() -> None:
 
                     from voicepipe.transcript_triggers import apply_transcript_triggers
 
-                    output_text, trigger_meta = apply_transcript_triggers(cleaned_text)
-                    if trigger_meta is not None:
-                        fast_log(f"[TOGGLE] Transcript trigger: {trigger_meta}")
+                    output_text, trigger = apply_transcript_triggers(cleaned_text)
+                    if trigger is not None:
+                        fast_log(f"[TOGGLE] Transcript trigger: {trigger}")
 
                     # Persist last output for replay/recovery workflows.
                     try:
@@ -816,15 +729,15 @@ def execute_toggle_inprocess() -> None:
                         payload = {
                             "source": "fast-toggle-inprocess",
                             "text": cleaned_text,
-                            "trigger_meta": trigger_meta,
+                            "trigger_meta": trigger,
                             "output_text": output_text,
                         }
                         save_last_output(output_text, payload=payload)
                     except Exception:
                         pass
 
-                    effective_type, effective_clipboard = _resolve_emission_targets_from_payload(
-                        trigger_meta, type_flag=True, clipboard_flag=False
+                    effective_type, effective_clipboard = trigger_meta.resolve_emission_targets(
+                        trigger, type_flag=True, clipboard_flag=False
                     )
 
                     if effective_clipboard:
@@ -850,7 +763,7 @@ def execute_toggle_inprocess() -> None:
                             f"backend={typing_backend.name} window_id={target_window or ''} chars={len(output_text)}"
                         )
                         t_type0 = time.monotonic()
-                        type_sequence = _extract_type_sequence_from_payload(trigger_meta)
+                        type_sequence = trigger_meta.extract_type_sequence(trigger)
                         if type_sequence is not None:
                             typed_ok, type_err = perform_type_sequence(
                                 type_sequence,
@@ -872,11 +785,7 @@ def execute_toggle_inprocess() -> None:
                         if (
                             effective_type
                             and type_sequence is None
-                            and
-                            isinstance(trigger_meta, dict)
-                            and isinstance(trigger_meta.get("meta"), dict)
-                            and str(trigger_meta["meta"].get("verb_type") or "").strip().lower()
-                            == "execute"
+                            and trigger_meta.is_execute(trigger)
                             and output_text.strip()
                         ):
                             ok2, err2 = press_enter(

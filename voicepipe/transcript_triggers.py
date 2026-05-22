@@ -647,10 +647,50 @@ def _action_shell(
         command = _substitute_command_template(command_template, captures)
     else:
         command = prompt
+
+    if verb_cfg is not None and getattr(verb_cfg, "confirm", False):
+        cleaned = (command or "").strip()
+        if not cleaned:
+            return "", {"pending": False, "reason": "empty_command"}
+        return _stash_pending_and_notice(verb_cfg=verb_cfg, verb_type="shell", command=cleaned)
+
     stdout, stderr, meta = _run_shell_command(command, timeout_seconds=timeout_seconds)
     output = stdout if stdout.strip() else stderr
     output = (output or "").rstrip("\n")
     return output, meta
+
+
+def _stash_pending_and_notice(
+    *, verb_cfg: TranscriptVerbConfig, verb_type: str, command: str
+) -> tuple[str, dict[str, Any]]:
+    """Save a pending command for the confirm-then-execute flow and return a
+    user-facing notice + meta. Shared by shell and execute confirm paths."""
+    from voicepipe import pending
+
+    raw_timeout = getattr(verb_cfg, "confirm_timeout_seconds", None)
+    timeout = (
+        float(raw_timeout)
+        if isinstance(raw_timeout, (int, float)) and raw_timeout > 0
+        else pending.DEFAULT_TIMEOUT_SECONDS
+    )
+    verb_name = (getattr(verb_cfg, "action", "") or verb_type).strip().lower()
+    entry = pending.make_pending(
+        verb=verb_name,
+        verb_type=verb_type,
+        command=command,
+        timeout_seconds=timeout,
+    )
+    pending.save_pending(entry)
+    notice = (
+        f"Pending {verb_type}: {command} — "
+        "say 'zwingli yes' to confirm or 'zwingli no' to cancel."
+    )
+    return notice, {
+        "pending": True,
+        "pending_verb_type": verb_type,
+        "pending_command": command,
+        "pending_timeout_seconds": timeout,
+    }
 
 
 def _action_execute(
@@ -677,6 +717,10 @@ def _action_execute(
     cleaned = (cleaned or "").strip()
     if not cleaned:
         return "", {"enter": False}
+    if verb_cfg is not None and getattr(verb_cfg, "confirm", False):
+        return _stash_pending_and_notice(
+            verb_cfg=verb_cfg, verb_type="execute", command=cleaned
+        )
     return cleaned, {"enter": True}
 
 
@@ -1133,6 +1177,10 @@ def _describe_verb_full(verb: str, cfg: TranscriptVerbConfig) -> str:
         lines.append(f"  pattern: {cfg.pattern}")
     if cfg.command_template:
         lines.append(f"  command_template: {cfg.command_template}")
+    if cfg.confirm:
+        lines.append(f"  confirm: true")
+        if cfg.confirm_timeout_seconds is not None:
+            lines.append(f"  confirm_timeout_seconds: {cfg.confirm_timeout_seconds}")
     if cfg.plugin is not None:
         src = cfg.plugin.module or cfg.plugin.path or "(unset)"
         lines.append(f"  plugin: {src}::{cfg.plugin.callable or '(unset)'}")
@@ -1185,6 +1233,67 @@ def _action_help(
     return "\n".join(lines), {"help_target": None}
 
 
+def _action_yes(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Resume a previously-stashed pending command. Args are ignored."""
+    del prompt, verb_cfg, profiles, captures, commands
+    from voicepipe import pending as pending_mod
+
+    entry = pending_mod.load_pending()
+    if entry is None:
+        return (
+            "No pending command to confirm (none stashed or it expired).",
+            {"no_pending": True},
+        )
+
+    pending_mod.clear_pending()
+    if entry.verb_type == "shell":
+        stdout, stderr, run_meta = _run_shell_command(entry.command, timeout_seconds=None)
+        output = stdout if stdout.strip() else stderr
+        output = (output or "").rstrip("\n")
+        run_meta["resumed_pending"] = True
+        run_meta["pending_verb"] = entry.verb
+        return output, run_meta
+    if entry.verb_type == "execute":
+        return entry.command, {
+            "enter": True,
+            "resumed_pending": True,
+            "pending_verb": entry.verb,
+        }
+    return (
+        f"Pending command has unknown verb_type {entry.verb_type!r}; cleared without action.",
+        {"resumed_pending": False, "pending_verb_type": entry.verb_type},
+    )
+
+
+def _action_no(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Cancel a previously-stashed pending command. Args are ignored."""
+    del prompt, verb_cfg, profiles, captures, commands
+    from voicepipe import pending as pending_mod
+
+    entry = pending_mod.load_pending()
+    pending_mod.clear_pending()
+    if entry is None:
+        return ("No pending command to cancel.", {"no_pending": True})
+    return (
+        f"Cancelled pending {entry.verb_type}: {entry.command}",
+        {"cancelled": True, "pending_verb": entry.verb, "pending_verb_type": entry.verb_type},
+    )
+
+
 ActionHandler = Callable[..., tuple[str, dict[str, Any]]]
 
 _ACTIONS: dict[str, ActionHandler] = {
@@ -1196,6 +1305,8 @@ _ACTIONS: dict[str, ActionHandler] = {
     "plugin": _action_plugin,
     "clipboard": _action_clipboard,
     "help": _action_help,
+    "yes": _action_yes,
+    "no": _action_no,
 }
 
 # Keys returned by handlers in their inner_meta that the dispatcher should

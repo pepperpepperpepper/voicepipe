@@ -551,7 +551,9 @@ _DEFAULT_TRIGGERS_JSON_TEMPLATE_FALLBACK = """{
     \"email\": { \"type\": \"llm\", \"profile\": \"email_draft\" },
     \"subprocess\": { \"type\": \"shell\", \"enabled\": true, \"timeout_seconds\": 10 },
     \"execute\": { \"type\": \"execute\", \"enabled\": true, \"timeout_seconds\": 10 },
-    \"help\": { \"type\": \"builtin\", \"action\": \"help\" }
+    \"help\": { \"type\": \"builtin\", \"action\": \"help\" },
+    \"yes\": { \"type\": \"builtin\", \"action\": \"yes\" },
+    \"no\": { \"type\": \"builtin\", \"action\": \"no\" }
   },
   \"llm_profiles\": {
     \"rewrite\": {
@@ -878,6 +880,8 @@ class TranscriptVerbConfig:
     aliases: tuple[str, ...] = ()
     pattern: str | None = None
     command_template: str | None = None
+    confirm: bool = False
+    confirm_timeout_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -970,6 +974,8 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
         aliases: tuple[str, ...] = ()
         pattern: str | None = None
         command_template: str | None = None
+        confirm: bool = False
+        confirm_timeout_seconds: float | None = None
         if isinstance(raw_value, str):
             action = raw_value
             enabled = True
@@ -1012,6 +1018,20 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
             raw_timeout = raw_value.get("timeout_seconds")
             if isinstance(raw_timeout, (int, float)) and not isinstance(raw_timeout, bool):
                 timeout_seconds = float(raw_timeout)
+
+            raw_confirm = raw_value.get("confirm", False)
+            if not isinstance(raw_confirm, bool):
+                raise VoicepipeConfigError(
+                    f"Invalid triggers.json: verb {raw_verb!r} has non-boolean 'confirm'"
+                )
+            confirm = bool(raw_confirm)
+
+            raw_confirm_timeout = raw_value.get("confirm_timeout_seconds")
+            if (
+                isinstance(raw_confirm_timeout, (int, float))
+                and not isinstance(raw_confirm_timeout, bool)
+            ):
+                confirm_timeout_seconds = float(raw_confirm_timeout)
 
             raw_aliases = raw_value.get("aliases")
             if raw_aliases is not None:
@@ -1116,11 +1136,21 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
             aliases=aliases,
             pattern=pattern,
             command_template=command_template,
+            confirm=confirm,
+            confirm_timeout_seconds=confirm_timeout_seconds,
         )
 
     if "help" not in out:
         out["help"] = TranscriptVerbConfig(
             action="help", enabled=True, type="builtin"
+        )
+    if "yes" not in out:
+        out["yes"] = TranscriptVerbConfig(
+            action="yes", enabled=True, type="builtin"
+        )
+    if "no" not in out:
+        out["no"] = TranscriptVerbConfig(
+            action="no", enabled=True, type="builtin"
         )
 
     return out

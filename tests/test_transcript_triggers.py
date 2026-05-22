@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import subprocess
 
+import pytest
+
 import voicepipe.config as config
 import voicepipe.transcript_triggers as tt
 
@@ -1527,3 +1529,230 @@ def test_help_verb_user_override_wins(tmp_path, monkeypatch) -> None:
     cfg.invalidate_transcript_commands_cache()
     loaded = cfg.get_transcript_commands_config(load_env=False)
     assert loaded.verbs["help"].action == "strip"
+
+
+# --- confirm flow (shell/execute + yes/no) ---
+
+
+@pytest.fixture
+def pending_in_tmp(tmp_path, monkeypatch):
+    """Redirect pending storage to a temp file for the duration of one test."""
+    from pathlib import Path
+
+    import voicepipe.pending as pending_mod
+
+    path = tmp_path / "pending-command.json"
+
+    def _fake_path(*, create_dir: bool = False) -> Path:
+        if create_dir:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        return path
+
+    monkeypatch.setattr(pending_mod, "pending_path", _fake_path)
+    return path
+
+
+def _confirm_commands(verbs: dict[str, config.TranscriptVerbConfig]) -> config.TranscriptCommandsConfig:
+    full = {
+        "yes": config.TranscriptVerbConfig(action="yes", enabled=True, type="builtin"),
+        "no": config.TranscriptVerbConfig(action="no", enabled=True, type="builtin"),
+    }
+    full.update(verbs)
+    return config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs=full,
+    )
+
+
+def test_shell_with_confirm_stashes_pending_and_does_not_run(pending_in_tmp, monkeypatch) -> None:
+    ran: list[str] = []
+
+    def _fake_run(*args, **kwargs):
+        ran.append(args[0] if args else "")
+        return "shouldnotrun", "", {}
+
+    monkeypatch.setattr(tt, "_run_shell_command", _fake_run)
+
+    commands = _confirm_commands(
+        {
+            "subprocess": config.TranscriptVerbConfig(
+                action="shell", enabled=True, type="shell", confirm=True
+            ),
+        }
+    )
+    out, meta = tt.apply_transcript_triggers("zwingli subprocess ls -la", commands=commands)
+    assert "Pending shell" in out
+    assert "ls -la" in out
+    assert ran == []
+    assert meta["meta"]["handler_meta"]["pending"] is True
+    assert pending_in_tmp.exists()
+
+
+def test_execute_with_confirm_stashes_pending_and_skips_enter(pending_in_tmp) -> None:
+    commands = _confirm_commands(
+        {
+            "execute": config.TranscriptVerbConfig(
+                action="execute", enabled=True, type="execute", confirm=True
+            ),
+        }
+    )
+    out, meta = tt.apply_transcript_triggers("zwingli execute echo hi", commands=commands)
+    assert "Pending execute" in out
+    assert "echo hi" in out
+    assert meta["meta"]["handler_meta"]["pending"] is True
+    # confirm path doesn't request Enter (that happens on yes)
+    assert meta["meta"]["handler_meta"].get("enter") is not True
+
+
+def test_yes_after_shell_confirm_runs_original(pending_in_tmp, monkeypatch) -> None:
+    ran: list[str] = []
+
+    def _fake_run(command, *, timeout_seconds=None):
+        ran.append(command)
+        return f"ran:{command}\n", "", {"returncode": 0}
+
+    monkeypatch.setattr(tt, "_run_shell_command", _fake_run)
+
+    commands = _confirm_commands(
+        {
+            "subprocess": config.TranscriptVerbConfig(
+                action="shell", enabled=True, type="shell", confirm=True
+            ),
+        }
+    )
+    tt.apply_transcript_triggers("zwingli subprocess ls -la", commands=commands)
+    assert pending_in_tmp.exists()
+
+    out, meta = tt.apply_transcript_triggers("zwingli yes", commands=commands)
+    assert ran == ["ls -la"]
+    assert "ran:ls -la" in out
+    assert meta["meta"]["handler_meta"]["resumed_pending"] is True
+    assert not pending_in_tmp.exists()
+
+
+def test_yes_after_execute_confirm_returns_command_with_enter(pending_in_tmp) -> None:
+    commands = _confirm_commands(
+        {
+            "execute": config.TranscriptVerbConfig(
+                action="execute", enabled=True, type="execute", confirm=True
+            ),
+        }
+    )
+    tt.apply_transcript_triggers("zwingli execute echo hi", commands=commands)
+    out, meta = tt.apply_transcript_triggers("zwingli yes", commands=commands)
+    assert out == "echo hi"
+    handler_meta = meta["meta"]["handler_meta"]
+    assert handler_meta["enter"] is True
+    assert handler_meta["resumed_pending"] is True
+    assert not pending_in_tmp.exists()
+
+
+def test_yes_without_pending_returns_friendly_message(pending_in_tmp) -> None:
+    commands = _confirm_commands({})
+    out, meta = tt.apply_transcript_triggers("zwingli yes", commands=commands)
+    assert "no pending" in out.lower()
+    assert meta["meta"]["handler_meta"]["no_pending"] is True
+
+
+def test_no_cancels_pending(pending_in_tmp, monkeypatch) -> None:
+    monkeypatch.setattr(tt, "_run_shell_command", lambda *a, **k: ("", "", {}))
+
+    commands = _confirm_commands(
+        {
+            "subprocess": config.TranscriptVerbConfig(
+                action="shell", enabled=True, type="shell", confirm=True
+            ),
+        }
+    )
+    tt.apply_transcript_triggers("zwingli subprocess rm -rf tmp", commands=commands)
+    assert pending_in_tmp.exists()
+
+    out, meta = tt.apply_transcript_triggers("zwingli no", commands=commands)
+    assert "cancelled" in out.lower()
+    assert "rm -rf tmp" in out
+    assert meta["meta"]["handler_meta"]["cancelled"] is True
+    assert not pending_in_tmp.exists()
+
+
+def test_no_without_pending_returns_friendly_message(pending_in_tmp) -> None:
+    commands = _confirm_commands({})
+    out, meta = tt.apply_transcript_triggers("zwingli no", commands=commands)
+    assert "no pending" in out.lower()
+    assert meta["meta"]["handler_meta"]["no_pending"] is True
+
+
+def test_second_confirm_replaces_first(pending_in_tmp, monkeypatch) -> None:
+    monkeypatch.setattr(tt, "_run_shell_command", lambda *a, **k: ("", "", {}))
+
+    commands = _confirm_commands(
+        {
+            "subprocess": config.TranscriptVerbConfig(
+                action="shell", enabled=True, type="shell", confirm=True
+            ),
+        }
+    )
+    tt.apply_transcript_triggers("zwingli subprocess ls", commands=commands)
+    tt.apply_transcript_triggers("zwingli subprocess pwd", commands=commands)
+
+    import voicepipe.pending as pending_mod
+
+    entry = pending_mod.load_pending()
+    assert entry is not None
+    assert entry.command == "pwd"
+
+
+def test_yes_and_no_verbs_auto_injected(tmp_path, monkeypatch) -> None:
+    import json
+
+    import voicepipe.config as cfg
+
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = cfg.config_dir(create=True) / "triggers.json"
+    triggers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "verbs": {"strip": {"type": "builtin"}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg.invalidate_transcript_commands_cache()
+    loaded = cfg.get_transcript_commands_config(load_env=False)
+    assert "yes" in loaded.verbs and loaded.verbs["yes"].action == "yes"
+    assert "no" in loaded.verbs and loaded.verbs["no"].action == "no"
+
+
+def test_confirm_field_rejects_non_bool(tmp_path, monkeypatch) -> None:
+    import json
+
+    import voicepipe.config as cfg
+
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = cfg.config_dir(create=True) / "triggers.json"
+    triggers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "verbs": {
+                    "sub": {"type": "shell", "enabled": True, "confirm": "yes"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(cfg.VoicepipeConfigError) as exc_info:
+        cfg._load_transcript_commands_json()
+    assert "confirm" in str(exc_info.value)

@@ -14,7 +14,9 @@
     "subprocess": { "type": "shell", "enabled": true, "timeout_seconds": 10 },
     "execute": { "type": "execute", "enabled": true, "timeout_seconds": 10 },
     "type": { "type": "type", "enabled": true },
-    "help": { "type": "builtin", "action": "help" }
+    "help": { "type": "builtin", "action": "help" },
+    "yes": { "type": "builtin", "action": "yes" },
+    "no": { "type": "builtin", "action": "no" }
   },
   "llm_profiles": {
     "rewrite": {

@@ -295,6 +295,38 @@ def _suppress_type_from_payload(payload: object) -> bool:
         return True
     return False
 
+
+_VERB_DESTINATIONS_FAST = frozenset({"type", "clipboard", "both"})
+
+
+def _extract_verb_destination_from_payload(payload: object) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    meta = payload.get("meta")
+    if not isinstance(meta, dict):
+        return None
+    raw = meta.get("destination")
+    if not isinstance(raw, str):
+        return None
+    cleaned = raw.strip().lower()
+    return cleaned if cleaned in _VERB_DESTINATIONS_FAST else None
+
+
+def _resolve_emission_targets_from_payload(
+    payload: object, *, type_flag: bool, clipboard_flag: bool
+) -> tuple[bool, bool]:
+    """Mirror voicepipe.commands.recording._resolve_emission_targets for the
+    fast/in-process toggle path."""
+    destination = _extract_verb_destination_from_payload(payload)
+    if destination == "clipboard":
+        return False, True
+    if destination == "type":
+        return True, False
+    if destination == "both":
+        return True, True
+    type_ = bool(type_flag) and not _suppress_type_from_payload(payload)
+    return type_, bool(clipboard_flag)
+
 def send_transcribe_request_fileobj(fh: BinaryIO, *, filename: str) -> str:
     """Transcribe audio from a file-like object without writing a temp WAV."""
     # Keep imports out of the `start` hot path.
@@ -791,8 +823,24 @@ def execute_toggle_inprocess() -> None:
                     except Exception:
                         pass
 
-                    if _suppress_type_from_payload(trigger_meta):
-                        fast_log("[TOGGLE] Skipping type: trigger handler already emitted output")
+                    effective_type, effective_clipboard = _resolve_emission_targets_from_payload(
+                        trigger_meta, type_flag=True, clipboard_flag=False
+                    )
+
+                    if effective_clipboard:
+                        try:
+                            from voicepipe.clipboard import copy_to_clipboard
+
+                            ok_cb, cb_err = copy_to_clipboard(output_text)
+                            if not ok_cb:
+                                fast_log(f"[TOGGLE] Warning: clipboard copy failed: {cb_err}")
+                            else:
+                                fast_log(f"[TOGGLE] Copied to clipboard ({len(output_text)} chars)")
+                        except Exception as e:
+                            fast_log(f"[TOGGLE] Warning: clipboard copy raised: {e}")
+
+                    if not effective_type:
+                        fast_log("[TOGGLE] Skipping type: verb destination or handler suppressed it")
                         typed_ok, type_err = True, None
                         t_type_ms = 0
                         type_sequence = None
@@ -819,9 +867,11 @@ def execute_toggle_inprocess() -> None:
                     if not typed_ok:
                         fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
                     else:
-                        fast_log(f"[TOGGLE] Typed transcription (ok) in {t_type_ms}ms")
+                        if effective_type:
+                            fast_log(f"[TOGGLE] Typed transcription (ok) in {t_type_ms}ms")
                         if (
-                            type_sequence is None
+                            effective_type
+                            and type_sequence is None
                             and
                             isinstance(trigger_meta, dict)
                             and isinstance(trigger_meta.get("meta"), dict)

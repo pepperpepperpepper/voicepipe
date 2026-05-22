@@ -682,23 +682,10 @@ def _action_clipboard(
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
     captures: Mapping[str, str] | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """Copy the prompt to the system clipboard.
-
-    Returns the text plus a meta flag instructing callers not to also type
-    or otherwise re-emit the same text.
-    """
+    """Passthrough handler: the actual clipboard copy is performed by the
+    emission layer via verb destination routing (see verb_cfg.destination)."""
     del verb_cfg, profiles, captures
-    from voicepipe.clipboard import copy_to_clipboard
-
-    text = (prompt or "").strip()
-    if not text:
-        return "", {"clipboard": False, "suppress_type": True}
-
-    ok, err = copy_to_clipboard(text)
-    meta: dict[str, Any] = {"clipboard": bool(ok), "suppress_type": True}
-    if not ok and err:
-        meta["error"] = err
-    return text, meta
+    return (prompt or "").strip(), {}
 
 
 _TYPE_TOKEN_TRANSLATION = str.maketrans(
@@ -1229,8 +1216,11 @@ def _invoke_verb_handler(
     }
     if captures:
         meta["captures"] = dict(captures)
-    if getattr(verb_cfg, "destination", None):
-        meta["destination"] = verb_cfg.destination
+    destination = getattr(verb_cfg, "destination", None)
+    if not destination and action == "clipboard":
+        destination = "clipboard"
+    if destination:
+        meta["destination"] = destination
     if getattr(verb_cfg, "profile", None):
         meta["profile"] = verb_cfg.profile
     if getattr(verb_cfg, "timeout_seconds", None) is not None:

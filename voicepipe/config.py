@@ -1102,6 +1102,8 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
             )
 
         resolved_action = (action or "").strip().lower() or "strip"
+        if resolved_action == "clipboard" and destination is None:
+            destination = "clipboard"
         out[verb] = TranscriptVerbConfig(
             action=resolved_action,
             enabled=bool(enabled),

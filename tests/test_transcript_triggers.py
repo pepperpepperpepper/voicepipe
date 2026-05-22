@@ -692,19 +692,7 @@ def test_apply_transcript_triggers_dispatch_alias_with_separator() -> None:
     assert meta["meta"]["verb"] == "plugin"
 
 
-def test_apply_transcript_triggers_chain_pipes_output_to_next_step(
-    monkeypatch,
-) -> None:
-    copied: dict[str, str] = {}
-
-    def _fake_copy(text: str) -> tuple[bool, str | None]:
-        copied["text"] = text
-        return True, None
-
-    import voicepipe.clipboard as clipboard_mod
-
-    monkeypatch.setattr(clipboard_mod, "copy_to_clipboard", _fake_copy)
-
+def test_apply_transcript_triggers_chain_pipes_output_to_next_step() -> None:
     commands = config.TranscriptCommandsConfig(
         triggers={"zwingli": "dispatch"},
         dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
@@ -720,27 +708,19 @@ def test_apply_transcript_triggers_chain_pipes_output_to_next_step(
         "zwingli echo hello world then copy", commands=commands
     )
     assert out == "hello world"
-    assert copied.get("text") == "hello world"
     assert meta is not None
     assert meta["meta"]["verb"] == "copy"
     assert meta["meta"]["action"] == "clipboard"
+    # The clipboard verb is now routed via destination metadata; the actual
+    # copy is performed by the emission layer (recording.py / fast.py).
+    assert meta["meta"]["destination"] == "clipboard"
     chain = meta["meta"]["chain"]
     assert len(chain) == 1
     assert chain[0]["verb"] == "echo"
     assert chain[0]["action"] == "strip"
 
 
-def test_apply_transcript_triggers_chain_three_steps(monkeypatch) -> None:
-    copied: dict[str, str] = {}
-
-    def _fake_copy(text: str) -> tuple[bool, str | None]:
-        copied["text"] = text
-        return True, None
-
-    import voicepipe.clipboard as clipboard_mod
-
-    monkeypatch.setattr(clipboard_mod, "copy_to_clipboard", _fake_copy)
-
+def test_apply_transcript_triggers_chain_three_steps() -> None:
     commands = config.TranscriptCommandsConfig(
         triggers={"zwingli": "dispatch"},
         dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
@@ -758,8 +738,8 @@ def test_apply_transcript_triggers_chain_three_steps(monkeypatch) -> None:
         "zwingli echo alpha then tag then copy", commands=commands
     )
     assert out == "alpha"
-    assert copied.get("text") == "alpha"
     assert meta is not None
+    assert meta["meta"]["destination"] == "clipboard"
     chain = meta["meta"]["chain"]
     assert [step["verb"] for step in chain] == ["echo", "tag"]
 
@@ -814,19 +794,10 @@ def test_apply_transcript_triggers_chain_step_with_explicit_args_ignores_pipe(
     assert out == "beta"
 
 
-def test_apply_transcript_triggers_dispatch_clipboard_copies_and_signals_suppression(
-    monkeypatch,
-) -> None:
-    copied: dict[str, str] = {}
-
-    def _fake_copy(text: str) -> tuple[bool, str | None]:
-        copied["text"] = text
-        return True, None
-
-    import voicepipe.clipboard as clipboard_mod
-
-    monkeypatch.setattr(clipboard_mod, "copy_to_clipboard", _fake_copy)
-
+def test_apply_transcript_triggers_dispatch_clipboard_marks_destination() -> None:
+    """The clipboard action is a passthrough; routing is via meta.destination.
+    The actual copy is performed by the emission layer (recording.py / fast.py).
+    """
     commands = config.TranscriptCommandsConfig(
         triggers={"zwingli": "dispatch"},
         dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
@@ -839,27 +810,13 @@ def test_apply_transcript_triggers_dispatch_clipboard_copies_and_signals_suppres
 
     out, meta = tt.apply_transcript_triggers("zwingli copy hello world", commands=commands)
     assert out == "hello world"
-    assert copied.get("text") == "hello world"
     assert meta is not None
     assert meta["meta"]["verb"] == "copy"
     assert meta["meta"]["action"] == "clipboard"
-    assert meta["meta"]["handler_meta"]["clipboard"] is True
-    assert meta["meta"]["handler_meta"]["suppress_type"] is True
+    assert meta["meta"]["destination"] == "clipboard"
 
 
-def test_apply_transcript_triggers_dispatch_clipboard_empty_prompt_no_copy(
-    monkeypatch,
-) -> None:
-    calls: list[str] = []
-
-    def _fake_copy(text: str) -> tuple[bool, str | None]:
-        calls.append(text)
-        return True, None
-
-    import voicepipe.clipboard as clipboard_mod
-
-    monkeypatch.setattr(clipboard_mod, "copy_to_clipboard", _fake_copy)
-
+def test_apply_transcript_triggers_dispatch_clipboard_empty_prompt() -> None:
     commands = config.TranscriptCommandsConfig(
         triggers={"zwingli": "dispatch"},
         dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
@@ -872,8 +829,7 @@ def test_apply_transcript_triggers_dispatch_clipboard_empty_prompt_no_copy(
 
     out, meta = tt.apply_transcript_triggers("zwingli copy", commands=commands)
     assert out == ""
-    assert calls == []
-    assert meta["meta"]["handler_meta"]["suppress_type"] is True
+    assert meta["meta"]["destination"] == "clipboard"
 
 
 def test_apply_transcript_triggers_dispatch_alias_does_not_shadow_existing_verb() -> None:
@@ -1410,20 +1366,8 @@ def test_render_user_prompt_template_leaves_unknown_placeholders_literal() -> No
     assert rendered2 == "User {{name}} said: hi"
 
 
-def test_apply_transcript_triggers_pattern_exposes_captures_for_clipboard(
-    monkeypatch,
-) -> None:
+def test_apply_transcript_triggers_pattern_exposes_captures_for_clipboard() -> None:
     """Verbs without a template still expose captures in meta."""
-    copied: list[str] = []
-
-    def _fake_copy(text: str) -> tuple[bool, str | None]:
-        copied.append(text)
-        return True, None
-
-    import voicepipe.clipboard as clipboard_mod
-
-    monkeypatch.setattr(clipboard_mod, "copy_to_clipboard", _fake_copy)
-
     commands = config.TranscriptCommandsConfig(
         triggers={"zwingli": "dispatch"},
         dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
@@ -1440,9 +1384,9 @@ def test_apply_transcript_triggers_pattern_exposes_captures_for_clipboard(
     out, meta = tt.apply_transcript_triggers(
         "zwingli note buy more coffee", commands=commands
     )
+    assert out == "note buy more coffee"
     assert meta is not None
     assert meta["meta"]["verb"] == "note"
     assert meta["meta"]["captures"] == {"what": "buy more coffee"}
-    # The clipboard handler still copies the full chunk (its existing behavior);
-    # captures are surfaced for plugins / handlers that opt in later.
-    assert copied == ["note buy more coffee"]
+    # Destination metadata is what tells the emission layer to copy.
+    assert meta["meta"]["destination"] == "clipboard"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -786,6 +787,16 @@ def test_iter_follow_log_buffers_partial_line_until_newline(tmp_path: Path) -> N
 
 
 @pytest.mark.timeout(10)
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason=(
+        "Rotation detection requires Unix file-rename semantics. On "
+        "Windows, an open file handle on the log blocks "
+        "rename/os.replace, so the test rotator can't rotate while the "
+        "follow generator is reading — the same constraint that limits "
+        "the daemon's rotation logic on Windows."
+    ),
+)
 def test_iter_follow_log_handles_rotation(tmp_path: Path) -> None:
     from voicepipe.commands.triggers import _iter_follow_log
     import threading

@@ -314,3 +314,334 @@ def test_test_missing_config_exits_with_error(runner, tmp_path: Path) -> None:
     )
     assert result.exit_code == 1
     assert "✗ triggers.json not found" in result.output
+
+
+# ---------- triggers show ----------
+
+
+def test_show_no_args_lists_triggers_verbs_profiles(runner, tmp_path: Path) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_config())
+    result = runner.invoke(main, ["triggers", "show", "--path", str(cfg)])
+    assert result.exit_code == 0, result.output
+    assert "Triggers (1):" in result.output
+    assert "zwingli -> dispatch" in result.output
+    assert "Dispatch settings:" in result.output
+    assert "unknown_verb: strip" in result.output
+    assert "error_destination: type" in result.output
+    # 3 user-defined verbs + auto-injected help/yes/no = 6
+    assert "Verbs (6):" in result.output
+    assert "python" in result.output
+    assert "subprocess" in result.output
+    assert "LLM profiles (1):" in result.output
+
+
+def test_show_no_args_json_is_parseable(runner, tmp_path: Path) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_config())
+    result = runner.invoke(main, ["triggers", "show", "--path", str(cfg), "--json"])
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.output)
+    assert parsed["triggers"] == {"zwingli": "dispatch"}
+    assert parsed["dispatch"]["unknown_verb"] == "strip"
+    assert "python" in parsed["verbs"]
+    assert parsed["verbs"]["python"]["interpreter"] == "python3"
+    assert parsed["verbs"]["python"]["aliases"] == ["py", "in python"]
+    assert "python" in parsed["profiles"]
+    assert parsed["profiles"]["python"]["temperature"] == 0.0
+
+
+def test_show_verb_detail_inlines_resolved_profile(runner, tmp_path: Path) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_config())
+    result = runner.invoke(main, ["triggers", "show", "python", "--path", str(cfg)])
+    assert result.exit_code == 0, result.output
+    assert "python:" in result.output
+    assert "type: codegen" in result.output
+    assert "interpreter: python3" in result.output
+    assert "confirm: true" in result.output
+    assert "Resolved profile (python):" in result.output
+    assert "You are a Python generator." in result.output
+    assert "Write a Python script for: {{text}}" in result.output
+
+
+def test_show_verb_detail_json(runner, tmp_path: Path) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_config())
+    result = runner.invoke(
+        main, ["triggers", "show", "python", "--path", str(cfg), "--json"]
+    )
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.output)
+    assert parsed["verb"]["name"] == "python"
+    assert parsed["verb"]["interpreter"] == "python3"
+    assert parsed["resolved_profile"]["name"] == "python"
+    assert parsed["resolved_profile"]["temperature"] == 0.0
+    # Verb 'python' and profile 'python' share a name — the collision hint
+    # should be surfaced in JSON too.
+    assert parsed["profile_with_same_name"] == "python"
+
+
+def test_show_verb_with_unresolved_profile_flags_missing(
+    runner, tmp_path: Path
+) -> None:
+    payload = {
+        "version": 1,
+        "triggers": {"zwingli": {"action": "dispatch"}},
+        "verbs": {
+            "foo": {"type": "llm", "profile": "ghost"},
+        },
+        "llm_profiles": {},
+    }
+    cfg = _write(tmp_path / "triggers.json", payload)
+    result = runner.invoke(main, ["triggers", "show", "foo", "--path", str(cfg)])
+    assert result.exit_code == 0, result.output
+    assert "Profile 'ghost' is referenced but not defined." in result.output
+
+
+def test_show_profile_detail_when_name_only_matches_profile(
+    runner, tmp_path: Path
+) -> None:
+    payload = {
+        "version": 1,
+        "triggers": {"zwingli": {"action": "dispatch"}},
+        "verbs": {"strip": {"type": "builtin"}},
+        "llm_profiles": {
+            "summary": {
+                "model": "gpt-4o-mini",
+                "temperature": 0.1,
+                "system_prompt": "Summarize concisely.",
+            }
+        },
+    }
+    cfg = _write(tmp_path / "triggers.json", payload)
+    result = runner.invoke(main, ["triggers", "show", "summary", "--path", str(cfg)])
+    assert result.exit_code == 0, result.output
+    assert "summary (LLM profile):" in result.output
+    assert "model: gpt-4o-mini" in result.output
+    assert "temperature: 0.1" in result.output
+    assert "Summarize concisely." in result.output
+
+
+def test_show_unknown_name_exits_with_did_you_mean(runner, tmp_path: Path) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_config())
+    result = runner.invoke(
+        main, ["triggers", "show", "nope", "--path", str(cfg)]
+    )
+    assert result.exit_code == 1
+    assert "no verb or profile named 'nope'" in result.output
+    assert "known verbs:" in result.output
+    assert "known profiles:" in result.output
+
+
+def test_show_missing_config_exits_with_error(runner, tmp_path: Path) -> None:
+    result = runner.invoke(
+        main, ["triggers", "show", "--path", str(tmp_path / "missing.json")]
+    )
+    assert result.exit_code == 1
+    assert "✗ triggers.json not found" in result.output
+
+
+# ---------- triggers log ----------
+
+
+def _write_log(path: Path, events: list[dict]) -> Path:
+    path.write_text(
+        "\n".join(json.dumps(ev) for ev in events) + "\n", encoding="utf-8"
+    )
+    return path
+
+
+def test_log_formats_trigger_match_and_dispatch_ok(runner, tmp_path: Path) -> None:
+    log = _write_log(
+        tmp_path / "z.log",
+        [
+            {
+                "event": "trigger_match",
+                "ts_ms": 1779633876887,
+                "trigger": "zwingli",
+                "action": "dispatch",
+                "text": "zwingli strip x",
+            },
+            {
+                "event": "dispatch_ok",
+                "ts_ms": 1779633876900,
+                "trigger": "zwingli",
+                "output_text": "x",
+            },
+        ],
+    )
+    result = runner.invoke(main, ["triggers", "log", "--path", str(log)])
+    assert result.exit_code == 0, result.output
+    assert "trigger_match" in result.output
+    assert "trigger='zwingli'" in result.output
+    assert "action='dispatch'" in result.output
+    assert "text='zwingli strip x'" in result.output
+    assert "dispatch_ok" in result.output
+    assert "output='x'" in result.output
+
+
+def test_log_summarizes_action_error(runner, tmp_path: Path) -> None:
+    log = _write_log(
+        tmp_path / "z.log",
+        [
+            {
+                "event": "action_error",
+                "ts_ms": 1779633876900,
+                "action": "shell",
+                "error": "Permission denied",
+            }
+        ],
+    )
+    result = runner.invoke(main, ["triggers", "log", "--path", str(log)])
+    assert result.exit_code == 0, result.output
+    assert "action_error" in result.output
+    assert "action='shell'" in result.output
+    assert "error='Permission denied'" in result.output
+
+
+def test_log_summarizes_rate_limited(runner, tmp_path: Path) -> None:
+    log = _write_log(
+        tmp_path / "z.log",
+        [
+            {
+                "event": "rate_limited",
+                "ts_ms": 1779633876900,
+                "verb": "python",
+                "retry_after_seconds": 12,
+                "limit": 5,
+            }
+        ],
+    )
+    result = runner.invoke(main, ["triggers", "log", "--path", str(log)])
+    assert result.exit_code == 0, result.output
+    assert "rate_limited" in result.output
+    assert "verb='python'" in result.output
+    assert "retry_after=12s" in result.output
+    assert "limit=5" in result.output
+
+
+def test_log_summarizes_shell_complete(runner, tmp_path: Path) -> None:
+    log = _write_log(
+        tmp_path / "z.log",
+        [
+            {
+                "event": "shell_complete",
+                "ts_ms": 1779633876900,
+                "returncode": 0,
+                "stdout": "hello\nworld",
+                "stderr": "",
+            }
+        ],
+    )
+    result = runner.invoke(main, ["triggers", "log", "--path", str(log)])
+    assert result.exit_code == 0, result.output
+    assert "shell_complete" in result.output
+    assert "rc=0" in result.output
+    # Newline in stdout becomes a space in the snippet.
+    assert "stdout='hello world'" in result.output
+
+
+def test_log_tail_limits_count(runner, tmp_path: Path) -> None:
+    events = [
+        {"event": "trigger_match", "ts_ms": 1779633876000 + i, "trigger": f"t{i}"}
+        for i in range(10)
+    ]
+    log = _write_log(tmp_path / "z.log", events)
+    result = runner.invoke(main, ["triggers", "log", "--path", str(log), "--tail", "3"])
+    assert result.exit_code == 0, result.output
+    lines = [ln for ln in result.output.splitlines() if ln.strip()]
+    assert len(lines) == 3
+    assert "trigger='t7'" in result.output
+    assert "trigger='t8'" in result.output
+    assert "trigger='t9'" in result.output
+    assert "trigger='t0'" not in result.output
+
+
+def test_log_tail_zero_shows_all(runner, tmp_path: Path) -> None:
+    events = [
+        {"event": "trigger_match", "ts_ms": 1779633876000 + i, "trigger": f"t{i}"}
+        for i in range(5)
+    ]
+    log = _write_log(tmp_path / "z.log", events)
+    result = runner.invoke(main, ["triggers", "log", "--path", str(log), "--tail", "0"])
+    assert result.exit_code == 0, result.output
+    lines = [ln for ln in result.output.splitlines() if ln.strip()]
+    assert len(lines) == 5
+
+
+def test_log_json_passthrough(runner, tmp_path: Path) -> None:
+    events = [
+        {
+            "event": "trigger_match",
+            "ts_ms": 1779633876900,
+            "trigger": "zwingli",
+            "action": "dispatch",
+        }
+    ]
+    log = _write_log(tmp_path / "z.log", events)
+    result = runner.invoke(
+        main, ["triggers", "log", "--path", str(log), "--json"]
+    )
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.output.strip())
+    assert parsed["event"] == "trigger_match"
+    assert parsed["trigger"] == "zwingli"
+
+
+def test_log_missing_file_exits_with_error(runner, tmp_path: Path) -> None:
+    result = runner.invoke(
+        main, ["triggers", "log", "--path", str(tmp_path / "missing.log")]
+    )
+    assert result.exit_code == 1
+    assert "✗ debug log not found" in result.output
+
+
+def test_log_empty_file_reports_no_events(runner, tmp_path: Path) -> None:
+    log = tmp_path / "z.log"
+    log.write_text("", encoding="utf-8")
+    result = runner.invoke(main, ["triggers", "log", "--path", str(log)])
+    assert result.exit_code == 0, result.output
+    assert "no events" in result.output
+
+
+def test_log_skips_malformed_lines(runner, tmp_path: Path) -> None:
+    log = tmp_path / "z.log"
+    log.write_text(
+        "not json\n"
+        + json.dumps(
+            {"event": "trigger_match", "ts_ms": 1779633876900, "trigger": "zwingli"}
+        )
+        + "\n"
+        + "{also bad\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(main, ["triggers", "log", "--path", str(log)])
+    assert result.exit_code == 0, result.output
+    assert "trigger_match" in result.output
+    assert "trigger='zwingli'" in result.output
+
+
+def test_log_unknown_event_type_falls_back_to_json_dump(runner, tmp_path: Path) -> None:
+    log = _write_log(
+        tmp_path / "z.log",
+        [
+            {
+                "event": "some_future_event",
+                "ts_ms": 1779633876900,
+                "custom_field": "value",
+            }
+        ],
+    )
+    result = runner.invoke(main, ["triggers", "log", "--path", str(log)])
+    assert result.exit_code == 0, result.output
+    assert "some_future_event" in result.output
+    assert "custom_field" in result.output
+    assert "value" in result.output
+
+
+# ---------- triggers path ----------
+
+
+def test_path_prints_canonical_triggers_json_path(runner) -> None:
+    from voicepipe.config import triggers_json_path
+
+    result = runner.invoke(main, ["triggers", "path"])
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == str(triggers_json_path())

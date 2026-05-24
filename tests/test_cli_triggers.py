@@ -169,6 +169,83 @@ def test_strict_warns_about_duplicate_alias_across_verbs(runner, tmp_path: Path)
     assert "claimed by both" in result.output
 
 
+def test_strict_warns_about_disabled_verb_with_aliases(runner, tmp_path: Path) -> None:
+    cfg = _write(
+        tmp_path / "triggers.json",
+        {
+            "version": 1,
+            "triggers": {"zwingli": {"action": "dispatch"}},
+            "verbs": {
+                "old_verb": {
+                    "type": "builtin",
+                    "enabled": False,
+                    "aliases": ["legacy", "deprecated phrase"],
+                },
+            },
+        },
+    )
+    result = runner.invoke(main, ["triggers", "validate", "--path", str(cfg), "--strict"])
+    assert result.exit_code == 2, result.output
+    assert "old_verb" in result.output
+    assert "disabled" in result.output
+    assert "legacy" in result.output
+    assert "never resolve" in result.output
+
+
+def test_strict_warns_about_codegen_verb_missing_profile(
+    runner, tmp_path: Path, monkeypatch
+) -> None:
+    # Pretend `lua` is on PATH so the interpreter-not-in-PATH check stays
+    # silent and we're only asserting the missing-profile warning.
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/" + name)
+    cfg = _write(
+        tmp_path / "triggers.json",
+        {
+            "version": 1,
+            "triggers": {"zwingli": {"action": "dispatch"}},
+            "verbs": {
+                "lua": {
+                    "type": "codegen",
+                    "enabled": True,
+                    "interpreter": "lua",
+                    # profile intentionally absent
+                },
+            },
+        },
+    )
+    result = runner.invoke(main, ["triggers", "validate", "--path", str(cfg), "--strict"])
+    assert result.exit_code == 2, result.output
+    assert "lua" in result.output
+    assert "no `profile` set" in result.output
+
+
+def test_strict_skips_missing_profile_warning_for_disabled_codegen_verb(
+    runner, tmp_path: Path, monkeypatch
+) -> None:
+    # The parser still requires `interpreter` on disabled codegen verbs,
+    # so we have to set it; what we're proving is that the missing-profile
+    # warning skips disabled verbs.
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/" + name)
+    cfg = _write(
+        tmp_path / "triggers.json",
+        {
+            "version": 1,
+            "triggers": {"zwingli": {"action": "dispatch"}},
+            "verbs": {
+                "ruby": {
+                    "type": "codegen",
+                    "enabled": False,
+                    "interpreter": "ruby",
+                    # profile intentionally absent
+                },
+            },
+        },
+    )
+    result = runner.invoke(main, ["triggers", "validate", "--path", str(cfg), "--strict"])
+    assert result.exit_code == 0, result.output
+    assert "no `profile` set" not in result.output
+
+
 def test_strict_passes_silently_when_no_warnings(runner, tmp_path: Path, monkeypatch) -> None:
     # Use the default asset, which should produce no warnings when its
     # bash/python/perl/node interpreters are pretend-installed.

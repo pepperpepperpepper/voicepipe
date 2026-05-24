@@ -72,8 +72,9 @@ def _collect_strict_warnings(
 
     These don't make triggers.json invalid (it loads fine), but they're
     things the user probably wants to know about: dangling profile
-    references, codegen verbs whose interpreter isn't installed, alias
-    collisions across verbs.
+    references, codegen verbs missing required fields or whose interpreter
+    isn't installed, alias collisions across verbs, and disabled verbs
+    that still carry dead alias config.
     """
     warnings: list[str] = []
 
@@ -85,7 +86,24 @@ def _collect_strict_warnings(
                 f"verb {verb_name!r}: profile {profile!r} is not defined in llm_profiles"
             )
 
-    # Codegen interpreters not on PATH.
+    # Enabled codegen verbs without a profile. (The parser already
+    # enforces a non-empty `interpreter` for any codegen verb, so there's
+    # no need to re-check that here.) Profile is what tells the LLM how
+    # to generate the script; without it, codegen falls back to a generic
+    # call that's almost certainly not what the user wants.
+    for verb_name, cfg in sorted(verbs.items()):
+        if (cfg.type or "").strip().lower() != "codegen":
+            continue
+        if not bool(cfg.enabled):
+            continue
+        if not (cfg.profile or "").strip():
+            warnings.append(
+                f"verb {verb_name!r}: codegen verb has no `profile` set "
+                "(codegen needs an LLM to generate the script)"
+            )
+
+    # Codegen interpreters not on PATH (only meaningful when interpreter
+    # IS set; the missing-interpreter check above handles the unset case).
     for verb_name, cfg in sorted(verbs.items()):
         if (cfg.type or "").strip().lower() != "codegen":
             continue
@@ -117,6 +135,20 @@ def _collect_strict_warnings(
                 )
             else:
                 seen_aliases.setdefault(phrase, verb_name)
+
+    # Disabled verbs that still declare aliases — the aliases can never
+    # resolve, so they're dead config (and a likely sign the user
+    # forgot to remove them after disabling a verb).
+    for verb_name, cfg in sorted(verbs.items()):
+        if bool(cfg.enabled):
+            continue
+        if not cfg.aliases:
+            continue
+        joined = ", ".join(repr(a) for a in cfg.aliases)
+        warnings.append(
+            f"verb {verb_name!r} is disabled but declares aliases ({joined}) "
+            "that will never resolve"
+        )
 
     return warnings
 

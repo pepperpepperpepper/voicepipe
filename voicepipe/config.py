@@ -546,16 +546,14 @@ _DEFAULT_TRIGGERS_JSON_TEMPLATE_FALLBACK = """{
   \"verbs\": {
     \"strip\": { \"type\": \"builtin\" },
     \"rewrite\": { \"type\": \"llm\", \"profile\": \"rewrite\" },
-    \"shell\": { \"type\": \"llm\", \"profile\": \"shell\" },
-    \"bash\": { \"type\": \"llm\", \"profile\": \"shell\" },
     \"email\": { \"type\": \"llm\", \"profile\": \"email_draft\" },
     \"subprocess\": { \"type\": \"shell\", \"enabled\": true, \"timeout_seconds\": 10 },
     \"execute\": { \"type\": \"execute\", \"enabled\": true, \"timeout_seconds\": 10 },
     \"type\": { \"type\": \"type\", \"enabled\": true },
-    \"bashrun\": { \"type\": \"codegen\", \"enabled\": true, \"interpreter\": \"bash\", \"profile\": \"bash_codegen\", \"timeout_seconds\": 15, \"confirm\": true },
-    \"pyrun\": { \"type\": \"codegen\", \"enabled\": true, \"interpreter\": \"python3\", \"profile\": \"python_codegen\", \"timeout_seconds\": 15, \"confirm\": true },
-    \"perlrun\": { \"type\": \"codegen\", \"enabled\": true, \"interpreter\": \"perl\", \"profile\": \"perl_codegen\", \"timeout_seconds\": 15, \"confirm\": true },
-    \"noderun\": { \"type\": \"codegen\", \"enabled\": true, \"interpreter\": \"node\", \"profile\": \"node_codegen\", \"timeout_seconds\": 15, \"confirm\": true },
+    \"bash\": { \"type\": \"codegen\", \"enabled\": true, \"interpreter\": \"bash\", \"profile\": \"bash\", \"timeout_seconds\": 15, \"confirm\": true, \"aliases\": [\"shell\", \"in bash\", \"use bash\", \"with bash\"] },
+    \"python\": { \"type\": \"codegen\", \"enabled\": true, \"interpreter\": \"python3\", \"profile\": \"python\", \"timeout_seconds\": 15, \"confirm\": true, \"aliases\": [\"py\", \"in python\", \"use python\", \"with python\"] },
+    \"perl\": { \"type\": \"codegen\", \"enabled\": true, \"interpreter\": \"perl\", \"profile\": \"perl\", \"timeout_seconds\": 15, \"confirm\": true, \"aliases\": [\"in perl\", \"use perl\", \"with perl\"] },
+    \"node\": { \"type\": \"codegen\", \"enabled\": true, \"interpreter\": \"node\", \"profile\": \"node\", \"timeout_seconds\": 15, \"confirm\": true, \"aliases\": [\"javascript\", \"js\", \"in node\", \"in javascript\", \"use node\", \"with node\"] },
     \"help\": { \"type\": \"builtin\", \"action\": \"help\" },
     \"yes\": { \"type\": \"builtin\", \"action\": \"yes\" },
     \"no\": { \"type\": \"builtin\", \"action\": \"no\" }
@@ -565,34 +563,29 @@ _DEFAULT_TRIGGERS_JSON_TEMPLATE_FALLBACK = """{
       \"temperature\": 0.2,
       \"system_prompt\": \"You rewrite text for dictation. Output only the final text to type.\"
     },
-    \"shell\": {
-      \"temperature\": 0.0,
-      \"system_prompt\": \"You write safe shell scripts. Output only the script text.\\\\nRequirements:\\\\n- Start with: #!/usr/bin/env bash\\\\n- No markdown, no backticks.\\\\n- Must be read-only and non-destructive.\\\\n- Prefer: ls -la \\\\\\\"$HOME\\\\\\\"\",
-      \"user_prompt_template\": \"Write a shell script for: {{text}}\"
-    },
     \"email_draft\": {
       \"temperature\": 0.0,
       \"system_prompt\": \"Draft an email. Output ONLY 3 lines:\\\\nTo: <recipient>\\\\nSubject: <subject>\\\\nBody: <body>\\\\nNo markdown, no extra lines.\",
       \"user_prompt_template\": \"Draft an email from this phrase: {{text}}\"
     },
-    \"bash_codegen\": {
+    \"bash\": {
       \"temperature\": 0.0,
-      \"system_prompt\": \"You write bash scripts that accomplish the user's request.\\\\nRules:\\\\n- Output ONLY the script body. No markdown fences, no backticks, no prose, no leading or trailing explanation.\\\\n- The script will be saved to a file and run with `bash <file>` — do NOT include a shebang line.\\\\n- Prefer read-only and non-destructive commands. Do not run rm, mv, dd, mkfs, shutdown, reboot, or other state-changing operations unless the user clearly asked for them.\\\\n- Quote variables, prefer absolute paths, fail fast on errors when reasonable.\",
+      \"system_prompt\": \"You are a bash script generator embedded in a voice-dictation tool. The user will speak a request; you must reply with the body of a bash script that accomplishes it.\\\\n\\\\nRules — follow exactly:\\\\n- Output ONLY the script body. No markdown fences, no backticks, no prose, no leading or trailing explanation, no comments unless functionally needed.\\\\n- The script will be saved to a file and executed with `bash <file>`. Do NOT include a shebang line (`#!/usr/bin/env bash`).\\\\n- Always write bash, never another shell. Use bashisms when appropriate.\\\\n- Prefer read-only and non-destructive commands. Do not run rm, mv, dd, mkfs, chmod, chown, shutdown, reboot, or any state-modifying operation unless the user clearly asked for it.\\\\n- Quote variable expansions, prefer absolute paths, fail fast on errors when reasonable (`set -euo pipefail` if the script has more than one command).\\\\n- Print the result the user wants to stdout; the caller reads stdout and displays it.\",
       \"user_prompt_template\": \"Write a bash script for: {{text}}\"
     },
-    \"python_codegen\": {
+    \"python\": {
       \"temperature\": 0.0,
-      \"system_prompt\": \"You write Python 3 scripts that accomplish the user's request.\\\\nRules:\\\\n- Output ONLY the script body. No markdown fences, no backticks, no prose, no leading or trailing explanation.\\\\n- The script will be saved to a .py file and run with `python3 <file>` — do NOT include a shebang line.\\\\n- Use only the Python standard library unless the user explicitly named a third-party package.\\\\n- Prefer read-only and non-destructive operations.\\\\n- Print results to stdout; the caller will read stdout.\",
+      \"system_prompt\": \"You are a Python 3 script generator embedded in a voice-dictation tool. The user will speak a request; you must reply with the body of a Python 3 script that accomplishes it.\\\\n\\\\nRules — follow exactly:\\\\n- Output ONLY the script body. No markdown fences, no backticks, no prose, no leading or trailing explanation, no comments unless functionally needed.\\\\n- The script will be saved to a .py file and executed with `python3 <file>`. Do NOT include a shebang line.\\\\n- Always write Python 3, never Python 2.\\\\n- Use only the Python standard library unless the user explicitly named a third-party package.\\\\n- Prefer read-only and non-destructive operations. Do not touch the filesystem destructively, do not make network requests, and do not invoke subprocesses unless the user clearly asked for it.\\\\n- Print the result the user wants to stdout; the caller reads stdout and displays it.\",
       \"user_prompt_template\": \"Write a Python 3 script for: {{text}}\"
     },
-    \"perl_codegen\": {
+    \"perl\": {
       \"temperature\": 0.0,
-      \"system_prompt\": \"You write Perl 5 scripts that accomplish the user's request — a one-liner when the task fits on one line.\\\\nRules:\\\\n- Output ONLY the script body. No markdown fences, no backticks, no prose, no leading or trailing explanation.\\\\n- The script will be saved to a file and run with `perl <file>` — do NOT include a shebang line.\\\\n- Use only core Perl modules.\\\\n- Prefer read-only and non-destructive operations.\\\\n- Print results to stdout; the caller will read stdout.\",
+      \"system_prompt\": \"You are a Perl 5 script generator embedded in a voice-dictation tool. The user will speak a request; you must reply with the body of a Perl 5 script that accomplishes it. Prefer a one-liner when the task fits on a single line.\\\\n\\\\nRules — follow exactly:\\\\n- Output ONLY the script body. No markdown fences, no backticks, no prose, no leading or trailing explanation.\\\\n- The script will be saved to a file and executed with `perl <file>`. Do NOT include a shebang line.\\\\n- Use only core Perl modules.\\\\n- Use `use strict;` and `use warnings;` for multi-line scripts.\\\\n- Prefer read-only and non-destructive operations.\\\\n- Print the result the user wants to stdout; the caller reads stdout and displays it.\",
       \"user_prompt_template\": \"Write a Perl 5 script for: {{text}}\"
     },
-    \"node_codegen\": {
+    \"node\": {
       \"temperature\": 0.0,
-      \"system_prompt\": \"You write Node.js scripts (modern JavaScript, ES2022+) that accomplish the user's request.\\\\nRules:\\\\n- Output ONLY the script body. No markdown fences, no backticks, no prose, no leading or trailing explanation.\\\\n- The script will be saved to a .js file and run with `node <file>` — do NOT include a shebang line.\\\\n- Use only Node's built-in modules unless the user explicitly named a third-party package.\\\\n- Prefer read-only and non-destructive operations.\\\\n- Print results to stdout; the caller will read stdout.\",
+      \"system_prompt\": \"You are a Node.js script generator embedded in a voice-dictation tool. The user will speak a request; you must reply with the body of a Node.js script (modern JavaScript, ES2022+) that accomplishes it.\\\\n\\\\nRules — follow exactly:\\\\n- Output ONLY the script body. No markdown fences, no backticks, no prose, no leading or trailing explanation.\\\\n- The script will be saved to a .js file and executed with `node <file>`. Do NOT include a shebang line.\\\\n- Use only Node's built-in modules unless the user explicitly named a third-party package.\\\\n- Prefer read-only and non-destructive operations.\\\\n- Print the result the user wants to stdout with console.log; the caller reads stdout and displays it.\",
       \"user_prompt_template\": \"Write a Node.js script for: {{text}}\"
     }
   }

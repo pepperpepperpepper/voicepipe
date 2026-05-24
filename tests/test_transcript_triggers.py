@@ -2195,6 +2195,254 @@ def test_apply_transcript_triggers_skips_audio_when_no_trigger_matches(
     assert fired == []
 
 
+# ---------- dry_run_dispatch ----------
+
+
+def _dry_run_commands() -> config.TranscriptCommandsConfig:
+    return config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "strip": config.TranscriptVerbConfig(
+                action="strip", enabled=True, type="builtin"
+            ),
+            "subprocess": config.TranscriptVerbConfig(
+                action="shell",
+                enabled=True,
+                type="shell",
+                timeout_seconds=10,
+                rate_limit_per_min=5,
+            ),
+            "execute": config.TranscriptVerbConfig(
+                action="execute", enabled=True, type="execute"
+            ),
+            "python": config.TranscriptVerbConfig(
+                action="codegen",
+                enabled=True,
+                type="codegen",
+                interpreter="python3",
+                profile="python",
+                confirm=True,
+                aliases=("py", "in python"),
+            ),
+            "open_in_vim": config.TranscriptVerbConfig(
+                action="execute",
+                enabled=True,
+                type="execute",
+                pattern="open {target} in vim",
+                command_template="vim {target}",
+            ),
+            "disabled_shell": config.TranscriptVerbConfig(
+                action="shell", enabled=False, type="shell"
+            ),
+            "copy": config.TranscriptVerbConfig(
+                action="clipboard", enabled=True, type="builtin"
+            ),
+        },
+        llm_profiles={
+            "python": config.TranscriptLLMProfileConfig(
+                temperature=0.0,
+                system_prompt="You are a Python generator.",
+                user_prompt_template="Write a Python 3 script for: {{text}}",
+            ),
+        },
+    )
+
+
+def test_dry_run_returns_no_trigger_match_for_plain_text() -> None:
+    trace = tt.dry_run_dispatch("just plain text", commands=_dry_run_commands())
+    assert trace["trigger_match"] is None
+    assert trace["outcome"] == "no_trigger_matched"
+
+
+def test_dry_run_returns_trigger_action_for_strip_trigger() -> None:
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "strip"},
+        dispatch=config.TranscriptDispatchConfig(),
+        verbs={},
+    )
+    trace = tt.dry_run_dispatch("zwingli hello world", commands=commands)
+    assert trace["trigger_match"]["action"] == "strip"
+    assert trace["trigger_match"]["remainder"] == "hello world"
+    assert trace["outcome"] == "trigger_action"
+    assert trace["trigger_action"] == "strip"
+    assert "steps" not in trace
+
+
+def test_dry_run_resolves_direct_verb_and_renders_llm_prompt() -> None:
+    trace = tt.dry_run_dispatch(
+        "zwingli python count files", commands=_dry_run_commands()
+    )
+    step = trace["steps"][0]
+    assert step["resolution"] == "verb"
+    assert step["verb"] == "python"
+    assert step["args"] == "count files"
+    cfg = step["verb_config"]
+    assert cfg["interpreter"] == "python3"
+    assert cfg["confirm"] is True
+    assert cfg["llm_preview"]["user_prompt"] == "Write a Python 3 script for: count files"
+    assert cfg["llm_preview"]["system_prompt"] == "You are a Python generator."
+
+
+def test_dry_run_resolves_multi_word_alias() -> None:
+    trace = tt.dry_run_dispatch(
+        "zwingli in python count files", commands=_dry_run_commands()
+    )
+    step = trace["steps"][0]
+    assert step["resolution"] == "verb"
+    assert step["verb"] == "python"
+    assert step["args"] == "count files"
+
+
+def test_dry_run_pattern_match_exposes_captures_and_renders_command_template() -> None:
+    trace = tt.dry_run_dispatch(
+        "zwingli open config.py in vim", commands=_dry_run_commands()
+    )
+    step = trace["steps"][0]
+    assert step["resolution"] == "pattern"
+    assert step["verb"] == "open_in_vim"
+    assert step["captures"] == {"target": "config.py"}
+    cfg = step["verb_config"]
+    assert cfg["command_template"] == "vim {target}"
+    assert cfg["rendered_command"] == "vim config.py"
+    assert cfg["would_type"] == "vim config.py"
+    assert cfg["would_press_enter"] is True
+
+
+def test_dry_run_chain_marks_piped_steps() -> None:
+    trace = tt.dry_run_dispatch(
+        "zwingli subprocess ls then python", commands=_dry_run_commands()
+    )
+    assert trace["chain_length"] == 2
+    assert trace["chain_uses_pipe"] is True
+    step1, step2 = trace["steps"]
+    assert step1["verb"] == "subprocess"
+    assert step1.get("piped_from_previous") is None
+    assert step2["verb"] == "python"
+    assert step2["piped_from_previous"] is True
+    assert "piped from previous" in step2["args"]
+    # The piped marker should also flow into the LLM user prompt preview.
+    assert "piped from previous" in step2["verb_config"]["llm_preview"]["user_prompt"]
+
+
+def test_dry_run_chain_with_explicit_args_does_not_mark_pipe() -> None:
+    trace = tt.dry_run_dispatch(
+        "zwingli subprocess ls then subprocess pwd", commands=_dry_run_commands()
+    )
+    assert trace["chain_length"] == 2
+    step2 = trace["steps"][1]
+    assert step2.get("piped_from_previous") is None
+    assert step2["args"] == "pwd"
+
+
+def test_dry_run_unknown_verb_falls_back_to_dispatch_unknown_verb() -> None:
+    trace = tt.dry_run_dispatch(
+        "zwingli nonsenseverb hi", commands=_dry_run_commands()
+    )
+    step = trace["steps"][0]
+    assert step["resolution"] == "unknown_verb"
+    assert step["verb"] == "nonsenseverb"
+    assert step["fallback_action"] == "strip"
+    assert "verb_config" not in step
+
+
+def test_dry_run_disabled_verb_marks_disabled() -> None:
+    trace = tt.dry_run_dispatch(
+        "zwingli disabled_shell ls", commands=_dry_run_commands()
+    )
+    step = trace["steps"][0]
+    assert step["resolution"] == "disabled_verb"
+    assert step["verb"] == "disabled_shell"
+    assert step["fallback_action"] == "strip"
+
+
+def test_dry_run_clipboard_action_shows_implicit_destination() -> None:
+    trace = tt.dry_run_dispatch("zwingli copy hello", commands=_dry_run_commands())
+    cfg = trace["steps"][0]["verb_config"]
+    assert cfg["destination"] == "clipboard"
+
+
+def test_dry_run_shell_with_confirm_shows_would_stash() -> None:
+    commands = _dry_run_commands()
+    # Build a fresh commands with confirm on subprocess
+    verbs = dict(commands.verbs)
+    verbs["subprocess"] = config.TranscriptVerbConfig(
+        action="shell", enabled=True, type="shell", timeout_seconds=10, confirm=True
+    )
+    commands = config.TranscriptCommandsConfig(
+        triggers=commands.triggers,
+        dispatch=commands.dispatch,
+        verbs=verbs,
+        llm_profiles=commands.llm_profiles,
+    )
+    trace = tt.dry_run_dispatch(
+        "zwingli subprocess ls", commands=commands
+    )
+    cfg = trace["steps"][0]["verb_config"]
+    assert cfg["would_run_shell"] == "ls"
+    assert cfg["would_stash_pending"] is True
+
+
+def test_dry_run_codegen_with_missing_profile_flags_it() -> None:
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(),
+        verbs={
+            "ghost": config.TranscriptVerbConfig(
+                action="codegen",
+                enabled=True,
+                type="codegen",
+                interpreter="bash",
+                profile="not_defined",
+            ),
+        },
+        llm_profiles={},
+    )
+    trace = tt.dry_run_dispatch("zwingli ghost do thing", commands=commands)
+    cfg = trace["steps"][0]["verb_config"]
+    assert cfg.get("llm_profile_missing") == "not_defined"
+    assert "llm_preview" not in cfg
+
+
+def test_dry_run_does_not_invoke_handlers_or_touch_state(monkeypatch) -> None:
+    """Sanity: dry_run_dispatch must not call action handlers, the rate limiter,
+    the LLM, or any side-effecting subsystem."""
+    import voicepipe.rate_limit as rl
+    import voicepipe.audio_feedback as af
+    import voicepipe.pending as pending_mod
+    import voicepipe.zwingli as zwingli
+
+    handler_calls: list = []
+    for name in list(tt._ACTIONS):
+        monkeypatch.setitem(
+            tt._ACTIONS,
+            name,
+            lambda *a, name=name, **k: handler_calls.append(name) or ("", {}),
+        )
+    rate_calls: list = []
+    monkeypatch.setattr(rl, "check_and_record", lambda *a, **k: rate_calls.append(a))
+    audio_calls: list = []
+    monkeypatch.setattr(af, "play", lambda *a, **k: audio_calls.append(a))
+    pending_calls: list = []
+    monkeypatch.setattr(pending_mod, "save_pending", lambda *a, **k: pending_calls.append(a))
+    llm_calls: list = []
+    monkeypatch.setattr(
+        zwingli,
+        "process_zwingli_prompt_result",
+        lambda *a, **k: llm_calls.append(a) or ("", {}),
+    )
+
+    tt.dry_run_dispatch(
+        "zwingli subprocess ls then python", commands=_dry_run_commands()
+    )
+
+    assert handler_calls == []
+    assert rate_calls == []
+    assert audio_calls == []
+    assert pending_calls == []
+    assert llm_calls == []
+
+
 def test_codegen_config_accepts_interpreter(tmp_path, monkeypatch) -> None:
     import json
 

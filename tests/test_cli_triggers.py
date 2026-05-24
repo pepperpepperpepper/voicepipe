@@ -183,3 +183,134 @@ def test_strict_passes_silently_when_no_warnings(runner, tmp_path: Path, monkeyp
     result = runner.invoke(main, ["triggers", "validate", "--path", str(cfg), "--strict"])
     assert result.exit_code == 0, result.output
     assert "warnings" not in result.output
+
+
+# ---------- triggers test (dry-run dispatcher) ----------
+
+
+def _basic_config(extra_verbs: dict | None = None) -> dict:
+    verbs = {
+        "strip": {"type": "builtin"},
+        "subprocess": {"type": "shell", "enabled": True, "timeout_seconds": 10},
+        "python": {
+            "type": "codegen",
+            "enabled": True,
+            "interpreter": "python3",
+            "profile": "python",
+            "confirm": True,
+            "aliases": ["py", "in python"],
+        },
+    }
+    if extra_verbs:
+        verbs.update(extra_verbs)
+    return {
+        "version": 1,
+        "triggers": {"zwingli": {"action": "dispatch"}},
+        "verbs": verbs,
+        "llm_profiles": {
+            "python": {
+                "temperature": 0.0,
+                "system_prompt": "You are a Python generator.",
+                "user_prompt_template": "Write a Python script for: {{text}}",
+            }
+        },
+    }
+
+
+def test_test_reports_no_trigger_match(runner, tmp_path: Path) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_config())
+    result = runner.invoke(
+        main, ["triggers", "test", "just dictation no trigger", "--path", str(cfg)]
+    )
+    assert result.exit_code == 0, result.output
+    assert "No trigger matched" in result.output
+
+
+def test_test_shows_trigger_match_and_dispatch(runner, tmp_path: Path) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_config())
+    result = runner.invoke(
+        main, ["triggers", "test", "zwingli subprocess ls -la", "--path", str(cfg)]
+    )
+    assert result.exit_code == 0, result.output
+    assert "Trigger matched:" in result.output
+    assert "trigger:   zwingli" in result.output
+    assert "Dispatch (1 step):" in result.output
+    assert "verb:       subprocess" in result.output
+    assert "would_run_shell: ls -la" in result.output
+
+
+def test_test_resolves_alias(runner, tmp_path: Path) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_config())
+    result = runner.invoke(
+        main, ["triggers", "test", "zwingli in python count files", "--path", str(cfg)]
+    )
+    assert result.exit_code == 0, result.output
+    assert "verb:       python" in result.output
+    assert "args:       'count files'" in result.output
+
+
+def test_test_shows_llm_prompt_preview(runner, tmp_path: Path) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_config())
+    result = runner.invoke(
+        main, ["triggers", "test", "zwingli python count files", "--path", str(cfg)]
+    )
+    assert result.exit_code == 0, result.output
+    assert "LLM call (would be sent):" in result.output
+    assert "system:" in result.output
+    assert "user:" in result.output
+    assert "Write a Python script for: count files" in result.output
+
+
+def test_test_chain_shows_both_steps_with_pipe_marker(runner, tmp_path: Path) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_config())
+    result = runner.invoke(
+        main,
+        ["triggers", "test", "zwingli subprocess ls then python", "--path", str(cfg)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Dispatch (chain of 2 steps):" in result.output
+    assert "Step 1" in result.output
+    assert "Step 2" in result.output
+    assert "piped from previous step's output" in result.output
+
+
+def test_test_json_output_is_parseable(runner, tmp_path: Path) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_config())
+    result = runner.invoke(
+        main,
+        [
+            "triggers",
+            "test",
+            "zwingli python count files",
+            "--path",
+            str(cfg),
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.output)
+    assert parsed["input"] == "zwingli python count files"
+    assert parsed["trigger_match"]["trigger"] == "zwingli"
+    assert parsed["steps"][0]["verb"] == "python"
+    assert (
+        parsed["steps"][0]["verb_config"]["llm_preview"]["user_prompt"]
+        == "Write a Python script for: count files"
+    )
+
+
+def test_test_invalid_config_exits_with_error(runner, tmp_path: Path) -> None:
+    cfg = tmp_path / "bad.json"
+    cfg.write_text("{not json", encoding="utf-8")
+    result = runner.invoke(
+        main, ["triggers", "test", "zwingli anything", "--path", str(cfg)]
+    )
+    assert result.exit_code == 1
+    assert "✗ triggers.json invalid" in result.output
+
+
+def test_test_missing_config_exits_with_error(runner, tmp_path: Path) -> None:
+    result = runner.invoke(
+        main, ["triggers", "test", "zwingli anything", "--path", str(tmp_path / "missing.json")]
+    )
+    assert result.exit_code == 1
+    assert "✗ triggers.json not found" in result.output

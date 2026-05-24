@@ -2033,6 +2033,150 @@ def test_apply_transcript_triggers_fires_pending_event_for_confirm_stash(
     assert fired == ["pending"]
 
 
+# ---------- Per-verb rate limits ----------
+
+
+def test_verb_rate_limit_exceeded_returns_friendly_error(monkeypatch) -> None:
+    import voicepipe.rate_limit as rl
+
+    rl.reset_for_tests()
+
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "strip": config.TranscriptVerbConfig(
+                action="strip",
+                enabled=True,
+                type="builtin",
+                rate_limit_per_min=2,
+            ),
+        },
+    )
+
+    out1, meta1 = tt.apply_transcript_triggers("zwingli strip hello", commands=commands)
+    assert meta1["ok"] is True
+    assert meta1["meta"]["rate_limit_per_min"] == 2
+
+    out2, meta2 = tt.apply_transcript_triggers("zwingli strip there", commands=commands)
+    assert meta2["ok"] is True
+
+    out3, meta3 = tt.apply_transcript_triggers("zwingli strip friend", commands=commands)
+    assert meta3["ok"] is False
+    assert "rate limit exceeded" in meta3["error"]
+    assert "strip" in meta3["error"]
+    assert out3.startswith("⚠ zwingli")
+    rl.reset_for_tests()
+
+
+def test_verb_rate_limit_zero_does_not_throttle(monkeypatch) -> None:
+    import voicepipe.rate_limit as rl
+
+    rl.reset_for_tests()
+
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            "strip": config.TranscriptVerbConfig(
+                action="strip",
+                enabled=True,
+                type="builtin",
+                rate_limit_per_min=0,
+            ),
+        },
+    )
+    for _ in range(20):
+        out, meta = tt.apply_transcript_triggers("zwingli strip x", commands=commands)
+        assert meta["ok"] is True
+
+
+def test_rate_limit_per_min_rejects_non_int(tmp_path, monkeypatch) -> None:
+    import json
+
+    import voicepipe.config as cfg
+
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = cfg.config_dir(create=True) / "triggers.json"
+    triggers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "verbs": {
+                    "sub": {"type": "shell", "enabled": True, "rate_limit_per_min": "5"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg.invalidate_transcript_commands_cache()
+    with pytest.raises(cfg.VoicepipeConfigError) as exc_info:
+        cfg._load_transcript_commands_json()
+    assert "rate_limit_per_min" in str(exc_info.value)
+
+
+def test_rate_limit_per_min_rejects_negative(tmp_path, monkeypatch) -> None:
+    import json
+
+    import voicepipe.config as cfg
+
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = cfg.config_dir(create=True) / "triggers.json"
+    triggers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "verbs": {
+                    "sub": {"type": "shell", "enabled": True, "rate_limit_per_min": -3},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg.invalidate_transcript_commands_cache()
+    with pytest.raises(cfg.VoicepipeConfigError) as exc_info:
+        cfg._load_transcript_commands_json()
+    assert "rate_limit_per_min" in str(exc_info.value)
+
+
+def test_rate_limit_per_min_accepts_int(tmp_path, monkeypatch) -> None:
+    import json
+
+    import voicepipe.config as cfg
+
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = cfg.config_dir(create=True) / "triggers.json"
+    triggers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "verbs": {
+                    "sub": {"type": "shell", "enabled": True, "rate_limit_per_min": 5},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg.invalidate_transcript_commands_cache()
+    loaded = cfg.get_transcript_commands_config(load_env=False)
+    assert loaded.verbs["sub"].rate_limit_per_min == 5
+
+
 def test_apply_transcript_triggers_skips_audio_when_no_trigger_matches(
     monkeypatch,
 ) -> None:

@@ -1406,6 +1406,8 @@ def _describe_verb_full(verb: str, cfg: TranscriptVerbConfig) -> str:
         lines.append(f"  confirm: true")
         if cfg.confirm_timeout_seconds is not None:
             lines.append(f"  confirm_timeout_seconds: {cfg.confirm_timeout_seconds}")
+    if cfg.rate_limit_per_min is not None:
+        lines.append(f"  rate_limit_per_min: {cfg.rate_limit_per_min}")
     if cfg.plugin is not None:
         src = cfg.plugin.module or cfg.plugin.path or "(unset)"
         lines.append(f"  plugin: {src}::{cfg.plugin.callable or '(unset)'}")
@@ -1660,6 +1662,24 @@ def _invoke_verb_handler(
     handler = _ACTIONS.get(action)
     if handler is None:
         raise RuntimeError(f"Unknown verb action: {action!r} (verb={verb!r})")
+
+    cap = getattr(verb_cfg, "rate_limit_per_min", None)
+    if isinstance(cap, int) and cap > 0:
+        from voicepipe import rate_limit
+
+        try:
+            rate_limit.check_and_record(verb, cap)
+        except rate_limit.RateLimitExceeded as exc:
+            _write_zwingli_debug_event(
+                {
+                    "event": "rate_limited",
+                    "verb": verb,
+                    "cap_per_min": int(exc.cap_per_min),
+                    "retry_after_seconds": float(exc.retry_after_seconds),
+                }
+            )
+            raise
+
     out_text, inner_meta = handler(
         args,
         verb_cfg=verb_cfg,
@@ -1685,6 +1705,8 @@ def _invoke_verb_handler(
         meta["profile"] = verb_cfg.profile
     if getattr(verb_cfg, "timeout_seconds", None) is not None:
         meta["timeout_seconds"] = verb_cfg.timeout_seconds
+    if isinstance(cap, int) and cap > 0:
+        meta["rate_limit_per_min"] = cap
     plugin = getattr(verb_cfg, "plugin", None)
     if plugin is not None:
         meta["plugin"] = {

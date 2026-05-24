@@ -901,6 +901,7 @@ class TranscriptVerbConfig:
     confirm: bool = False
     confirm_timeout_seconds: float | None = None
     interpreter: str | None = None
+    rate_limit_per_min: int | None = None
 
 
 @dataclass(frozen=True)
@@ -996,6 +997,7 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
         confirm: bool = False
         confirm_timeout_seconds: float | None = None
         interpreter: str | None = None
+        rate_limit_per_min: int | None = None
         if isinstance(raw_value, str):
             action = raw_value
             enabled = True
@@ -1052,6 +1054,22 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
                 and not isinstance(raw_confirm_timeout, bool)
             ):
                 confirm_timeout_seconds = float(raw_confirm_timeout)
+
+            raw_rate_limit = raw_value.get("rate_limit_per_min")
+            if raw_rate_limit is not None:
+                if isinstance(raw_rate_limit, bool) or not isinstance(
+                    raw_rate_limit, int
+                ):
+                    raise VoicepipeConfigError(
+                        f"Invalid triggers.json: verb {raw_verb!r} 'rate_limit_per_min' "
+                        f"must be a non-negative integer"
+                    )
+                if raw_rate_limit < 0:
+                    raise VoicepipeConfigError(
+                        f"Invalid triggers.json: verb {raw_verb!r} 'rate_limit_per_min' "
+                        f"must be a non-negative integer"
+                    )
+                rate_limit_per_min = int(raw_rate_limit)
 
             raw_aliases = raw_value.get("aliases")
             if raw_aliases is not None:
@@ -1176,6 +1194,7 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
             confirm=confirm,
             confirm_timeout_seconds=confirm_timeout_seconds,
             interpreter=interpreter,
+            rate_limit_per_min=rate_limit_per_min,
         )
 
     if "help" not in out:

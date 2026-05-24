@@ -551,6 +551,11 @@ _DEFAULT_TRIGGERS_JSON_TEMPLATE_FALLBACK = """{
     \"email\": { \"type\": \"llm\", \"profile\": \"email_draft\" },
     \"subprocess\": { \"type\": \"shell\", \"enabled\": true, \"timeout_seconds\": 10 },
     \"execute\": { \"type\": \"execute\", \"enabled\": true, \"timeout_seconds\": 10 },
+    \"type\": { \"type\": \"type\", \"enabled\": true },
+    \"bashrun\": { \"type\": \"codegen\", \"enabled\": true, \"interpreter\": \"bash\", \"profile\": \"bash_codegen\", \"timeout_seconds\": 15, \"confirm\": true },
+    \"pyrun\": { \"type\": \"codegen\", \"enabled\": true, \"interpreter\": \"python3\", \"profile\": \"python_codegen\", \"timeout_seconds\": 15, \"confirm\": true },
+    \"perlrun\": { \"type\": \"codegen\", \"enabled\": true, \"interpreter\": \"perl\", \"profile\": \"perl_codegen\", \"timeout_seconds\": 15, \"confirm\": true },
+    \"noderun\": { \"type\": \"codegen\", \"enabled\": true, \"interpreter\": \"node\", \"profile\": \"node_codegen\", \"timeout_seconds\": 15, \"confirm\": true },
     \"help\": { \"type\": \"builtin\", \"action\": \"help\" },
     \"yes\": { \"type\": \"builtin\", \"action\": \"yes\" },
     \"no\": { \"type\": \"builtin\", \"action\": \"no\" }
@@ -569,6 +574,26 @@ _DEFAULT_TRIGGERS_JSON_TEMPLATE_FALLBACK = """{
       \"temperature\": 0.0,
       \"system_prompt\": \"Draft an email. Output ONLY 3 lines:\\\\nTo: <recipient>\\\\nSubject: <subject>\\\\nBody: <body>\\\\nNo markdown, no extra lines.\",
       \"user_prompt_template\": \"Draft an email from this phrase: {{text}}\"
+    },
+    \"bash_codegen\": {
+      \"temperature\": 0.0,
+      \"system_prompt\": \"You write bash scripts that accomplish the user's request.\\\\nRules:\\\\n- Output ONLY the script body. No markdown fences, no backticks, no prose, no leading or trailing explanation.\\\\n- The script will be saved to a file and run with `bash <file>` — do NOT include a shebang line.\\\\n- Prefer read-only and non-destructive commands. Do not run rm, mv, dd, mkfs, shutdown, reboot, or other state-changing operations unless the user clearly asked for them.\\\\n- Quote variables, prefer absolute paths, fail fast on errors when reasonable.\",
+      \"user_prompt_template\": \"Write a bash script for: {{text}}\"
+    },
+    \"python_codegen\": {
+      \"temperature\": 0.0,
+      \"system_prompt\": \"You write Python 3 scripts that accomplish the user's request.\\\\nRules:\\\\n- Output ONLY the script body. No markdown fences, no backticks, no prose, no leading or trailing explanation.\\\\n- The script will be saved to a .py file and run with `python3 <file>` — do NOT include a shebang line.\\\\n- Use only the Python standard library unless the user explicitly named a third-party package.\\\\n- Prefer read-only and non-destructive operations.\\\\n- Print results to stdout; the caller will read stdout.\",
+      \"user_prompt_template\": \"Write a Python 3 script for: {{text}}\"
+    },
+    \"perl_codegen\": {
+      \"temperature\": 0.0,
+      \"system_prompt\": \"You write Perl 5 scripts that accomplish the user's request — a one-liner when the task fits on one line.\\\\nRules:\\\\n- Output ONLY the script body. No markdown fences, no backticks, no prose, no leading or trailing explanation.\\\\n- The script will be saved to a file and run with `perl <file>` — do NOT include a shebang line.\\\\n- Use only core Perl modules.\\\\n- Prefer read-only and non-destructive operations.\\\\n- Print results to stdout; the caller will read stdout.\",
+      \"user_prompt_template\": \"Write a Perl 5 script for: {{text}}\"
+    },
+    \"node_codegen\": {
+      \"temperature\": 0.0,
+      \"system_prompt\": \"You write Node.js scripts (modern JavaScript, ES2022+) that accomplish the user's request.\\\\nRules:\\\\n- Output ONLY the script body. No markdown fences, no backticks, no prose, no leading or trailing explanation.\\\\n- The script will be saved to a .js file and run with `node <file>` — do NOT include a shebang line.\\\\n- Use only Node's built-in modules unless the user explicitly named a third-party package.\\\\n- Prefer read-only and non-destructive operations.\\\\n- Print results to stdout; the caller will read stdout.\",
+      \"user_prompt_template\": \"Write a Node.js script for: {{text}}\"
     }
   }
 }

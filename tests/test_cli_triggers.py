@@ -314,3 +314,125 @@ def test_test_missing_config_exits_with_error(runner, tmp_path: Path) -> None:
     )
     assert result.exit_code == 1
     assert "✗ triggers.json not found" in result.output
+
+
+# ---------- triggers show ----------
+
+
+def test_show_no_args_lists_triggers_verbs_profiles(runner, tmp_path: Path) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_config())
+    result = runner.invoke(main, ["triggers", "show", "--path", str(cfg)])
+    assert result.exit_code == 0, result.output
+    assert "Triggers (1):" in result.output
+    assert "zwingli -> dispatch" in result.output
+    assert "Dispatch settings:" in result.output
+    assert "unknown_verb: strip" in result.output
+    assert "error_destination: type" in result.output
+    # 3 user-defined verbs + auto-injected help/yes/no = 6
+    assert "Verbs (6):" in result.output
+    assert "python" in result.output
+    assert "subprocess" in result.output
+    assert "LLM profiles (1):" in result.output
+
+
+def test_show_no_args_json_is_parseable(runner, tmp_path: Path) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_config())
+    result = runner.invoke(main, ["triggers", "show", "--path", str(cfg), "--json"])
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.output)
+    assert parsed["triggers"] == {"zwingli": "dispatch"}
+    assert parsed["dispatch"]["unknown_verb"] == "strip"
+    assert "python" in parsed["verbs"]
+    assert parsed["verbs"]["python"]["interpreter"] == "python3"
+    assert parsed["verbs"]["python"]["aliases"] == ["py", "in python"]
+    assert "python" in parsed["profiles"]
+    assert parsed["profiles"]["python"]["temperature"] == 0.0
+
+
+def test_show_verb_detail_inlines_resolved_profile(runner, tmp_path: Path) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_config())
+    result = runner.invoke(main, ["triggers", "show", "python", "--path", str(cfg)])
+    assert result.exit_code == 0, result.output
+    assert "python:" in result.output
+    assert "type: codegen" in result.output
+    assert "interpreter: python3" in result.output
+    assert "confirm: true" in result.output
+    assert "Resolved profile (python):" in result.output
+    assert "You are a Python generator." in result.output
+    assert "Write a Python script for: {{text}}" in result.output
+
+
+def test_show_verb_detail_json(runner, tmp_path: Path) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_config())
+    result = runner.invoke(
+        main, ["triggers", "show", "python", "--path", str(cfg), "--json"]
+    )
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.output)
+    assert parsed["verb"]["name"] == "python"
+    assert parsed["verb"]["interpreter"] == "python3"
+    assert parsed["resolved_profile"]["name"] == "python"
+    assert parsed["resolved_profile"]["temperature"] == 0.0
+    # Verb 'python' and profile 'python' share a name — the collision hint
+    # should be surfaced in JSON too.
+    assert parsed["profile_with_same_name"] == "python"
+
+
+def test_show_verb_with_unresolved_profile_flags_missing(
+    runner, tmp_path: Path
+) -> None:
+    payload = {
+        "version": 1,
+        "triggers": {"zwingli": {"action": "dispatch"}},
+        "verbs": {
+            "foo": {"type": "llm", "profile": "ghost"},
+        },
+        "llm_profiles": {},
+    }
+    cfg = _write(tmp_path / "triggers.json", payload)
+    result = runner.invoke(main, ["triggers", "show", "foo", "--path", str(cfg)])
+    assert result.exit_code == 0, result.output
+    assert "Profile 'ghost' is referenced but not defined." in result.output
+
+
+def test_show_profile_detail_when_name_only_matches_profile(
+    runner, tmp_path: Path
+) -> None:
+    payload = {
+        "version": 1,
+        "triggers": {"zwingli": {"action": "dispatch"}},
+        "verbs": {"strip": {"type": "builtin"}},
+        "llm_profiles": {
+            "summary": {
+                "model": "gpt-4o-mini",
+                "temperature": 0.1,
+                "system_prompt": "Summarize concisely.",
+            }
+        },
+    }
+    cfg = _write(tmp_path / "triggers.json", payload)
+    result = runner.invoke(main, ["triggers", "show", "summary", "--path", str(cfg)])
+    assert result.exit_code == 0, result.output
+    assert "summary (LLM profile):" in result.output
+    assert "model: gpt-4o-mini" in result.output
+    assert "temperature: 0.1" in result.output
+    assert "Summarize concisely." in result.output
+
+
+def test_show_unknown_name_exits_with_did_you_mean(runner, tmp_path: Path) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_config())
+    result = runner.invoke(
+        main, ["triggers", "show", "nope", "--path", str(cfg)]
+    )
+    assert result.exit_code == 1
+    assert "no verb or profile named 'nope'" in result.output
+    assert "known verbs:" in result.output
+    assert "known profiles:" in result.output
+
+
+def test_show_missing_config_exits_with_error(runner, tmp_path: Path) -> None:
+    result = runner.invoke(
+        main, ["triggers", "show", "--path", str(tmp_path / "missing.json")]
+    )
+    assert result.exit_code == 1
+    assert "✗ triggers.json not found" in result.output

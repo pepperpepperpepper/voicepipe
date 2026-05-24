@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import shutil
 import sys
@@ -19,6 +20,27 @@ from voicepipe.config import (
     triggers_json_path,
     validate_triggers_json,
 )
+
+
+def _load_config_or_exit(
+    path_override: str | None,
+) -> tuple[
+    dict[str, str],
+    TranscriptDispatchConfig,
+    dict[str, TranscriptVerbConfig],
+    dict[str, TranscriptLLMProfileConfig],
+]:
+    """Load triggers.json and exit with a friendly message on common failures."""
+    path = Path(path_override).expanduser() if path_override else triggers_json_path()
+    try:
+        return validate_triggers_json(path=path)
+    except FileNotFoundError:
+        click.echo(f"✗ triggers.json not found: {path}", err=True)
+        sys.exit(1)
+    except VoicepipeConfigError as e:
+        click.echo(f"✗ triggers.json invalid: {path}", err=True)
+        click.echo(f"  {e}", err=True)
+        sys.exit(1)
 
 
 @click.group(name="triggers")
@@ -117,16 +139,7 @@ def _collect_strict_warnings(
 def triggers_validate(path_override: str | None, strict: bool) -> None:
     """Validate the triggers.json file and print a summary."""
     path = Path(path_override).expanduser() if path_override else triggers_json_path()
-
-    try:
-        triggers, dispatch, verbs, profiles = validate_triggers_json(path=path)
-    except FileNotFoundError:
-        click.echo(f"✗ triggers.json not found: {path}", err=True)
-        sys.exit(1)
-    except VoicepipeConfigError as e:
-        click.echo(f"✗ triggers.json invalid: {path}", err=True)
-        click.echo(f"  {e}", err=True)
-        sys.exit(1)
+    triggers, dispatch, verbs, profiles = _load_config_or_exit(path_override)
 
     click.echo(f"✓ triggers.json valid: {path}")
     for line in _format_summary(triggers, verbs, profiles):
@@ -266,17 +279,7 @@ def triggers_test(phrase: str, path_override: str | None, json_output: bool) -> 
     """
     from voicepipe.transcript_triggers import dry_run_dispatch
 
-    path = Path(path_override).expanduser() if path_override else triggers_json_path()
-
-    try:
-        triggers, dispatch, verbs, profiles = validate_triggers_json(path=path)
-    except FileNotFoundError:
-        click.echo(f"✗ triggers.json not found: {path}", err=True)
-        sys.exit(1)
-    except VoicepipeConfigError as e:
-        click.echo(f"✗ triggers.json invalid: {path}", err=True)
-        click.echo(f"  {e}", err=True)
-        sys.exit(1)
+    triggers, dispatch, verbs, profiles = _load_config_or_exit(path_override)
 
     commands = TranscriptCommandsConfig(
         triggers=triggers,
@@ -291,3 +294,172 @@ def triggers_test(phrase: str, path_override: str | None, json_output: bool) -> 
         return
     for line in _format_dry_run_trace(trace):
         click.echo(line)
+
+
+# ---------- triggers show ----------
+
+
+def _describe_profile_one_line(name: str, prof: TranscriptLLMProfileConfig) -> str:
+    bits: list[str] = []
+    if prof.model:
+        bits.append(f"model={prof.model}")
+    if prof.temperature is not None:
+        bits.append(f"temperature={prof.temperature}")
+    suffix = ("  " + " ".join(bits)) if bits else ""
+    return f"  {name}{suffix}"
+
+
+def _profile_body_lines(prof: TranscriptLLMProfileConfig) -> list[str]:
+    lines: list[str] = []
+    if prof.model:
+        lines.append(f"  model: {prof.model}")
+    if prof.temperature is not None:
+        lines.append(f"  temperature: {prof.temperature}")
+    for attr in ("system_prompt", "user_prompt", "user_prompt_template"):
+        value = getattr(prof, attr)
+        if not value:
+            continue
+        lines.append(f"  {attr}:")
+        for sub in str(value).splitlines() or [str(value)]:
+            lines.append(f"    {sub}")
+    return lines
+
+
+def _describe_profile_full(name: str, prof: TranscriptLLMProfileConfig) -> str:
+    return "\n".join([f"{name} (LLM profile):", *_profile_body_lines(prof)])
+
+
+def _describe_resolved_profile_block(name: str, prof: TranscriptLLMProfileConfig) -> str:
+    return "\n".join([f"Resolved profile ({name}):", *_profile_body_lines(prof)])
+
+
+@triggers_group.command("show")
+@click.argument("name", required=False)
+@click.option(
+    "--path",
+    "path_override",
+    type=click.Path(dir_okay=False),
+    default=None,
+    help="Path to a triggers.json file (defaults to the canonical path).",
+)
+@click.option(
+    "--json",
+    "json_output",
+    is_flag=True,
+    help="Emit the resolved config as JSON instead of formatted text.",
+)
+def triggers_show(name: str | None, path_override: str | None, json_output: bool) -> None:
+    """Show resolved triggers config.
+
+    Without NAME: list trigger prefixes, dispatch settings, verbs, and LLM
+    profiles. With NAME: show the full config for a verb (with resolved
+    profile inlined) or LLM profile by that name. Verbs take precedence on
+    name collision; a note is printed if both exist.
+    """
+    from voicepipe.transcript_triggers._help import (
+        _describe_verb_full,
+        _describe_verb_one_line,
+    )
+
+    triggers, dispatch, verbs, profiles = _load_config_or_exit(path_override)
+
+    if name is None:
+        if json_output:
+            output: dict[str, Any] = {
+                "triggers": dict(triggers),
+                "dispatch": dataclasses.asdict(dispatch),
+                "verbs": {n: dataclasses.asdict(verbs[n]) for n in sorted(verbs)},
+                "profiles": {n: dataclasses.asdict(profiles[n]) for n in sorted(profiles)},
+            }
+            click.echo(json.dumps(output, indent=2, ensure_ascii=False))
+            return
+
+        click.echo(f"Triggers ({len(triggers)}):")
+        if triggers:
+            for prefix in sorted(triggers):
+                click.echo(f"  {prefix} -> {triggers[prefix]}")
+        else:
+            click.echo("  (none)")
+        click.echo("")
+        click.echo("Dispatch settings:")
+        click.echo(f"  unknown_verb: {dispatch.unknown_verb}")
+        click.echo(f"  error_destination: {dispatch.error_destination}")
+        click.echo("")
+        click.echo(f"Verbs ({len(verbs)}):")
+        if verbs:
+            for verb_name in sorted(verbs):
+                click.echo(_describe_verb_one_line(verb_name, verbs[verb_name]))
+        else:
+            click.echo("  (none)")
+        click.echo("")
+        click.echo(f"LLM profiles ({len(profiles)}):")
+        if profiles:
+            for prof_name in sorted(profiles):
+                click.echo(_describe_profile_one_line(prof_name, profiles[prof_name]))
+        else:
+            click.echo("  (none)")
+        return
+
+    lookup = name.strip().lower()
+
+    if lookup in verbs:
+        verb_cfg = verbs[lookup]
+        resolved_profile_name = (verb_cfg.profile or "").strip()
+        resolved_profile = profiles.get(resolved_profile_name) if resolved_profile_name else None
+
+        if json_output:
+            payload: dict[str, Any] = {
+                "verb": {"name": lookup, **dataclasses.asdict(verb_cfg)},
+            }
+            if resolved_profile_name:
+                if resolved_profile is not None:
+                    payload["resolved_profile"] = {
+                        "name": resolved_profile_name,
+                        **dataclasses.asdict(resolved_profile),
+                    }
+                else:
+                    payload["resolved_profile"] = {
+                        "name": resolved_profile_name,
+                        "missing": True,
+                    }
+            if lookup in profiles:
+                payload["profile_with_same_name"] = lookup
+            click.echo(json.dumps(payload, indent=2, ensure_ascii=False))
+            return
+
+        click.echo(_describe_verb_full(lookup, verb_cfg))
+        if resolved_profile_name:
+            click.echo("")
+            if resolved_profile is not None:
+                click.echo(_describe_resolved_profile_block(resolved_profile_name, resolved_profile))
+            else:
+                click.echo(
+                    f"Profile {resolved_profile_name!r} is referenced but not defined."
+                )
+        if lookup in profiles:
+            click.echo("")
+            click.echo(
+                f"Note: an LLM profile named {lookup!r} also exists; verb shown above."
+            )
+        return
+
+    if lookup in profiles:
+        prof = profiles[lookup]
+        if json_output:
+            click.echo(
+                json.dumps(
+                    {"profile": {"name": lookup, **dataclasses.asdict(prof)}},
+                    indent=2,
+                    ensure_ascii=False,
+                )
+            )
+            return
+        click.echo(_describe_profile_full(lookup, prof))
+        return
+
+    known_verbs = ", ".join(sorted(verbs)) or "(none)"
+    known_profiles = ", ".join(sorted(profiles)) or "(none)"
+    click.echo(f"✗ no verb or profile named {name!r}", err=True)
+    click.echo(f"  known verbs: {known_verbs}", err=True)
+    click.echo(f"  known profiles: {known_profiles}", err=True)
+    sys.exit(1)

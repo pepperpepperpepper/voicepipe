@@ -7,6 +7,7 @@ Voice recording and transcription CLI for Linux (systemd optional) and Windows 1
 - Simple voice recording with automatic device detection
 - High-quality transcription using OpenAI or ElevenLabs (configurable)
 - Optional automatic typing of transcribed text (Linux: xdotool/wtype; Windows: SendInput)
+- Programmable post-transcription verbs (Zwingli) — say "zwingli …" to route into shell commands, LLM calls, codegen-and-run, key emits, or custom Python
 - Robust daemon-based session management
 - Automatic cleanup of temporary files
 - Multi-language transcription support
@@ -405,7 +406,21 @@ Built-in actions:
 - `dispatch`: parse the remainder as `verb + args` and route based on `verbs` (unknown verbs fall back to `dispatch.unknown_verb`)
 - `zwingli`: run the remainder through an LLM and output only the final text (see `VOICEPIPE_ZWINGLI_*`)
 - `shell`: execute the remainder as a shell command and output its stdout/stderr (requires `VOICEPIPE_SHELL_ALLOW=1`)
+- `execute`: type the remainder as a command into the focused shell and press Enter (the shell runs it; no subprocess on the Voicepipe side)
+- `type`: emit a named key sequence (Enter, Tab, Escape, etc.) — see `voicepipe triggers show type` for aliases
+- `clipboard`: send the remainder to the system clipboard
+- `codegen`: have the LLM generate a script and run it via a configured `interpreter` (bash/python/perl/node by default; requires `VOICEPIPE_SHELL_ALLOW=1`)
+- `help`: print the loaded verb registry (auto-injected; `zwingli help <verb>` for detail)
+- `yes` / `no`: confirm or cancel a pending command (auto-injected; used by verbs with `confirm: true`)
 - `plugin`: run a user-defined Python callable for a verb (requires `VOICEPIPE_PLUGIN_ALLOW=1`)
+
+Verb features beyond the basics — see `voicepipe triggers show <verb>` for the resolved config of any verb in your file:
+- `aliases`: alternative spoken phrases that resolve to the same verb (`"py"`, `"in python"`)
+- `pattern`: a regex with named groups; matched groups feed `command_template` / `user_prompt_template` via `{name}` substitution
+- `confirm: true`: stash instead of executing; the user resumes with `zwingli yes` (or cancels with `zwingli no`)
+- `rate_limit_per_min`: per-verb sliding-window ceiling (the lower of this and the global LLM limit wins)
+- Verb chaining: a remainder containing `then` splits into a pipeline — each verb's output becomes the next verb's input
+- LLM profile inheritance: an `llm_profiles` entry can set `"extends": "other-profile"` to inherit fields it doesn't override
 
 Plugin verbs (opt-in):
 - `type: "plugin"` defaults to `enabled: false` (must be explicitly enabled)
@@ -437,6 +452,13 @@ def handle(text: str) -> str:
 Daemon reload (Unix):
 - The transcriber daemon loads `triggers.json` at startup and can reload it on `SIGHUP`.
 - If installed via systemd: `voicepipe service reload` (or `systemctl --user kill -s HUP voicepipe-transcriber.service`)
+
+Inspecting and debugging triggers:
+- `voicepipe triggers path` — print the resolved `triggers.json` path (handy for `$EDITOR "$(voicepipe triggers path)"`)
+- `voicepipe triggers validate [--strict]` — sanity-check the file; `--strict` also reports dangling profile refs, codegen interpreters missing from `PATH`, and alias collisions
+- `voicepipe triggers show [<name>]` — list all triggers/verbs/profiles, or dump the resolved config for one verb (with its profile inlined post-`extends`) or named profile
+- `voicepipe triggers test "zwingli something"` — dry-run a phrase through dispatch without calling the LLM, running shell commands, typing, or stashing pending state
+- `voicepipe triggers log [--tail N]` — tail the JSON-line debug log at `/tmp/zwingli-debug.log` (override via `VOICEPIPE_ZWINGLI_DEBUG_LOG_FILE`); `--json` for raw lines
 
 #### Shell Scripting
 ```bash

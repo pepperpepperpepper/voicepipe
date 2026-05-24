@@ -618,6 +618,125 @@ def test_log_skips_malformed_lines(runner, tmp_path: Path) -> None:
     assert "trigger='zwingli'" in result.output
 
 
+def test_log_follow_help_lists_flag(runner) -> None:
+    result = runner.invoke(main, ["triggers", "log", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--follow" in result.output
+    assert "-f" in result.output
+
+
+def test_log_follow_with_no_events_says_waiting(runner, tmp_path: Path) -> None:
+    log = tmp_path / "z.log"
+    log.write_text("", encoding="utf-8")
+    # Provide stdin EOF so any blocking reads exit promptly. The follow loop
+    # blocks on its own; we need to bail out via _iter_follow_log which is
+    # tested directly. Here we only verify the pre-follow waiting message.
+    # To stop the follow loop, simulate a keyboard interrupt.
+    import threading
+    import _thread
+
+    def interrupt_after():
+        # Give the command time to print the waiting message and enter the
+        # follow loop, then trip a KeyboardInterrupt to exit it.
+        import time
+        time.sleep(0.2)
+        _thread.interrupt_main()
+
+    t = threading.Thread(target=interrupt_after, daemon=True)
+    t.start()
+    result = runner.invoke(main, ["triggers", "log", "--follow", "--path", str(log)])
+    assert result.exit_code == 0, result.output
+    assert "waiting" in result.output
+
+
+def test_iter_follow_log_yields_new_appended_lines(tmp_path: Path) -> None:
+    from voicepipe.commands.triggers import _iter_follow_log
+    import threading
+    import time
+
+    log = tmp_path / "z.log"
+    log.write_text("existing\n", encoding="utf-8")
+
+    gen = _iter_follow_log(log, poll_seconds=0.02)
+
+    def appender():
+        time.sleep(0.05)
+        with open(log, "a", encoding="utf-8") as f:
+            f.write("hello world\n")
+            f.write("second line\n")
+
+    t = threading.Thread(target=appender, daemon=True)
+    t.start()
+
+    first = next(gen)
+    second = next(gen)
+    gen.close()
+    assert first == "hello world"
+    assert second == "second line"
+
+
+def test_iter_follow_log_buffers_partial_line_until_newline(tmp_path: Path) -> None:
+    from voicepipe.commands.triggers import _iter_follow_log
+    import threading
+    import time
+
+    log = tmp_path / "z.log"
+    log.write_text("", encoding="utf-8")
+
+    gen = _iter_follow_log(log, poll_seconds=0.02)
+
+    def writer():
+        time.sleep(0.05)
+        with open(log, "a", encoding="utf-8") as f:
+            # Partial line first — should be buffered, not yielded yet.
+            f.write("hel")
+            f.flush()
+        time.sleep(0.1)
+        with open(log, "a", encoding="utf-8") as f:
+            f.write("lo\n")
+
+    t = threading.Thread(target=writer, daemon=True)
+    t.start()
+
+    line = next(gen)
+    gen.close()
+    assert line == "hello"
+
+
+def test_iter_follow_log_handles_rotation(tmp_path: Path) -> None:
+    from voicepipe.commands.triggers import _iter_follow_log
+    import threading
+    import time
+
+    log = tmp_path / "z.log"
+    log.write_text("", encoding="utf-8")
+
+    gen = _iter_follow_log(log, poll_seconds=0.02)
+
+    def rotator():
+        # Append a line to the original file, then rotate (rename it away
+        # and write a fresh file with new content).
+        time.sleep(0.05)
+        with open(log, "a", encoding="utf-8") as f:
+            f.write("before-rotate\n")
+        time.sleep(0.05)
+        # Mimic the writer's rotation behavior: move to .1, create new file.
+        backup = Path(str(log) + ".1")
+        if backup.exists():
+            backup.unlink()
+        log.rename(backup)
+        log.write_text("after-rotate\n", encoding="utf-8")
+
+    t = threading.Thread(target=rotator, daemon=True)
+    t.start()
+
+    first = next(gen)
+    second = next(gen)
+    gen.close()
+    assert first == "before-rotate"
+    assert second == "after-rotate"
+
+
 def test_log_unknown_event_type_falls_back_to_json_dump(runner, tmp_path: Path) -> None:
     log = _write_log(
         tmp_path / "z.log",

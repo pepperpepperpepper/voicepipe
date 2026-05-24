@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -573,6 +574,62 @@ def _read_debug_log_tail(path: Path, tail: int) -> list[dict[str, Any]]:
     return events
 
 
+def _format_log_line(ev: dict[str, Any]) -> str:
+    """One-line human-readable rendering of a debug event."""
+    ts = _format_ts(ev.get("ts_ms"))
+    name = ev.get("event", "?")
+    return f"{ts}  {name:<20}  {_summarize_event(ev)}"
+
+
+def _iter_follow_log(path: Path, *, poll_seconds: float = 0.5):
+    """Yield newly-appended lines from `path` until interrupted.
+
+    Opens the file, seeks to end, then polls for new content. Detects log
+    rotation (inode change) and reopens from the new file's beginning so
+    nothing is lost across a rotation. Partial trailing lines are
+    buffered until a newline arrives. Caller handles KeyboardInterrupt.
+    """
+    import time
+
+    f = open(path, "r", encoding="utf-8", errors="replace")
+    try:
+        f.seek(0, 2)  # SEEK_END
+        try:
+            inode: int | None = os.fstat(f.fileno()).st_ino
+        except OSError:
+            inode = None
+        buffer = ""
+        while True:
+            chunk = f.read()
+            if chunk:
+                buffer += chunk
+                while "\n" in buffer:
+                    line, buffer = buffer.split("\n", 1)
+                    yield line
+                continue
+            try:
+                new_inode: int | None = path.stat().st_ino
+            except FileNotFoundError:
+                # File temporarily missing during rotation; keep polling.
+                time.sleep(poll_seconds)
+                continue
+            except OSError:
+                new_inode = None
+            if (
+                inode is not None
+                and new_inode is not None
+                and new_inode != inode
+            ):
+                f.close()
+                f = open(path, "r", encoding="utf-8", errors="replace")
+                inode = new_inode
+                buffer = ""
+                continue
+            time.sleep(poll_seconds)
+    finally:
+        f.close()
+
+
 @triggers_group.command("log")
 @click.option(
     "--path",
@@ -590,18 +647,31 @@ def _read_debug_log_tail(path: Path, tail: int) -> list[dict[str, Any]]:
     help="Show only the last N events. Use 0 for all.",
 )
 @click.option(
+    "--follow",
+    "-f",
+    "follow",
+    is_flag=True,
+    help="After the initial tail, keep printing new events as they arrive (Ctrl-C to stop).",
+)
+@click.option(
     "--json",
     "json_output",
     is_flag=True,
     help="Emit raw JSON-line events instead of formatted text.",
 )
-def triggers_log(path_override: str | None, tail: int, json_output: bool) -> None:
+def triggers_log(
+    path_override: str | None,
+    tail: int,
+    follow: bool,
+    json_output: bool,
+) -> None:
     """Print recent Zwingli dispatch debug events.
 
     The debug log is a JSON-lines file written by the dispatch pipeline
     on every trigger match, action invocation, shell/codegen execution,
-    and rate-limit block. This command tails the last N events and
-    renders each on a single line. Pass --json for the raw line stream.
+    and rate-limit block. By default this command tails the last N events
+    and exits. Pass --follow to also stream new events as they arrive
+    (like `tail -f`). Pass --json for the raw line stream.
     """
     from voicepipe.transcript_triggers._debug_log import _zwingli_debug_log_path
 
@@ -624,16 +694,33 @@ def triggers_log(path_override: str | None, tail: int, json_output: bool) -> Non
     if json_output:
         for ev in events:
             click.echo(json.dumps(ev, ensure_ascii=False))
+    elif not events:
+        if not follow:
+            click.echo(f"(no events in {path})")
+            return
+        click.echo(f"(no events yet in {path}; waiting…)")
+    else:
+        for ev in events:
+            click.echo(_format_log_line(ev))
+
+    if not follow:
         return
 
-    if not events:
-        click.echo(f"(no events in {path})")
+    try:
+        for line in _iter_follow_log(path):
+            if not line.strip():
+                continue
+            if json_output:
+                click.echo(line)
+                continue
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(ev, dict):
+                click.echo(_format_log_line(ev))
+    except KeyboardInterrupt:
         return
-
-    for ev in events:
-        ts = _format_ts(ev.get("ts_ms"))
-        name = ev.get("event", "?")
-        click.echo(f"{ts}  {name:<20}  {_summarize_event(ev)}")
 
 
 # ---------- triggers path ----------

@@ -75,6 +75,7 @@ timeout = 60
 markers = [
     "live: opt-in integration tests requiring mic/network/API keys (enable via VOICEPIPE_LIVE_TESTS=1)",
     "audio: recorded audio regression tests (network STT; no mic required)",
+    "synth: synthesized-voice round-trip tests (ElevenLabs TTS cache + network STT; cache committed, so CI only needs OPENAI_API_KEY)",
     "desktop: interactive desktop required (typing/focus tests)",
 ]
 

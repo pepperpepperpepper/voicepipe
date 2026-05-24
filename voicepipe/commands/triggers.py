@@ -463,3 +463,174 @@ def triggers_show(name: str | None, path_override: str | None, json_output: bool
     click.echo(f"  known verbs: {known_verbs}", err=True)
     click.echo(f"  known profiles: {known_profiles}", err=True)
     sys.exit(1)
+
+
+# ---------- triggers log ----------
+
+
+def _format_ts(ts_ms: Any) -> str:
+    """Render a ts_ms field as local time. Returns a placeholder if unparseable."""
+    import datetime
+
+    try:
+        seconds = float(ts_ms) / 1000.0
+    except (TypeError, ValueError):
+        return "????-??-?? ??:??:??"
+    try:
+        return datetime.datetime.fromtimestamp(seconds).strftime("%Y-%m-%d %H:%M:%S")
+    except (OverflowError, OSError, ValueError):
+        return "????-??-?? ??:??:??"
+
+
+def _snippet(value: Any, *, limit: int = 80) -> str:
+    """Single-line, length-capped repr for log summaries."""
+    if value is None:
+        return ""
+    text = str(value).replace("\n", " ").replace("\r", " ")
+    if len(text) > limit:
+        text = text[: limit - 1] + "…"
+    return text
+
+
+def _summarize_event(ev: dict[str, Any]) -> str:
+    """Per-event-type one-line summary string."""
+    name = ev.get("event", "")
+
+    if name == "trigger_match":
+        return (
+            f"trigger={ev.get('trigger')!r} action={ev.get('action')!r} "
+            f"text={_snippet(ev.get('text'))!r}"
+        )
+    if name in ("dispatch_ok", "action_ok"):
+        bits = []
+        if "trigger" in ev:
+            bits.append(f"trigger={ev.get('trigger')!r}")
+        if "action" in ev:
+            bits.append(f"action={ev.get('action')!r}")
+        bits.append(f"output={_snippet(ev.get('output_text'))!r}")
+        return " ".join(bits)
+    if name in ("dispatch_error", "action_error"):
+        bits = []
+        if "trigger" in ev:
+            bits.append(f"trigger={ev.get('trigger')!r}")
+        if "action" in ev:
+            bits.append(f"action={ev.get('action')!r}")
+        bits.append(f"error={_snippet(ev.get('error'))!r}")
+        return " ".join(bits)
+    if name == "action_missing":
+        return f"action={ev.get('action')!r} (no handler)"
+    if name == "rate_limited":
+        bits = [f"verb={ev.get('verb')!r}"]
+        if "retry_after_seconds" in ev:
+            bits.append(f"retry_after={ev['retry_after_seconds']}s")
+        if "limit" in ev:
+            bits.append(f"limit={ev['limit']}")
+        return " ".join(bits)
+    if name in ("shell_start", "codegen_start"):
+        return f"command={_snippet(ev.get('command'))!r}"
+    if name in ("shell_complete", "codegen_complete"):
+        bits = []
+        if "returncode" in ev:
+            bits.append(f"rc={ev['returncode']}")
+        if ev.get("stdout"):
+            bits.append(f"stdout={_snippet(ev.get('stdout'))!r}")
+        if ev.get("stderr"):
+            bits.append(f"stderr={_snippet(ev.get('stderr'))!r}")
+        return " ".join(bits) or "(no output)"
+    if name in ("shell_blocked", "codegen_blocked"):
+        return f"reason={_snippet(ev.get('reason') or ev.get('error'))!r}"
+    if name in ("shell_timeout", "codegen_timeout"):
+        bits = []
+        if "timeout_seconds" in ev:
+            bits.append(f"timeout={ev['timeout_seconds']}s")
+        if ev.get("command"):
+            bits.append(f"command={_snippet(ev.get('command'))!r}")
+        return " ".join(bits)
+
+    # Unknown event type: dump non-noise keys.
+    rest = {
+        k: v for k, v in ev.items() if k not in ("event", "ts_ms", "pid")
+    }
+    return json.dumps(rest, ensure_ascii=False, default=str)
+
+
+def _read_debug_log_tail(path: Path, tail: int) -> list[dict[str, Any]]:
+    """Return the last `tail` parsed JSON-line events from `path`. Bad lines are skipped."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if not text:
+        return []
+    raw_lines = [line for line in text.splitlines() if line.strip()]
+    if tail > 0:
+        raw_lines = raw_lines[-tail:]
+    events: list[dict[str, Any]] = []
+    for line in raw_lines:
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            events.append(obj)
+    return events
+
+
+@triggers_group.command("log")
+@click.option(
+    "--path",
+    "path_override",
+    type=click.Path(dir_okay=False),
+    default=None,
+    help="Path to the Zwingli debug log (defaults to VOICEPIPE_ZWINGLI_DEBUG_LOG_FILE or /tmp/zwingli-debug.log).",
+)
+@click.option(
+    "--tail",
+    "tail",
+    type=int,
+    default=20,
+    show_default=True,
+    help="Show only the last N events. Use 0 for all.",
+)
+@click.option(
+    "--json",
+    "json_output",
+    is_flag=True,
+    help="Emit raw JSON-line events instead of formatted text.",
+)
+def triggers_log(path_override: str | None, tail: int, json_output: bool) -> None:
+    """Print recent Zwingli dispatch debug events.
+
+    The debug log is a JSON-lines file written by the dispatch pipeline
+    on every trigger match, action invocation, shell/codegen execution,
+    and rate-limit block. This command tails the last N events and
+    renders each on a single line. Pass --json for the raw line stream.
+    """
+    from voicepipe.transcript_triggers._debug_log import _zwingli_debug_log_path
+
+    path = Path(path_override).expanduser() if path_override else _zwingli_debug_log_path()
+    if not path.exists():
+        click.echo(f"✗ debug log not found: {path}", err=True)
+        click.echo(
+            "  (set VOICEPIPE_ZWINGLI_DEBUG_LOG_FILE or run a trigger to create it)",
+            err=True,
+        )
+        sys.exit(1)
+
+    try:
+        events = _read_debug_log_tail(path, tail)
+    except OSError as e:
+        click.echo(f"✗ could not read debug log: {path}", err=True)
+        click.echo(f"  {e}", err=True)
+        sys.exit(1)
+
+    if json_output:
+        for ev in events:
+            click.echo(json.dumps(ev, ensure_ascii=False))
+        return
+
+    if not events:
+        click.echo(f"(no events in {path})")
+        return
+
+    for ev in events:
+        ts = _format_ts(ev.get("ts_ms"))
+        name = ev.get("event", "?")
+        click.echo(f"{ts}  {name:<20}  {_summarize_event(ev)}")

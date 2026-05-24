@@ -436,3 +436,201 @@ def test_show_missing_config_exits_with_error(runner, tmp_path: Path) -> None:
     )
     assert result.exit_code == 1
     assert "✗ triggers.json not found" in result.output
+
+
+# ---------- triggers log ----------
+
+
+def _write_log(path: Path, events: list[dict]) -> Path:
+    path.write_text(
+        "\n".join(json.dumps(ev) for ev in events) + "\n", encoding="utf-8"
+    )
+    return path
+
+
+def test_log_formats_trigger_match_and_dispatch_ok(runner, tmp_path: Path) -> None:
+    log = _write_log(
+        tmp_path / "z.log",
+        [
+            {
+                "event": "trigger_match",
+                "ts_ms": 1779633876887,
+                "trigger": "zwingli",
+                "action": "dispatch",
+                "text": "zwingli strip x",
+            },
+            {
+                "event": "dispatch_ok",
+                "ts_ms": 1779633876900,
+                "trigger": "zwingli",
+                "output_text": "x",
+            },
+        ],
+    )
+    result = runner.invoke(main, ["triggers", "log", "--path", str(log)])
+    assert result.exit_code == 0, result.output
+    assert "trigger_match" in result.output
+    assert "trigger='zwingli'" in result.output
+    assert "action='dispatch'" in result.output
+    assert "text='zwingli strip x'" in result.output
+    assert "dispatch_ok" in result.output
+    assert "output='x'" in result.output
+
+
+def test_log_summarizes_action_error(runner, tmp_path: Path) -> None:
+    log = _write_log(
+        tmp_path / "z.log",
+        [
+            {
+                "event": "action_error",
+                "ts_ms": 1779633876900,
+                "action": "shell",
+                "error": "Permission denied",
+            }
+        ],
+    )
+    result = runner.invoke(main, ["triggers", "log", "--path", str(log)])
+    assert result.exit_code == 0, result.output
+    assert "action_error" in result.output
+    assert "action='shell'" in result.output
+    assert "error='Permission denied'" in result.output
+
+
+def test_log_summarizes_rate_limited(runner, tmp_path: Path) -> None:
+    log = _write_log(
+        tmp_path / "z.log",
+        [
+            {
+                "event": "rate_limited",
+                "ts_ms": 1779633876900,
+                "verb": "python",
+                "retry_after_seconds": 12,
+                "limit": 5,
+            }
+        ],
+    )
+    result = runner.invoke(main, ["triggers", "log", "--path", str(log)])
+    assert result.exit_code == 0, result.output
+    assert "rate_limited" in result.output
+    assert "verb='python'" in result.output
+    assert "retry_after=12s" in result.output
+    assert "limit=5" in result.output
+
+
+def test_log_summarizes_shell_complete(runner, tmp_path: Path) -> None:
+    log = _write_log(
+        tmp_path / "z.log",
+        [
+            {
+                "event": "shell_complete",
+                "ts_ms": 1779633876900,
+                "returncode": 0,
+                "stdout": "hello\nworld",
+                "stderr": "",
+            }
+        ],
+    )
+    result = runner.invoke(main, ["triggers", "log", "--path", str(log)])
+    assert result.exit_code == 0, result.output
+    assert "shell_complete" in result.output
+    assert "rc=0" in result.output
+    # Newline in stdout becomes a space in the snippet.
+    assert "stdout='hello world'" in result.output
+
+
+def test_log_tail_limits_count(runner, tmp_path: Path) -> None:
+    events = [
+        {"event": "trigger_match", "ts_ms": 1779633876000 + i, "trigger": f"t{i}"}
+        for i in range(10)
+    ]
+    log = _write_log(tmp_path / "z.log", events)
+    result = runner.invoke(main, ["triggers", "log", "--path", str(log), "--tail", "3"])
+    assert result.exit_code == 0, result.output
+    lines = [ln for ln in result.output.splitlines() if ln.strip()]
+    assert len(lines) == 3
+    assert "trigger='t7'" in result.output
+    assert "trigger='t8'" in result.output
+    assert "trigger='t9'" in result.output
+    assert "trigger='t0'" not in result.output
+
+
+def test_log_tail_zero_shows_all(runner, tmp_path: Path) -> None:
+    events = [
+        {"event": "trigger_match", "ts_ms": 1779633876000 + i, "trigger": f"t{i}"}
+        for i in range(5)
+    ]
+    log = _write_log(tmp_path / "z.log", events)
+    result = runner.invoke(main, ["triggers", "log", "--path", str(log), "--tail", "0"])
+    assert result.exit_code == 0, result.output
+    lines = [ln for ln in result.output.splitlines() if ln.strip()]
+    assert len(lines) == 5
+
+
+def test_log_json_passthrough(runner, tmp_path: Path) -> None:
+    events = [
+        {
+            "event": "trigger_match",
+            "ts_ms": 1779633876900,
+            "trigger": "zwingli",
+            "action": "dispatch",
+        }
+    ]
+    log = _write_log(tmp_path / "z.log", events)
+    result = runner.invoke(
+        main, ["triggers", "log", "--path", str(log), "--json"]
+    )
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.output.strip())
+    assert parsed["event"] == "trigger_match"
+    assert parsed["trigger"] == "zwingli"
+
+
+def test_log_missing_file_exits_with_error(runner, tmp_path: Path) -> None:
+    result = runner.invoke(
+        main, ["triggers", "log", "--path", str(tmp_path / "missing.log")]
+    )
+    assert result.exit_code == 1
+    assert "✗ debug log not found" in result.output
+
+
+def test_log_empty_file_reports_no_events(runner, tmp_path: Path) -> None:
+    log = tmp_path / "z.log"
+    log.write_text("", encoding="utf-8")
+    result = runner.invoke(main, ["triggers", "log", "--path", str(log)])
+    assert result.exit_code == 0, result.output
+    assert "no events" in result.output
+
+
+def test_log_skips_malformed_lines(runner, tmp_path: Path) -> None:
+    log = tmp_path / "z.log"
+    log.write_text(
+        "not json\n"
+        + json.dumps(
+            {"event": "trigger_match", "ts_ms": 1779633876900, "trigger": "zwingli"}
+        )
+        + "\n"
+        + "{also bad\n",
+        encoding="utf-8",
+    )
+    result = runner.invoke(main, ["triggers", "log", "--path", str(log)])
+    assert result.exit_code == 0, result.output
+    assert "trigger_match" in result.output
+    assert "trigger='zwingli'" in result.output
+
+
+def test_log_unknown_event_type_falls_back_to_json_dump(runner, tmp_path: Path) -> None:
+    log = _write_log(
+        tmp_path / "z.log",
+        [
+            {
+                "event": "some_future_event",
+                "ts_ms": 1779633876900,
+                "custom_field": "value",
+            }
+        ],
+    )
+    result = runner.invoke(main, ["triggers", "log", "--path", str(log)])
+    assert result.exit_code == 0, result.output
+    assert "some_future_event" in result.output
+    assert "custom_field" in result.output
+    assert "value" in result.output

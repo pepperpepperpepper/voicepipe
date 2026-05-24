@@ -49,6 +49,48 @@ def _resolve_action_from_verb_config(_verb: str, cfg: TranscriptVerbConfig) -> s
     return (cfg.action or "").strip().lower() or "strip"
 
 
+def _suggest_verb(
+    verb: str, verbs: Mapping[str, TranscriptVerbConfig]
+) -> list[str]:
+    """Return up to 3 canonical verb names likely intended by `verb`.
+
+    Used when verb resolution falls through (unknown or disabled verb) so
+    the dispatcher can attach a "did you mean?" hint to its metadata.
+    Candidates are enabled verb names + their single-token aliases; matches
+    against aliases map back to the canonical verb name. Multi-token
+    aliases ("in python") are excluded because the unresolved input is
+    always a single token. Uses difflib (Ratcliff-Obershelp) with cutoff
+    0.6 — the stdlib default for typo suggestions.
+    """
+    import difflib
+
+    needle = (verb or "").strip().lower()
+    if not needle:
+        return []
+    candidate_to_canonical: dict[str, str] = {}
+    for name, cfg in verbs.items():
+        if not bool(cfg.enabled):
+            continue
+        candidate_to_canonical.setdefault(name.lower(), name)
+        for alias in cfg.aliases or ():
+            phrase = " ".join((alias or "").strip().lower().split())
+            if not phrase or " " in phrase:
+                continue
+            candidate_to_canonical.setdefault(phrase, name)
+    matches = difflib.get_close_matches(
+        needle, list(candidate_to_canonical.keys()), n=3, cutoff=0.6
+    )
+    seen: set[str] = set()
+    result: list[str] = []
+    for match in matches:
+        canonical = candidate_to_canonical[match]
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        result.append(canonical)
+    return result
+
+
 def _build_verb_alias_map(
     verbs: Mapping[str, TranscriptVerbConfig],
 ) -> dict[str, str]:
@@ -227,6 +269,9 @@ def _dispatch_single_step(
     }
     if verb_cfg is not None and not bool(verb_cfg.enabled):
         meta["disabled_verb"] = verb
+    suggestions = _suggest_verb(verb, commands.verbs)
+    if suggestions:
+        meta["did_you_mean"] = suggestions
     if inner_meta:
         meta["handler_meta"] = inner_meta
     return out_text, meta

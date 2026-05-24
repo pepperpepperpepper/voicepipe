@@ -65,6 +65,13 @@ target-version = ['py310']
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+# Global pytest-timeout default: any test running longer than 60s fails.
+# Most tests complete in <1s; this is purely a CI safety net to prevent
+# a hung test from consuming a runner for hours (we lost a Windows
+# pytest job for 2h to a thread-interrupt test that didn't break out
+# under click's CliRunner). Individual tests can still override via
+# @pytest.mark.timeout(N).
+timeout = 60
 markers = [
     "live: opt-in integration tests requiring mic/network/API keys (enable via VOICEPIPE_LIVE_TESTS=1)",
     "audio: recorded audio regression tests (network STT; no mic required)",

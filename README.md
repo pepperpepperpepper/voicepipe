@@ -455,10 +455,13 @@ Daemon reload (Unix):
 
 Inspecting and debugging triggers:
 - `voicepipe triggers path` — print the resolved `triggers.json` path (handy for `$EDITOR "$(voicepipe triggers path)"`)
-- `voicepipe triggers validate [--strict]` — sanity-check the file; `--strict` also reports dangling profile refs, codegen interpreters missing from `PATH`, and alias collisions
+- `voicepipe triggers validate [--strict]` — sanity-check the file; `--strict` also reports dangling profile refs, codegen interpreters missing from `PATH`, codegen verbs missing a `profile`, alias collisions, and disabled verbs that still declare aliases
 - `voicepipe triggers show [<name>]` — list all triggers/verbs/profiles, or dump the resolved config for one verb (with its profile inlined post-`extends`) or named profile
-- `voicepipe triggers test "zwingli something"` — dry-run a phrase through dispatch without calling the LLM, running shell commands, typing, or stashing pending state
-- `voicepipe triggers log [--tail N]` — tail the JSON-line debug log at `/tmp/zwingli-debug.log` (override via `VOICEPIPE_ZWINGLI_DEBUG_LOG_FILE`); `--json` for raw lines
+- `voicepipe triggers test "zwingli something"` — dry-run a phrase through dispatch without calling the LLM, running shell commands, typing, or stashing pending state; surfaces did-you-mean suggestions for unresolved verbs
+- `voicepipe triggers log [--tail N] [--follow]` — tail the JSON-line debug log at `/tmp/zwingli-debug.log` (override via `VOICEPIPE_ZWINGLI_DEBUG_LOG_FILE`); `--follow` keeps streaming new events like `tail -f`; `--json` for raw lines
+- `voicepipe triggers stats [--top N]` — aggregate the debug log into per-trigger, per-verb, and per-event-type counts ("which verbs do I actually use?" / "where are my dispatch errors?")
+
+When dispatch falls through to `unknown_verb` (e.g. "zwingli pyhon …" with no `pyhon` verb), the dispatcher attaches a fuzzy did-you-mean suggestion to the event metadata — visible in `triggers log` (`unknown_verb='pyhon' did_you_mean=python`) and in the `triggers test` dry-run trace. The output text itself is unchanged, so the dictation path is unaffected.
 
 #### Shell Scripting
 ```bash

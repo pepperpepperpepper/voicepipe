@@ -41,12 +41,9 @@ from ._dry_run import dry_run_dispatch
 
 # Internal symbols re-exported for tests/CLI that reach for them by name.
 # Keep this list in sync with what's referenced via `tt.<name>` in tests.
-from ._actions import (
-    _ACTIONS,
-    _action_type,
-    _run_shell_command,
-    subprocess,  # for `monkeypatch.setattr(tt.subprocess, "run", ...)`
-)
+from ._actions import _ACTIONS
+from ._shell import _run_shell_command, subprocess  # subprocess for tt.subprocess.run patches
+from ._type import _action_type
 from ._template import (
     _compile_verb_pattern,
     _find_pattern_match,

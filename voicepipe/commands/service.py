@@ -58,6 +58,28 @@ def _activation_units(recorder: bool, transcriber: bool) -> list[str]:
     return selected_units()
 
 
+def _reset_failed_units(recorder: bool, transcriber: bool) -> list[str]:
+    units: list[str] = []
+    if recorder or transcriber:
+        units.extend(_service_units(recorder, transcriber))
+    else:
+        try:
+            if systemctl_cat(TARGET_UNIT).returncode == 0:
+                units.append(TARGET_UNIT)
+        except Exception:
+            pass
+        units.extend(selected_units())
+
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for unit in units:
+        if unit in seen:
+            continue
+        seen.add(unit)
+        ordered.append(unit)
+    return ordered
+
+
 @service_group.command("install")
 def service_install() -> None:
     """Install systemd user units into ~/.config/systemd/user/."""
@@ -199,6 +221,7 @@ def service_disable(recorder: bool, transcriber: bool) -> None:
 @click.option("--transcriber", is_flag=True, hidden=True, help="Only manage the transcriber unit")
 def service_start(recorder: bool, transcriber: bool) -> None:
     """Start Voicepipe services."""
+    run_systemctl(["reset-failed", *_reset_failed_units(recorder, transcriber)], check=False)
     units = _activation_units(recorder, transcriber)
     raise SystemExit(run_systemctl(["start", *units], check=False).returncode)
 
@@ -217,6 +240,7 @@ def service_stop(recorder: bool, transcriber: bool) -> None:
 @click.option("--transcriber", is_flag=True, hidden=True, help="Only manage the transcriber unit")
 def service_restart(recorder: bool, transcriber: bool) -> None:
     """Restart Voicepipe services."""
+    run_systemctl(["reset-failed", *_reset_failed_units(recorder, transcriber)], check=False)
     units = _activation_units(recorder, transcriber)
     raise SystemExit(run_systemctl(["restart", *units], check=False).returncode)
 

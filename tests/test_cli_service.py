@@ -62,7 +62,25 @@ def test_service_start_defaults_to_target_when_installed(
     assert result.exit_code == 0, result.output
 
     calls = _read_json_lines(fake_systemd)
+    assert ["--user", "reset-failed", TARGET_UNIT, RECORDER_UNIT, TRANSCRIBER_UNIT] in calls
     assert ["--user", "start", TARGET_UNIT] in calls
+
+
+def test_service_restart_resets_failed_units_before_restart(
+    isolated_home: Path, fake_systemd: Path
+) -> None:
+    if sys.platform in ("win32", "darwin"):
+        pytest.skip("systemd is not supported on Windows/macOS")
+    runner = CliRunner()
+    assert runner.invoke(main, ["service", "install"]).exit_code == 0
+
+    fake_systemd.write_text("", encoding="utf-8")
+    result = runner.invoke(main, ["service", "restart"])
+    assert result.exit_code == 0, result.output
+
+    calls = _read_json_lines(fake_systemd)
+    assert ["--user", "reset-failed", TARGET_UNIT, RECORDER_UNIT, TRANSCRIBER_UNIT] in calls
+    assert ["--user", "restart", TARGET_UNIT] in calls
 
 
 def test_service_uninstall_removes_unit_files(

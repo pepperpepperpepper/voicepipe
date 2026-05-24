@@ -33,6 +33,20 @@ echo "Installing with poetry..."
 # Set in-project venv
 export POETRY_VIRTUALENVS_IN_PROJECT=true
 
+# Stop running user services before replacing the venv they exec from.
+VOICEPIPE_RESTART_AFTER_INSTALL=0
+if command -v systemctl &> /dev/null; then
+    if systemctl --user --quiet is-active voicepipe.target \
+        || systemctl --user --quiet is-active voicepipe-recorder.service \
+        || systemctl --user --quiet is-active voicepipe-transcriber.service; then
+        VOICEPIPE_RESTART_AFTER_INSTALL=1
+    fi
+    systemctl --user stop voicepipe.target voicepipe-recorder.service voicepipe-transcriber.service \
+        >/dev/null 2>&1 || true
+    systemctl --user reset-failed voicepipe.target voicepipe-recorder.service voicepipe-transcriber.service \
+        >/dev/null 2>&1 || true
+fi
+
 # Remove existing venv if any
 rm -rf .venv
 
@@ -133,6 +147,19 @@ if command -v systemctl &> /dev/null; then
     echo
     echo "To restart services after API key changes:"
     echo "  systemctl --user restart voicepipe.target"
+
+    if [ "$VOICEPIPE_RESTART_AFTER_INSTALL" = "1" ]; then
+        echo
+        echo "Restarting previously active Voicepipe services..."
+        systemctl --user reset-failed voicepipe.target voicepipe-recorder.service voicepipe-transcriber.service \
+            >/dev/null 2>&1 || true
+        if systemctl --user start voicepipe.target; then
+            echo "✓ Voicepipe services restarted"
+        else
+            echo "Warning: failed to restart Voicepipe services automatically." >&2
+            echo "You can retry with: systemctl --user start voicepipe.target" >&2
+        fi
+    fi
 fi
 
 echo

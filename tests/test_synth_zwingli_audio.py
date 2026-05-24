@@ -285,3 +285,82 @@ def test_zwingli_llm_verb_emits_llm_call_preview() -> None:
     preview = cfg["llm_preview"]
     assert preview.get("system_prompt"), "LLM call preview should have a system prompt"
     assert preview.get("user_prompt"), "LLM call preview should have a user prompt"
+
+
+# ---------- STT word-mangling regression tests ----------
+#
+# These tests lock in observed gpt-4o-transcribe behavior and explain why
+# the main scenarios above pick the phrasing they do. If STT improves
+# (e.g. starts preserving "in python" or "pyhon" verbatim), one of these
+# tests will fail with a hint pointing to the main test that could be
+# simplified. They're regression-style, not feature-coverage.
+
+
+def test_prepositional_alias_in_python_is_mangled_by_stt() -> None:
+    """STT writes "in python" as "and Python" (and "use python" as "used
+    Python"), so prepositional aliases of the python verb don't survive
+    round-trip. That's why test_zwingli_alias_resolves_to_canonical_verb
+    uses 'javascript' (single-token, real word) instead."""
+    _stt_skip_if_no_key()
+    from voicepipe.transcript_triggers import dry_run_dispatch
+
+    audio = synthesize("Zwingli in python print one.")
+    transcript = _transcribe(audio)
+    norm = _norm(transcript)
+    # The mangling itself:
+    assert "in python" not in norm, (
+        f"STT now preserves 'in python' verbatim: {transcript!r}. "
+        "Consider switching the alias test back to use 'in python'."
+    )
+    # …and consequently the alias doesn't resolve to the python verb:
+    commands = _default_asset_commands()
+    trace = dry_run_dispatch(transcript, commands=commands)
+    steps = trace.get("steps") or []
+    assert steps, f"Expected at least one step, got trace={trace!r}"
+    assert steps[0].get("verb") != "python", (
+        f"'in python' alias unexpectedly resolved to python: {steps[0]!r}"
+    )
+
+
+def test_made_up_typo_pyhon_gets_autocorrected_to_python() -> None:
+    """STT auto-corrects phonetic typos of real programming-language names
+    to the real word ('pyhon' → 'python', 'pithon' → 'python'), so
+    synthetic typos can't exercise the did-you-mean path through synth
+    audio. That's why test_zwingli_unknown_verb_surfaces_did_you_mean
+    uses 'stripe' (a real word that's near-miss to 'strip')."""
+    _stt_skip_if_no_key()
+    from voicepipe.transcript_triggers import dry_run_dispatch
+
+    audio = synthesize("Zwingli pyhon print hello.")
+    transcript = _transcribe(audio)
+    norm = _norm(transcript)
+    assert "python" in norm, (
+        f"STT no longer auto-corrects 'pyhon' to 'python': {transcript!r}. "
+        "Consider using 'pyhon' as the did-you-mean test phrase again."
+    )
+    # The corrected 'python' resolves to the verb, NOT to the unknown-verb
+    # fallback — which is exactly why this phrasing is unusable for the
+    # did-you-mean test.
+    commands = _default_asset_commands()
+    trace = dry_run_dispatch(transcript, commands=commands)
+    steps = trace.get("steps") or []
+    assert steps, f"Expected at least one step, got trace={trace!r}"
+    assert steps[0].get("verb") == "python", (
+        f"Expected auto-corrected verb 'python', got {steps[0]!r}"
+    )
+
+
+def test_foobar_gets_autocorrected_to_a_real_word() -> None:
+    """STT substitutes 'foobar' with 'Fubar' (military slang that the
+    model treats as a real-word target). 'alpha' / 'bravo' / 'beta' stay
+    clean — that's why the main synth tests use those as filler tokens
+    when the dispatch metadata cares about the surviving text."""
+    _stt_skip_if_no_key()
+
+    audio = synthesize("Zwingli strip foobar example.")
+    transcript = _transcribe(audio)
+    norm = _norm(transcript)
+    assert "foobar" not in norm, (
+        f"STT no longer mangles 'foobar': {transcript!r}. "
+        "Filler-token choice elsewhere could be relaxed."
+    )

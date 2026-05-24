@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "created": "2026-02-23",
+  "notes": "Round 2 planned Zwingli audio fixtures. These focus on separator edge cases (trigger + verb punctuation) and verb enable/disable semantics. Audio files are intentionally not checked in yet; record them and update this manifest with URLs.",
+  "samples": [
+    {
+      "file": "zwingli_colon_strip_alpha_bravo_charlie.wav",
+      "url": "https://tmp.uh-oh.wtf/2026/02/25/5d7c9432-zwingli_colon_strip_alpha_bravo_charlie.wav",
+      "spoken_text": "Zwingli: strip alpha bravo charlie.",
+      "status": "done"
+    },
+    {
+      "file": "zwingli_semicolon_strip_alpha_bravo_charlie.wav",
+      "url": "https://tmp.uh-oh.wtf/2026/02/25/7cd25f6c-zwingli_semicolon_strip_alpha_bravo_charlie.wav",
+      "spoken_text": "Zwingli; strip alpha bravo charlie.",
+      "status": "done"
+    },
+    {
+      "file": "zwingli_period_strip_alpha_bravo_charlie.wav",
+      "url": "https://tmp.uh-oh.wtf/2026/02/25/8596b54a-zwingli_period_strip_alpha_bravo_charlie.wav",
+      "spoken_text": "Zwingli. strip alpha bravo charlie.",
+      "status": "done"
+    },
+    {
+      "file": "zwingli_strip_colon_alpha_bravo_charlie.wav",
+      "url": "https://tmp.uh-oh.wtf/2026/02/25/1603f2af-zwingli_strip_colon_alpha_bravo_charlie.wav",
+      "spoken_text": "Zwingli strip: alpha bravo charlie.",
+      "status": "done"
+    },
+    {
+      "file": "zwingli_strip_semicolon_alpha_bravo_charlie.wav",
+      "url": "https://tmp.uh-oh.wtf/2026/02/25/e81f5df3-zwingli_strip_semicolon_alpha_bravo_charlie.wav",
+      "spoken_text": "Zwingli strip; alpha bravo charlie.",
+      "status": "done"
+    },
+    {
+      "file": "zwingli_bash_colon_list_files_in_my_home_directory.wav",
+      "url": "https://tmp.uh-oh.wtf/2026/02/25/16312fc2-zwingli_bash_colon_list_files_in_my_home_directory.wav",
+      "spoken_text": "Zwingli bash: list files in my home directory.",
+      "status": "done"
+    },
+    {
+      "file": "zwingli_email_colon_to_kelly_subject_lunch_body_are_we_still_on_for_noon.wav",
+      "url": "https://tmp.uh-oh.wtf/2026/02/25/5ae02215-zwingli_email_colon_to_kelly_subject_lunch_body_are_we_still_on_for_noon.wav",
+      "spoken_text": "Zwingli email: to Kelly subject Lunch body Are we still on for noon.",
+      "status": "done"
+    }
+  ]
+}

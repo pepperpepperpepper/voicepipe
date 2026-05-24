@@ -64,8 +64,10 @@ def test_transcribe_file_sends_gpt4_prompt_with_non_speech_directive() -> None:
     assert "Do not annotate non-speech sounds" in sent_prompt
 
 
-def test_transcribe_file_user_prompt_replaces_builtin() -> None:
+def test_transcribe_file_appends_user_prompt_after_builtin() -> None:
     transcriber, fake = _make_transcriber("gpt-4o-transcribe")
     transcriber.transcribe_file(io.BytesIO(b"audio"), prompt="my custom hint")
     sent_prompt = fake.audio.transcriptions.last_params.get("prompt")
-    assert sent_prompt == "my custom hint"
+    assert isinstance(sent_prompt, str)
+    assert sent_prompt.startswith(WhisperTranscriber.GPT4_PROMPT)
+    assert sent_prompt.endswith("my custom hint")

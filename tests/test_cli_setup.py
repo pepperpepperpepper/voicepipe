@@ -41,6 +41,7 @@ def test_setup_writes_env_file_installs_units_and_enables_target(
     env_path = env_file_path()
     assert env_path.exists()
     assert "OPENAI_API_KEY=sk-test" in env_path.read_text(encoding="utf-8")
+    assert "VOICEPIPE_SHELL_ALLOW=1" in env_path.read_text(encoding="utf-8")
 
     unit_dir = isolated_home / ".config" / "systemd" / "user"
     assert (unit_dir / TARGET_UNIT).exists()
@@ -60,6 +61,7 @@ def test_setup_from_stdin_works(isolated_home: Path, fake_systemd: Path) -> None
 
     env_path = env_file_path()
     assert "OPENAI_API_KEY=sk-stdin" in env_path.read_text(encoding="utf-8")
+    assert "VOICEPIPE_SHELL_ALLOW=1" in env_path.read_text(encoding="utf-8")
 
 
 def test_setup_skip_key_cannot_be_combined_with_api_key(fake_systemd: Path) -> None:

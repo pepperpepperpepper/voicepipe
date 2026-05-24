@@ -368,9 +368,75 @@ Configure in your `voicepipe.env` file:
 VOICEPIPE_TRANSCRIPT_TRIGGERS=zwingli=strip,zwingly=strip
 ```
 
+Or configure structured triggers/verbs in `triggers.json` (non-secret config):
+```json
+{
+  "version": 1,
+  "triggers": { "zwingli": { "action": "dispatch" }, "zwingly": { "action": "dispatch" } },
+  "dispatch": { "unknown_verb": "strip" },
+  "verbs": { "strip": { "type": "builtin" } }
+}
+```
+
+Bootstrap:
+- `voicepipe setup` installs a safe default `triggers.json` into your Voicepipe config dir if you don't already have one.
+- You can override the location (git-friendly) with `VOICEPIPE_TRIGGERS_JSON=/path/to/triggers.json`.
+
+LLM verbs can optionally point at per-verb prompt settings via `llm_profiles` (safe “generate-only” output; no side effects):
+```json
+{
+  "version": 1,
+  "triggers": { "zwingli": { "action": "dispatch" } },
+  "dispatch": { "unknown_verb": "strip" },
+  "verbs": { "bash": { "type": "llm", "profile": "bash" } },
+  "llm_profiles": {
+    "bash": {
+      "model": "gpt-5.2",
+      "temperature": 0.2,
+      "system_prompt": "Write a bash script. Output only the script.",
+      "user_prompt_template": "Write a bash script based on this phrase: {{text}}"
+    }
+  }
+}
+```
+
 Built-in actions:
 - `strip`: remove the trigger word and output the remainder
+- `dispatch`: parse the remainder as `verb + args` and route based on `verbs` (unknown verbs fall back to `dispatch.unknown_verb`)
 - `zwingli`: run the remainder through an LLM and output only the final text (see `VOICEPIPE_ZWINGLI_*`)
+- `shell`: execute the remainder as a shell command and output its stdout/stderr (requires `VOICEPIPE_SHELL_ALLOW=1`)
+- `plugin`: run a user-defined Python callable for a verb (requires `VOICEPIPE_PLUGIN_ALLOW=1`)
+
+Plugin verbs (opt-in):
+- `type: "plugin"` defaults to `enabled: false` (must be explicitly enabled)
+- Plugin callables receive the verb args text and return a string (or `(string, meta_dict)`)
+- For safety, plugin `path` must be inside your Voicepipe config dir
+
+Example plugin verb:
+```json
+{
+  "version": 1,
+  "triggers": { "zwingli": { "action": "dispatch" } },
+  "dispatch": { "unknown_verb": "strip" },
+  "verbs": {
+    "upper": {
+      "type": "plugin",
+      "enabled": true,
+      "plugin": { "path": "plugins/upper.py", "callable": "handle" }
+    }
+  }
+}
+```
+
+And `plugins/upper.py` (in your Voicepipe config dir):
+```py
+def handle(text: str) -> str:
+    return (text or "").upper()
+```
+
+Daemon reload (Unix):
+- The transcriber daemon loads `triggers.json` at startup and can reload it on `SIGHUP`.
+- If installed via systemd: `voicepipe service reload` (or `systemctl --user kill -s HUP voicepipe-transcriber.service`)
 
 #### Shell Scripting
 ```bash

@@ -67,6 +67,7 @@ target-version = ['py310']
 pythonpath = ["."]
 markers = [
     "live: opt-in integration tests requiring mic/network/API keys (enable via VOICEPIPE_LIVE_TESTS=1)",
+    "audio: recorded audio regression tests (network STT; no mic required)",
     "desktop: interactive desktop required (typing/focus tests)",
 ]
 

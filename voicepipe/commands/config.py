@@ -32,6 +32,7 @@ from voicepipe.config import (
     legacy_api_key_paths,
     legacy_elevenlabs_key_paths,
     read_env_file,
+    triggers_json_path,
     upsert_env_var,
 )
 from voicepipe.systemd import (
@@ -145,6 +146,8 @@ def config_show() -> None:
     click.echo(f"env file has OPENAI_API_KEY: {key_env_file}")
     click.echo(f"env file has ELEVENLABS_API_KEY/XI_API_KEY: {eleven_env_file}")
     click.echo(f"systemd credentials available: {creds_dir}")
+    trig_path = triggers_json_path()
+    click.echo(f"triggers.json path: {trig_path} {trig_path.exists()}")
 
     for path in legacy_api_key_paths():
         click.echo(f"legacy key file exists: {path} {path.exists()}")

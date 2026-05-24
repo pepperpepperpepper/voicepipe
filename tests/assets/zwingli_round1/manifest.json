@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "created": "2026-02-23",
+  "notes": "Round 1 Zwingli audio fixtures (user-recorded). These are used by opt-in live tests that transcribe the audio and then run the Zwingli trigger/dispatch pipeline.",
+  "samples": [
+    {
+      "file": "alpha_bravo_charlie_delta.wav",
+      "url": "https://tmp.uh-oh.wtf/2026/02/23/6fb160c6-alpha_bravo_charlie_delta.wav",
+      "spoken_text": "Alpha bravo charlie delta."
+    },
+    {
+      "file": "please_ignore_this_semicolon_zwingli_strip_alpha_bravo_charlie.wav",
+      "url": "https://tmp.uh-oh.wtf/2026/02/23/ed556578-please_ignore_this_semicolon_zwingli_strip_alpha_bravo_charlie.wav",
+      "spoken_text": "Please ignore this; zwingli strip alpha bravo charlie."
+    },
+    {
+      "file": "zwingli.wav",
+      "url": "https://tmp.uh-oh.wtf/2026/02/23/94e0a9d1-zwingli.wav",
+      "spoken_text": "Zwingli."
+    },
+    {
+      "file": "zwingli_banana_alpha_bravo_charlie.wav",
+      "url": "https://tmp.uh-oh.wtf/2026/02/23/e7c42071-zwingli_banana_alpha_bravo_charlie.wav",
+      "spoken_text": "Zwingli banana alpha bravo charlie."
+    },
+    {
+      "file": "zwingli_bash_list_files_in_my_home_directory.wav",
+      "url": "https://tmp.uh-oh.wtf/2026/02/23/8268d534-zwingli_bash_list_files_in_my_home_directory.wav",
+      "spoken_text": "Zwingli bash list files in my home directory."
+    },
+    {
+      "file": "zwingli_comma_strip_alpha_bravo_charlie.wav",
+      "url": "https://tmp.uh-oh.wtf/2026/02/23/00d4c4fe-zwingli_comma_strip_alpha_bravo_charlie.wav",
+      "spoken_text": "Zwingli, strip alpha bravo charlie."
+    },
+    {
+      "file": "zwingli_email_to_kelly_subject_lunch_body_are_we_still_on_for_noon.wav",
+      "url": "https://tmp.uh-oh.wtf/2026/02/23/5f377fe8-zwingli_email_to_kelly_subject_lunch_body_are_we_still_on_for_noon.wav",
+      "spoken_text": "Zwingli email to Kelly subject Lunch body Are we still on for noon."
+    },
+    {
+      "file": "zwingli_execute_echo_hello_world.wav",
+      "url": "https://tmp.uh-oh.wtf/2026/02/23/1e29af13-zwingli_execute_echo_hello_world.wav",
+      "spoken_text": "Zwingli execute echo hello world."
+    },
+    {
+      "file": "zwingli_rewrite_alpha_bravo_charlie.wav",
+      "url": "https://tmp.uh-oh.wtf/2026/02/23/3c84fef0-zwingli_rewrite_alpha_bravo_charlie.wav",
+      "spoken_text": "Zwingli rewrite alpha bravo charlie."
+    },
+    {
+      "file": "zwingli_strip_alpha_bravo_charlie.wav",
+      "url": "https://tmp.uh-oh.wtf/2026/02/23/b17ef861-zwingli_strip_alpha_bravo_charlie.wav",
+      "spoken_text": "Zwingli strip alpha bravo charlie."
+    },
+    {
+      "file": "zwingli_strip_one_two_three_four_five.wav",
+      "url": "https://tmp.uh-oh.wtf/2026/02/23/b38956ea-zwingli_strip_one_two_three_four_five.wav",
+      "spoken_text": "Zwingli strip one two three four five."
+    },
+    {
+      "file": "zwingly_strip_alpha_bravo_charlie.wav",
+      "url": "https://tmp.uh-oh.wtf/2026/02/23/5aa5e0db-zwingly_strip_alpha_bravo_charlie.wav",
+      "spoken_text": "Zwingly strip alpha bravo charlie."
+    }
+  ]
+}

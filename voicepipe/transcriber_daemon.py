@@ -119,29 +119,49 @@ def serve(
         "Transcriber ready (backend=%s model=%s)", default_backend, default_model
     )
 
-    from voicepipe.config import get_transcript_triggers
+    from voicepipe.config import get_transcript_commands_config
+    from voicepipe.config import invalidate_transcript_commands_cache
     from voicepipe.transcript_triggers import apply_transcript_triggers
 
-    transcript_triggers = get_transcript_triggers(load_env=False)
-    if transcript_triggers:
-        preview = ", ".join(
-            f"{k}={v}" for k, v in list(transcript_triggers.items())[:6]
-        )
-        more = "" if len(transcript_triggers) <= 6 else f" (+{len(transcript_triggers) - 6} more)"
-        logger.info("Transcript triggers enabled: %s%s", preview, more)
-    else:
-        logger.info("Transcript triggers disabled")
+    transcript_commands = get_transcript_commands_config(load_env=False)
+
+    def _log_transcript_triggers_state() -> None:
+        nonlocal transcript_commands
+        transcript_triggers = dict(transcript_commands.triggers)
+        if transcript_triggers:
+            preview = ", ".join(f"{k}={v}" for k, v in list(transcript_triggers.items())[:6])
+            more = (
+                ""
+                if len(transcript_triggers) <= 6
+                else f" (+{len(transcript_triggers) - 6} more)"
+            )
+            logger.info("Transcript triggers enabled: %s%s", preview, more)
+        else:
+            logger.info("Transcript triggers disabled")
+
+    _log_transcript_triggers_state()
 
     _unlink_if_exists(socket_file)
 
     running = True
+    reload_requested = False
 
     def _stop(_signum, _frame) -> None:
         nonlocal running
         running = False
 
+    def _reload(_signum, _frame) -> None:
+        nonlocal reload_requested
+        reload_requested = True
+
     signal.signal(signal.SIGTERM, _stop)
     signal.signal(signal.SIGINT, _stop)
+    if hasattr(signal, "SIGHUP"):
+        try:
+            signal.signal(signal.SIGHUP, _reload)  # type: ignore[attr-defined]
+            logger.info("Transcript triggers reload enabled (SIGHUP)")
+        except Exception:
+            pass
 
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
@@ -155,6 +175,16 @@ def serve(
         logger.info("Transcriber daemon listening on %s", socket_file)
 
         while running:
+            if reload_requested:
+                reload_requested = False
+                try:
+                    invalidate_transcript_commands_cache()
+                    transcript_commands = get_transcript_commands_config(load_env=False)
+                    logger.info("Reloaded transcript triggers config")
+                    _log_transcript_triggers_state()
+                except Exception as e:
+                    logger.exception("Failed to reload transcript triggers config: %s", e)
+
             try:
                 conn, _ = server.accept()
             except socket.timeout:
@@ -229,7 +259,7 @@ def serve(
                         if apply_triggers:
                             out, meta = apply_transcript_triggers(
                                 text,
-                                triggers=transcript_triggers,
+                                commands=transcript_commands,
                             )
                             if meta is not None:
                                 try:
@@ -266,7 +296,7 @@ def serve(
                     if apply_triggers:
                         out, meta = apply_transcript_triggers(
                             text,
-                            triggers=transcript_triggers,
+                            commands=transcript_commands,
                         )
                         if meta is not None:
                             try:

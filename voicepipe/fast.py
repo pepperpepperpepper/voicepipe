@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 from typing import BinaryIO, Optional
 
+from voicepipe import trigger_meta
 from voicepipe.config import get_transcribe_model, load_environment
 from voicepipe.locks import LockHeld, PidFileLock
 from voicepipe.paths import logs_dir, preserved_audio_dir, runtime_app_dir
@@ -176,6 +177,46 @@ def send_transcribe_request(audio_file: str) -> str:
         return ""
 
 
+def send_transcribe_request_result(audio_file: str, *, source: str) -> "TranscriptionResult":
+    """Transcribe audio and return a structured result including trigger metadata."""
+    # Keep imports out of the `start` hot path.
+    from voicepipe.transcription import transcribe_audio_file_result
+    from voicepipe.transcription_result import TranscriptionResult
+    from voicepipe.wav import read_wav_duration_s
+
+    try:
+        duration_s = read_wav_duration_s(audio_file)
+        if duration_s is not None and duration_s < 0.2:
+            fast_log(
+                f"[TRANSCRIBE] Skipping transcription (audio too short: {duration_s:.3f}s)"
+            )
+            return TranscriptionResult(
+                text="",
+                backend="",
+                model=get_transcribe_model(),
+                audio_file=audio_file,
+                source=source,
+                warnings=[],
+            )
+        model = get_transcribe_model()
+        return transcribe_audio_file_result(
+            audio_file,
+            model=model,
+            prefer_daemon=True,
+            apply_triggers=True,
+            source=source,
+        )
+    except Exception as e:
+        fast_log(f"[TRANSCRIBE] Error: {e}")
+        return TranscriptionResult(
+            text="",
+            backend="",
+            model=get_transcribe_model(),
+            audio_file=audio_file,
+            source=source,
+            warnings=[],
+        )
+
 def send_transcribe_request_fileobj(fh: BinaryIO, *, filename: str) -> str:
     """Transcribe audio from a file-like object without writing a temp WAV."""
     # Keep imports out of the `start` hot path.
@@ -301,32 +342,76 @@ def execute_toggle_split(*, perform_transcribe: bool) -> _TogglePostStop | None:
 
 def _perform_toggle_post_stop(post: _TogglePostStop) -> None:
     # Keep imports out of hot paths; the toggle lock has already been released.
-    from voicepipe.typing import type_text
+    from voicepipe.typing import perform_type_sequence, press_enter, type_text
 
     audio_file = post.audio_file
     target_window = post.target_window
     typing_backend = post.typing_backend
 
-    text = send_transcribe_request(audio_file)
+    result = send_transcribe_request_result(audio_file, source="fast-toggle")
     transcription_ok = False
-    if text:
-        cleaned_text = text.rstrip()
-        fast_log(f"[TOGGLE] Transcription: {cleaned_text}")
+    if result.text:
+        output_text = (result.text or "").rstrip()
+        fast_log(f"[TOGGLE] Transcription: {output_text}")
+        trigger = result.transcript_trigger
+        if trigger is not None:
+            fast_log(f"[TOGGLE] Transcript trigger: {trigger}")
+
         # Always persist the last output for replay/recovery workflows.
         try:
             from voicepipe.last_output import save_last_output
 
-            save_last_output(cleaned_text, payload={"source": "fast-toggle"})
+            payload = result.to_dict()
+            payload["output_text"] = output_text
+            save_last_output(output_text, payload=payload)
         except Exception:
             pass
 
-        typed_ok, type_err = type_text(
-            cleaned_text,
-            window_id=target_window,
-            backend=typing_backend,  # type: ignore[arg-type]
+        effective_type, effective_clipboard = trigger_meta.resolve_emission_targets(
+            trigger, type_flag=True, clipboard_flag=False
         )
+
+        if effective_clipboard:
+            try:
+                from voicepipe.clipboard import copy_to_clipboard
+
+                ok_cb, cb_err = copy_to_clipboard(output_text)
+                if not ok_cb:
+                    fast_log(f"[TOGGLE] Warning: clipboard copy failed: {cb_err}")
+                else:
+                    fast_log(f"[TOGGLE] Copied to clipboard ({len(output_text)} chars)")
+            except Exception as e:
+                fast_log(f"[TOGGLE] Warning: clipboard copy raised: {e}")
+
+        type_sequence = trigger_meta.extract_type_sequence(trigger) if effective_type else None
+        if not effective_type:
+            typed_ok, type_err = True, None
+        elif type_sequence is not None:
+            typed_ok, type_err = perform_type_sequence(
+                type_sequence,
+                window_id=target_window,
+                backend=typing_backend,  # type: ignore[arg-type]
+            )
+        else:
+            typed_ok, type_err = type_text(
+                output_text,
+                window_id=target_window,
+                backend=typing_backend,  # type: ignore[arg-type]
+            )
         if not typed_ok:
             fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
+        elif (
+            effective_type
+            and type_sequence is None
+            and trigger_meta.is_execute(trigger)
+            and output_text.strip()
+        ):
+            ok2, err2 = press_enter(
+                window_id=target_window,
+                backend=typing_backend,  # type: ignore[arg-type]
+            )
+            if not ok2:
+                fast_log(f"[TOGGLE] Warning: could not press Enter: {err2}")
         transcription_ok = True
     else:
         fast_log("[TOGGLE] No transcription returned")
@@ -529,6 +614,8 @@ def execute_toggle_inprocess() -> None:
         if _inprocess_is_recording():
             from voicepipe.typing import (
                 get_active_window_id,
+                perform_type_sequence,
+                press_enter,
                 resolve_typing_backend,
                 type_text,
             )
@@ -629,21 +716,84 @@ def execute_toggle_inprocess() -> None:
                     except Exception as e:
                         fast_log(f"[TOGGLE] Warning: unexpected error persisting last transcript: {e}")
 
-                    fast_log(
-                        "[TOGGLE] Typing transcription: "
-                        f"backend={typing_backend.name} window_id={target_window or ''} chars={len(cleaned_text)}"
+                    from voicepipe.transcript_triggers import apply_transcript_triggers
+
+                    output_text, trigger = apply_transcript_triggers(cleaned_text)
+                    if trigger is not None:
+                        fast_log(f"[TOGGLE] Transcript trigger: {trigger}")
+
+                    # Persist last output for replay/recovery workflows.
+                    try:
+                        from voicepipe.last_output import save_last_output
+
+                        payload = {
+                            "source": "fast-toggle-inprocess",
+                            "text": cleaned_text,
+                            "trigger_meta": trigger,
+                            "output_text": output_text,
+                        }
+                        save_last_output(output_text, payload=payload)
+                    except Exception:
+                        pass
+
+                    effective_type, effective_clipboard = trigger_meta.resolve_emission_targets(
+                        trigger, type_flag=True, clipboard_flag=False
                     )
-                    t_type0 = time.monotonic()
-                    typed_ok, type_err = type_text(
-                        cleaned_text,
-                        window_id=target_window,
-                        backend=typing_backend,
-                    )
-                    t_type_ms = int((time.monotonic() - t_type0) * 1000)
+
+                    if effective_clipboard:
+                        try:
+                            from voicepipe.clipboard import copy_to_clipboard
+
+                            ok_cb, cb_err = copy_to_clipboard(output_text)
+                            if not ok_cb:
+                                fast_log(f"[TOGGLE] Warning: clipboard copy failed: {cb_err}")
+                            else:
+                                fast_log(f"[TOGGLE] Copied to clipboard ({len(output_text)} chars)")
+                        except Exception as e:
+                            fast_log(f"[TOGGLE] Warning: clipboard copy raised: {e}")
+
+                    if not effective_type:
+                        fast_log("[TOGGLE] Skipping type: verb destination or handler suppressed it")
+                        typed_ok, type_err = True, None
+                        t_type_ms = 0
+                        type_sequence = None
+                    else:
+                        fast_log(
+                            "[TOGGLE] Typing transcription: "
+                            f"backend={typing_backend.name} window_id={target_window or ''} chars={len(output_text)}"
+                        )
+                        t_type0 = time.monotonic()
+                        type_sequence = trigger_meta.extract_type_sequence(trigger)
+                        if type_sequence is not None:
+                            typed_ok, type_err = perform_type_sequence(
+                                type_sequence,
+                                window_id=target_window,
+                                backend=typing_backend,
+                            )
+                        else:
+                            typed_ok, type_err = type_text(
+                                output_text,
+                                window_id=target_window,
+                                backend=typing_backend,
+                            )
+                        t_type_ms = int((time.monotonic() - t_type0) * 1000)
                     if not typed_ok:
                         fast_log(f"[TOGGLE] Warning: typing failed: {type_err}")
                     else:
-                        fast_log(f"[TOGGLE] Typed transcription (ok) in {t_type_ms}ms")
+                        if effective_type:
+                            fast_log(f"[TOGGLE] Typed transcription (ok) in {t_type_ms}ms")
+                        if (
+                            effective_type
+                            and type_sequence is None
+                            and trigger_meta.is_execute(trigger)
+                            and output_text.strip()
+                        ):
+                            ok2, err2 = press_enter(
+                                window_id=target_window,
+                                backend=typing_backend,
+                            )
+                            if not ok2:
+                                fast_log(f"[TOGGLE] Warning: could not press Enter: {err2}")
                     transcription_ok = True
                 else:
                     fast_log("[TOGGLE] No transcription returned")
@@ -801,25 +951,28 @@ def main(argv: Optional[list[str]] = None) -> None:
             stop_result = backend.stop()
             audio_file = stop_result.audio_file
             if os.path.exists(audio_file) and os.path.getsize(audio_file) > 0:
-                text = send_transcribe_request(audio_file)
+                result = send_transcribe_request_result(audio_file, source="fast-stop")
+                output_text = (result.text or "").rstrip()
                 # Persist last output for replay/recovery workflows.
                 try:
                     from voicepipe.last_output import save_last_output
 
-                    save_last_output(text or "", payload={"source": "fast-stop"})
+                    payload = result.to_dict()
+                    payload["output_text"] = output_text
+                    save_last_output(output_text, payload=payload)
                 except Exception:
                     pass
                 # Output text
-                if text:
+                if output_text:
                     out = getattr(sys, "stdout", None)
                     if out is not None:
-                        print(text, file=out)
+                        print(output_text, file=out)
                     else:
-                        fast_log(text)
+                        fast_log(output_text)
                 # Clean up
-                if text and os.path.exists(audio_file):
+                if output_text and os.path.exists(audio_file):
                     os.unlink(audio_file)
-                elif not text:
+                elif not output_text:
                     try:
                         dst_dir = preserved_audio_dir(create=True)
                         dst = dst_dir / Path(audio_file).name

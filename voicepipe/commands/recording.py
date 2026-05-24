@@ -15,18 +15,23 @@ from typing import BinaryIO
 
 import click
 
-from voicepipe.config import get_transcribe_model
+from voicepipe.config import (
+    get_intent_routing_enabled,
+    get_transcribe_model,
+    get_transcript_triggers,
+)
 from voicepipe.logging_utils import configure_logging
 from voicepipe.paths import preserved_audio_dir
-from voicepipe.intent_router import route_intent
 from voicepipe.recording_backend import (
     AutoRecorderBackend,
     RecordingError,
 )
 from voicepipe.session import RecordingSession
+from voicepipe import trigger_meta
+from voicepipe.transcript_triggers import match_transcript_trigger
 from voicepipe.transcription import transcribe_audio_file_result, transcribe_audio_fileobj_result
-from voicepipe.transcription_result import TranscriptionResult
-from voicepipe.typing import type_text
+from voicepipe.transcription_result import IntentResult, TranscriptionResult
+from voicepipe.typing import perform_type_sequence, press_enter, type_text
 from voicepipe.platform import is_windows
 
 logger = logging.getLogger(__name__)
@@ -39,12 +44,53 @@ def _emit_transcription(
     json_output: bool,
     clipboard: bool = False,
 ) -> None:
-    intent = route_intent(result)
+    routing_enabled = get_intent_routing_enabled()
+    text = (result.text or "").strip()
+    if routing_enabled:
+        if not text:
+            intent = IntentResult(mode="unknown", dictation_text="", reason="empty")
+        else:
+            match = match_transcript_trigger(text, triggers=get_transcript_triggers())
+            if match is None:
+                intent = IntentResult(mode="dictation", dictation_text=text, reason="default")
+            else:
+                intent = IntentResult(
+                    mode="command",
+                    command_text=match.remainder,
+                    reason=f"trigger:{match.trigger}",
+                )
+    else:
+        intent = IntentResult(mode="dictation", dictation_text=text, reason="disabled")
+
     output_text = result.text
     if intent.mode == "dictation" and intent.dictation_text is not None:
         output_text = intent.dictation_text
     elif intent.mode == "command" and intent.command_text is not None:
         output_text = intent.command_text
+    else:
+        output_text = (result.text or "").strip()
+
+    strict_commands = os.environ.get("VOICEPIPE_COMMANDS_STRICT") == "1"
+    if strict_commands and intent.mode == "command":
+        payload = result.to_dict()
+        payload["intent"] = intent.to_dict()
+        payload["output_text"] = output_text
+
+        # Always persist the last output for replay/recovery workflows.
+        try:
+            from voicepipe.last_output import save_last_output
+
+            save_last_output(output_text, payload=payload)
+        except Exception:
+            pass
+
+        if json_output:
+            click.echo(json.dumps(payload, ensure_ascii=False))
+        click.echo(
+            "Command-mode detected but commands are not implemented yet.",
+            err=True,
+        )
+        raise SystemExit(2)
 
     payload = result.to_dict()
     payload["intent"] = intent.to_dict()
@@ -58,7 +104,12 @@ def _emit_transcription(
     except Exception:
         pass
 
-    if clipboard:
+    trigger = getattr(result, "transcript_trigger", None)
+    effective_type, effective_clipboard = trigger_meta.resolve_emission_targets(
+        trigger, type_flag=type_, clipboard_flag=clipboard
+    )
+
+    if effective_clipboard:
         try:
             from voicepipe.clipboard import copy_to_clipboard
 
@@ -68,25 +119,25 @@ def _emit_transcription(
         except Exception as e:
             click.echo(f"Error copying to clipboard: {e}", err=True)
 
-    strict_commands = os.environ.get("VOICEPIPE_COMMANDS_STRICT") == "1"
-    if strict_commands and intent.mode == "command":
-        if json_output:
-            click.echo(json.dumps(payload, ensure_ascii=False))
-        click.echo(
-            "Command-mode detected but commands are not implemented yet.",
-            err=True,
-        )
-        raise SystemExit(2)
-
     if json_output:
         click.echo(json.dumps(payload, ensure_ascii=False))
     else:
         click.echo(output_text)
 
-    if type_:
-        ok, err = type_text(output_text)
-        if not ok:
-            click.echo(f"Error typing text: {err}", err=True)
+    if effective_type:
+        type_sequence = trigger_meta.extract_type_sequence(trigger)
+        if type_sequence is not None:
+            ok, err = perform_type_sequence(type_sequence)
+            if not ok:
+                click.echo(f"Error typing keys: {err}", err=True)
+        else:
+            ok, err = type_text(output_text)
+            if not ok:
+                click.echo(f"Error typing text: {err}", err=True)
+            elif trigger_meta.is_execute(trigger) and output_text.strip():
+                ok2, err2 = press_enter()
+                if not ok2:
+                    click.echo(f"Error pressing Enter: {err2}", err=True)
 
 
 def _transcribe_and_finalize(
@@ -208,6 +259,7 @@ def _transcribe_and_finalize_fileobj(
                     audio_file=str(dst),
                     recording_id=result.recording_id,
                     source=result.source,
+                    transcript_trigger=result.transcript_trigger,
                     warnings=list(result.warnings),
                 )
             except Exception:

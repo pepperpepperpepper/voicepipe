@@ -827,3 +827,202 @@ def test_verb_command_template_rejects_non_string(tmp_path: Path, monkeypatch) -
     with pytest.raises(config.VoicepipeConfigError) as exc_info:
         config._load_transcript_commands_json()
     assert "command_template" in str(exc_info.value)
+
+
+# ---------- LLM profile inheritance (extends) ----------
+
+
+def _parse_profiles(obj: dict) -> dict:
+    # NOTE: don't reload here — tests downstream compare against
+    # voicepipe.config.VoicepipeConfigError from the *imported* module, and a
+    # reload produces a different class object.
+    import voicepipe.config as config
+
+    return config._parse_transcript_llm_profiles_json_obj(obj)
+
+
+def test_profile_extends_inherits_unset_fields() -> None:
+    profiles = _parse_profiles(
+        {
+            "llm_profiles": {
+                "base": {"temperature": 0.1, "model": "gpt-test"},
+                "child": {"extends": "base", "system_prompt": "child prompt"},
+            }
+        }
+    )
+    child = profiles["child"]
+    assert child.temperature == 0.1
+    assert child.model == "gpt-test"
+    assert child.system_prompt == "child prompt"
+
+
+def test_profile_extends_child_overrides_parent_field() -> None:
+    profiles = _parse_profiles(
+        {
+            "llm_profiles": {
+                "base": {"temperature": 0.1, "system_prompt": "parent prompt"},
+                "child": {
+                    "extends": "base",
+                    "temperature": 0.7,
+                    "system_prompt": "child prompt",
+                },
+            }
+        }
+    )
+    assert profiles["child"].temperature == 0.7
+    assert profiles["child"].system_prompt == "child prompt"
+    # Parent untouched.
+    assert profiles["base"].temperature == 0.1
+    assert profiles["base"].system_prompt == "parent prompt"
+
+
+def test_profile_extends_multi_level_chain() -> None:
+    profiles = _parse_profiles(
+        {
+            "llm_profiles": {
+                "a": {"model": "m-a", "temperature": 0.1},
+                "b": {"extends": "a", "system_prompt": "b prompt"},
+                "c": {"extends": "b", "user_prompt_template": "c: {{text}}"},
+            }
+        }
+    )
+    c = profiles["c"]
+    assert c.model == "m-a"  # from a
+    assert c.temperature == 0.1  # from a
+    assert c.system_prompt == "b prompt"  # from b
+    assert c.user_prompt_template == "c: {{text}}"  # own
+
+
+def test_profile_extends_missing_parent_raises() -> None:
+    import voicepipe.config as config
+
+    with pytest.raises(config.VoicepipeConfigError) as exc_info:
+        _parse_profiles(
+            {
+                "llm_profiles": {
+                    "child": {"extends": "ghost", "system_prompt": "hi"},
+                }
+            }
+        )
+    assert "ghost" in str(exc_info.value)
+    assert "not defined" in str(exc_info.value)
+
+
+def test_profile_extends_self_cycle_raises() -> None:
+    import voicepipe.config as config
+
+    with pytest.raises(config.VoicepipeConfigError) as exc_info:
+        _parse_profiles(
+            {
+                "llm_profiles": {
+                    "loop": {"extends": "loop"},
+                }
+            }
+        )
+    assert "cycle" in str(exc_info.value)
+    assert "loop" in str(exc_info.value)
+
+
+def test_profile_extends_multi_hop_cycle_raises() -> None:
+    import voicepipe.config as config
+
+    with pytest.raises(config.VoicepipeConfigError) as exc_info:
+        _parse_profiles(
+            {
+                "llm_profiles": {
+                    "a": {"extends": "b"},
+                    "b": {"extends": "c"},
+                    "c": {"extends": "a"},
+                }
+            }
+        )
+    assert "cycle" in str(exc_info.value)
+
+
+def test_profile_extends_depth_cap_enforced() -> None:
+    import voicepipe.config as config
+
+    # Build a chain: p0 -> p1 -> p2 -> ... -> p10 (longer than the cap of 8).
+    profiles_dict = {"p0": {"system_prompt": "root"}}
+    for i in range(1, 11):
+        profiles_dict[f"p{i}"] = {"extends": f"p{i-1}"}
+
+    with pytest.raises(config.VoicepipeConfigError) as exc_info:
+        _parse_profiles({"llm_profiles": profiles_dict})
+    assert "too deep" in str(exc_info.value)
+
+
+def test_profile_extends_must_be_string() -> None:
+    import voicepipe.config as config
+
+    with pytest.raises(config.VoicepipeConfigError) as exc_info:
+        _parse_profiles(
+            {
+                "llm_profiles": {
+                    "child": {"extends": 42, "system_prompt": "hi"},
+                }
+            }
+        )
+    assert "extends" in str(exc_info.value)
+    assert "string" in str(exc_info.value)
+
+
+def test_profile_extends_template_validated_after_merge(tmp_path: Path, monkeypatch) -> None:
+    """A malformed template inherited from a parent still fires the validator."""
+    import voicepipe.config as config
+
+    with pytest.raises(config.VoicepipeConfigError) as exc_info:
+        _parse_profiles(
+            {
+                "llm_profiles": {
+                    "base": {"user_prompt_template": "use {{ text }} with spaces"},
+                    "child": {"extends": "base"},
+                }
+            }
+        )
+    assert "placeholder" in str(exc_info.value)
+
+
+def test_profile_without_extends_works_as_before() -> None:
+    """Sanity: existing (no-inheritance) profile configs still load."""
+    profiles = _parse_profiles(
+        {
+            "llm_profiles": {
+                "solo": {
+                    "model": "m",
+                    "temperature": 0.0,
+                    "system_prompt": "sys",
+                    "user_prompt_template": "for: {{text}}",
+                }
+            }
+        }
+    )
+    p = profiles["solo"]
+    assert p.model == "m"
+    assert p.temperature == 0.0
+    assert p.system_prompt == "sys"
+    assert p.user_prompt_template == "for: {{text}}"
+
+
+def test_profile_extends_empty_string_treated_as_no_parent() -> None:
+    """`"extends": ""` is the same as not setting extends at all."""
+    profiles = _parse_profiles(
+        {
+            "llm_profiles": {
+                "solo": {"extends": "   ", "temperature": 0.5},
+            }
+        }
+    )
+    assert profiles["solo"].temperature == 0.5
+
+
+def test_profile_extends_normalizes_parent_name_case() -> None:
+    profiles = _parse_profiles(
+        {
+            "llm_profiles": {
+                "Base": {"temperature": 0.4},
+                "child": {"extends": "BASE"},
+            }
+        }
+    )
+    assert profiles["child"].temperature == 0.4

@@ -1273,6 +1273,110 @@ def _validate_verb_pattern(pattern: str, *, verb_name: str) -> None:
         seen.add(name)
 
 
+_PROFILE_FIELDS: tuple[str, ...] = (
+    "model",
+    "temperature",
+    "system_prompt",
+    "user_prompt",
+    "user_prompt_template",
+)
+
+_MAX_PROFILE_INHERITANCE_DEPTH = 8
+
+
+def _extract_raw_profile_fields(
+    raw_name: str, raw_value: dict[str, Any]
+) -> tuple[dict[str, Any], str | None]:
+    """Pull the field values + parent reference out of a raw profile dict.
+
+    Returns ``(fields, extends)``. ``fields`` only contains entries the user
+    actually set (so an absent key means "inherit from parent"). ``extends``
+    is the resolved (lowercased, stripped) parent profile name, or None.
+    Raises :class:`VoicepipeConfigError` on type errors.
+    """
+    fields: dict[str, Any] = {}
+    if "model" in raw_value:
+        v = raw_value["model"]
+        if not isinstance(v, str):
+            raise VoicepipeConfigError(
+                f"Invalid triggers.json: llm profile {raw_name!r} 'model' must be a string"
+            )
+        cleaned = v.strip()
+        fields["model"] = cleaned or None
+
+    if "temperature" in raw_value:
+        v = raw_value["temperature"]
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise VoicepipeConfigError(
+                f"Invalid triggers.json: llm profile {raw_name!r} 'temperature' must be a number"
+            )
+        fields["temperature"] = float(v)
+
+    for key in ("system_prompt", "user_prompt", "user_prompt_template"):
+        if key in raw_value:
+            v = raw_value[key]
+            if not isinstance(v, str):
+                raise VoicepipeConfigError(
+                    f"Invalid triggers.json: llm profile {raw_name!r} {key!r} must be a string"
+                )
+            cleaned = v.strip()
+            fields[key] = cleaned or None
+
+    extends: str | None = None
+    if "extends" in raw_value:
+        v = raw_value["extends"]
+        if not isinstance(v, str):
+            raise VoicepipeConfigError(
+                f"Invalid triggers.json: llm profile {raw_name!r} 'extends' must be a string"
+            )
+        cleaned = v.strip().lower()
+        extends = cleaned or None
+
+    return fields, extends
+
+
+def _resolve_profile_chain(
+    name: str,
+    raw_profiles: dict[str, dict[str, Any]],
+    extends_map: dict[str, str | None],
+    *,
+    visited: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Walk the parent chain root→…→name, merging fields (child wins).
+
+    Raises on cycles, missing parents, or chains deeper than
+    :data:`_MAX_PROFILE_INHERITANCE_DEPTH`.
+    """
+    if name in visited:
+        chain = " -> ".join([*visited, name])
+        raise VoicepipeConfigError(
+            f"Invalid triggers.json: llm profile inheritance cycle: {chain}"
+        )
+    visited = (*visited, name)
+    if len(visited) > _MAX_PROFILE_INHERITANCE_DEPTH:
+        chain = " -> ".join(visited)
+        raise VoicepipeConfigError(
+            f"Invalid triggers.json: llm profile inheritance chain too deep "
+            f"(max {_MAX_PROFILE_INHERITANCE_DEPTH}): {chain}"
+        )
+
+    parent = extends_map.get(name)
+    if parent is None:
+        return dict(raw_profiles[name])
+    if parent not in raw_profiles:
+        raise VoicepipeConfigError(
+            f"Invalid triggers.json: llm profile {name!r} extends {parent!r}, "
+            f"which is not defined"
+        )
+
+    merged = _resolve_profile_chain(
+        parent, raw_profiles, extends_map, visited=visited
+    )
+    # Child overrides parent for every field the child actually set.
+    merged.update(raw_profiles[name])
+    return merged
+
+
 def _parse_transcript_llm_profiles_json_obj(
     obj: dict[str, Any],
 ) -> dict[str, TranscriptLLMProfileConfig]:
@@ -1284,7 +1388,10 @@ def _parse_transcript_llm_profiles_json_obj(
             "Invalid triggers.json: 'llm_profiles' must be an object mapping profile->config"
         )
 
-    out: dict[str, TranscriptLLMProfileConfig] = {}
+    # Pass 1: extract raw fields + parent references for every profile.
+    raw_profiles: dict[str, dict[str, Any]] = {}
+    extends_map: dict[str, str | None] = {}
+    display_names: dict[str, str] = {}  # lowercased -> original (for error messages)
     for raw_name, raw_value in section.items():
         if not isinstance(raw_name, str):
             continue
@@ -1295,38 +1402,28 @@ def _parse_transcript_llm_profiles_json_obj(
             raise VoicepipeConfigError(
                 f"Invalid triggers.json: llm profile {raw_name!r} must be an object"
             )
+        fields, extends = _extract_raw_profile_fields(raw_name, raw_value)
+        raw_profiles[name] = fields
+        extends_map[name] = extends
+        display_names[name] = raw_name
 
-        model = raw_value.get("model") if isinstance(raw_value.get("model"), str) else None
-        model = (model or "").strip() or None
+    # Pass 2: resolve inheritance for each profile (catches cycles/missing parents).
+    resolved: dict[str, dict[str, Any]] = {}
+    for name in raw_profiles:
+        resolved[name] = _resolve_profile_chain(name, raw_profiles, extends_map)
 
-        temperature = None
-        raw_temperature = raw_value.get("temperature")
-        if isinstance(raw_temperature, (int, float)) and not isinstance(raw_temperature, bool):
-            temperature = float(raw_temperature)
-
-        system_prompt = (
-            raw_value.get("system_prompt") if isinstance(raw_value.get("system_prompt"), str) else None
-        )
-        system_prompt = (system_prompt or "").strip() or None
-
-        user_prompt = raw_value.get("user_prompt") if isinstance(raw_value.get("user_prompt"), str) else None
-        user_prompt = (user_prompt or "").strip() or None
-
-        user_prompt_template = (
-            raw_value.get("user_prompt_template")
-            if isinstance(raw_value.get("user_prompt_template"), str)
-            else None
-        )
-        user_prompt_template = (user_prompt_template or "").strip() or None
-        if user_prompt_template is not None:
-            _validate_user_prompt_template(user_prompt_template, profile_name=raw_name)
-
+    # Pass 3: construct the final config dataclasses from merged field dicts.
+    out: dict[str, TranscriptLLMProfileConfig] = {}
+    for name, fields in resolved.items():
+        template = fields.get("user_prompt_template")
+        if template is not None:
+            _validate_user_prompt_template(template, profile_name=display_names[name])
         out[name] = TranscriptLLMProfileConfig(
-            model=model,
-            temperature=temperature,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            user_prompt_template=user_prompt_template,
+            model=fields.get("model"),
+            temperature=fields.get("temperature"),
+            system_prompt=fields.get("system_prompt"),
+            user_prompt=fields.get("user_prompt"),
+            user_prompt_template=template,
         )
 
     return out

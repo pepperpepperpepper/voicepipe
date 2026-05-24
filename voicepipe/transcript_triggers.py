@@ -1844,6 +1844,22 @@ def _dispatch_prompt(prompt: str, *, commands: TranscriptCommandsConfig) -> tupl
     return final_text, final_meta
 
 
+def _maybe_play_audio_feedback(payload: dict[str, Any]) -> None:
+    """Fire the audio cue (if any) for an apply_transcript_triggers payload.
+
+    Best-effort: audio feedback must never block or break the text-output
+    path, so every failure is swallowed silently.
+    """
+    try:
+        from voicepipe import audio_feedback
+
+        event = audio_feedback.event_for_trigger_payload(payload)
+        if event:
+            audio_feedback.play(event)
+    except Exception:
+        pass
+
+
 def apply_transcript_triggers(
     text: str,
     *,
@@ -1913,6 +1929,7 @@ def apply_transcript_triggers(
                     "meta": meta,
                 }
             )
+            _maybe_play_audio_feedback(payload)
             return output_text, payload
         except Exception as e:
             _write_zwingli_debug_event(
@@ -1927,7 +1944,7 @@ def apply_transcript_triggers(
             error_text, error_meta = _apply_error_destination(
                 str(e), commands=resolved_commands
             )
-            return error_text, {
+            error_payload = {
                 "ok": False,
                 "trigger": match.trigger,
                 "action": match.action,
@@ -1935,6 +1952,8 @@ def apply_transcript_triggers(
                 "error": str(e),
                 "meta": error_meta,
             }
+            _maybe_play_audio_feedback(error_payload)
+            return error_text, error_payload
 
     handler = _ACTIONS.get(match.action)
     if handler is None:
@@ -1949,7 +1968,7 @@ def apply_transcript_triggers(
         )
         error_msg = f"Unknown transcript trigger action: {match.action!r}"
         error_text, error_meta = _apply_error_destination(error_msg, commands=resolved_commands)
-        return error_text, {
+        error_payload = {
             "ok": False,
             "trigger": match.trigger,
             "action": match.action,
@@ -1957,6 +1976,8 @@ def apply_transcript_triggers(
             "error": error_msg,
             "meta": error_meta,
         }
+        _maybe_play_audio_feedback(error_payload)
+        return error_text, error_payload
 
     try:
         output_text, meta = handler(match.remainder)
@@ -1979,6 +2000,7 @@ def apply_transcript_triggers(
                 "meta": meta,
             }
         )
+        _maybe_play_audio_feedback(payload)
         return output_text, payload
     except Exception as e:
         _write_zwingli_debug_event(
@@ -1992,7 +2014,7 @@ def apply_transcript_triggers(
             }
         )
         error_text, error_meta = _apply_error_destination(str(e), commands=resolved_commands)
-        return error_text, {
+        error_payload = {
             "ok": False,
             "trigger": match.trigger,
             "action": match.action,
@@ -2000,3 +2022,5 @@ def apply_transcript_triggers(
             "error": str(e),
             "meta": error_meta,
         }
+        _maybe_play_audio_feedback(error_payload)
+        return error_text, error_payload

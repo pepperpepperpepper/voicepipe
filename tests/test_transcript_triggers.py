@@ -1984,6 +1984,73 @@ def test_codegen_config_requires_interpreter(tmp_path, monkeypatch) -> None:
     assert "interpreter" in str(exc_info.value)
 
 
+def test_apply_transcript_triggers_fires_audio_feedback_for_success_and_error(
+    monkeypatch,
+) -> None:
+    """End-to-end: dispatch routes a success payload to play('success') and an
+    error payload to play('error') via the _maybe_play_audio_feedback hook."""
+    import voicepipe.audio_feedback as af
+
+    fired: list[str] = []
+    monkeypatch.setattr(af, "play", lambda event: fired.append(event))
+
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={"strip": config.TranscriptVerbConfig(action="strip", enabled=True, type="builtin")},
+    )
+
+    tt.apply_transcript_triggers("zwingli hello", commands=commands)
+    assert fired == ["success"]
+
+    fired.clear()
+    # Force an exception by patching the action handler to raise.
+    monkeypatch.setitem(
+        tt._ACTIONS,
+        "strip",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    tt.apply_transcript_triggers("zwingli hello", commands=commands)
+    assert fired == ["error"]
+
+
+def test_apply_transcript_triggers_fires_pending_event_for_confirm_stash(
+    pending_in_tmp, monkeypatch
+) -> None:
+    import voicepipe.audio_feedback as af
+
+    fired: list[str] = []
+    monkeypatch.setattr(af, "play", lambda event: fired.append(event))
+
+    commands = _confirm_commands(
+        {
+            "subprocess": config.TranscriptVerbConfig(
+                action="shell", enabled=True, type="shell", confirm=True
+            ),
+        }
+    )
+    tt.apply_transcript_triggers("zwingli subprocess ls", commands=commands)
+    assert fired == ["pending"]
+
+
+def test_apply_transcript_triggers_skips_audio_when_no_trigger_matches(
+    monkeypatch,
+) -> None:
+    import voicepipe.audio_feedback as af
+
+    fired: list[str] = []
+    monkeypatch.setattr(af, "play", lambda event: fired.append(event))
+
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={},
+    )
+    out, meta = tt.apply_transcript_triggers("plain dictation, no trigger", commands=commands)
+    assert meta is None
+    assert fired == []
+
+
 def test_codegen_config_accepts_interpreter(tmp_path, monkeypatch) -> None:
     import json
 

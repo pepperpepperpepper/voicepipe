@@ -559,6 +559,14 @@ Opt-in live integration tests (network + API key; may use your microphone):
 VOICEPIPE_LIVE_TESTS=1 pytest -q tests/test_live_integration.py
 ```
 
+Synthesized-voice round-trip tests for Zwingli dispatch (`pytest -m synth`):
+the test phrases are rendered to MP3 via ElevenLabs TTS and the audio is
+committed under `tests/synth_cache/` (hash-keyed by text+voice+model).
+Running the existing tests only needs `OPENAI_API_KEY` (for STT) —
+ElevenLabs is never called when the cache hits. Adding a *new* test
+phrase requires `ELEVENLABS_API_KEY` (read from env or `~/.api-keys`)
+one time to generate the MP3; commit that file alongside the new test.
+
 ## License
 
 MIT License - see LICENSE file for details

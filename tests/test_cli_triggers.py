@@ -912,3 +912,82 @@ def test_extract_verb_returns_none_for_unrelated_event_types() -> None:
     assert _extract_verb_from_event({"event": "codegen_complete", "returncode": 0}) is None
     # dispatch_ok without meta.verb is also None (resolution failed before verb)
     assert _extract_verb_from_event({"event": "dispatch_ok", "trigger": "zwingli"}) is None
+
+
+# ---------- "did you mean?" surfacing in log / dry-run output ----------
+
+
+def test_log_summary_shows_did_you_mean_for_unknown_verb_dispatch(
+    runner, tmp_path: Path
+) -> None:
+    log = _write_log(
+        tmp_path / "z.log",
+        [
+            {
+                "event": "dispatch_ok",
+                "ts_ms": 1779633876900,
+                "trigger": "zwingli",
+                "output_text": "pyhon print",
+                "meta": {
+                    "mode": "unknown-verb",
+                    "verb": "pyhon",
+                    "action": "strip",
+                    "did_you_mean": ["python"],
+                },
+            }
+        ],
+    )
+    result = runner.invoke(main, ["triggers", "log", "--path", str(log)])
+    assert result.exit_code == 0, result.output
+    assert "unknown_verb='pyhon'" in result.output
+    assert "did_you_mean=python" in result.output
+
+
+def test_log_summary_omits_did_you_mean_for_normal_dispatch(
+    runner, tmp_path: Path
+) -> None:
+    log = _write_log(
+        tmp_path / "z.log",
+        [
+            {
+                "event": "dispatch_ok",
+                "ts_ms": 1779633876900,
+                "trigger": "zwingli",
+                "output_text": "ok",
+                "meta": {"mode": "verb", "verb": "strip"},
+            }
+        ],
+    )
+    result = runner.invoke(main, ["triggers", "log", "--path", str(log)])
+    assert result.exit_code == 0, result.output
+    assert "unknown_verb" not in result.output
+    assert "did_you_mean" not in result.output
+
+
+def test_test_dry_run_output_shows_did_you_mean(runner, tmp_path: Path) -> None:
+    cfg = _write(
+        tmp_path / "triggers.json",
+        {
+            "version": 1,
+            "triggers": {"zwingli": {"action": "dispatch"}},
+            "verbs": {
+                "python": {
+                    "type": "codegen",
+                    "enabled": True,
+                    "interpreter": "python3",
+                },
+                "bash": {
+                    "type": "codegen",
+                    "enabled": True,
+                    "interpreter": "bash",
+                },
+            },
+            "llm_profiles": {},
+        },
+    )
+    result = runner.invoke(
+        main, ["triggers", "test", "zwingli pyhon print hello", "--path", str(cfg)]
+    )
+    assert result.exit_code == 0, result.output
+    assert "resolution: unknown_verb" in result.output
+    assert "did_you_mean: python" in result.output

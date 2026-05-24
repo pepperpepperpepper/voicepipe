@@ -209,6 +209,9 @@ def _format_dry_run_step(step: dict[str, Any]) -> list[str]:
             lines.append(f"    capture {name}: {value!r}")
     if "fallback_action" in step:
         lines.append(f"    fallback:   {step['fallback_action']}")
+    suggestions = step.get("did_you_mean")
+    if isinstance(suggestions, list) and suggestions:
+        lines.append(f"    did_you_mean: {', '.join(suggestions)}")
 
     cfg = step.get("verb_config")
     if cfg:
@@ -508,6 +511,14 @@ def _summarize_event(ev: dict[str, Any]) -> str:
             bits.append(f"trigger={ev.get('trigger')!r}")
         if "action" in ev:
             bits.append(f"action={ev.get('action')!r}")
+        meta = ev.get("meta")
+        if isinstance(meta, dict) and meta.get("mode") == "unknown-verb":
+            attempted = meta.get("verb")
+            if attempted:
+                bits.append(f"unknown_verb={attempted!r}")
+            suggestions = meta.get("did_you_mean")
+            if isinstance(suggestions, list) and suggestions:
+                bits.append(f"did_you_mean={','.join(suggestions)}")
         bits.append(f"output={_snippet(ev.get('output_text'))!r}")
         return " ".join(bits)
     if name in ("dispatch_error", "action_error"):

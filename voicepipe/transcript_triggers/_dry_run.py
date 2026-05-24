@@ -16,7 +16,7 @@ from voicepipe.config import (
     TranscriptVerbConfig,
 )
 
-from ._dispatch import _resolve_verb_and_args, _split_chain_chunks
+from ._dispatch import _resolve_verb_and_args, _split_chain_chunks, _suggest_verb
 from ._matching import match_transcript_trigger
 from ._template import (
     _find_pattern_match,
@@ -157,6 +157,9 @@ def _dry_run_dispatch_step(
         step["fallback_action"] = (
             commands.dispatch.unknown_verb or "strip"
         ).strip().lower() or "strip"
+        suggestions = _suggest_verb(verb, commands.verbs)
+        if suggestions:
+            step["did_you_mean"] = suggestions
         return step
 
     if not bool(verb_cfg.enabled):
@@ -165,6 +168,9 @@ def _dry_run_dispatch_step(
         step["fallback_action"] = (
             commands.dispatch.unknown_verb or "strip"
         ).strip().lower() or "strip"
+        suggestions = _suggest_verb(verb, commands.verbs)
+        if suggestions:
+            step["did_you_mean"] = suggestions
         return step
 
     step["resolution"] = "verb"

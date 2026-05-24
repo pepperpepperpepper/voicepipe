@@ -2478,3 +2478,132 @@ def test_codegen_config_accepts_interpreter(tmp_path, monkeypatch) -> None:
     assert pyrun.interpreter == "python3"
     assert pyrun.profile == "pyscript"
     assert pyrun.enabled is True
+
+
+# ---------- "did you mean?" suggestions for unknown verbs ----------
+
+
+def _suggest_verbs_map(
+    *, include_disabled: bool = False, include_multiword_alias: bool = False
+) -> dict[str, config.TranscriptVerbConfig]:
+    verbs: dict[str, config.TranscriptVerbConfig] = {
+        "python": config.TranscriptVerbConfig(
+            action="codegen",
+            enabled=True,
+            type="codegen",
+            aliases=("py",) + (("in python",) if include_multiword_alias else ()),
+        ),
+        "bash": config.TranscriptVerbConfig(
+            action="codegen", enabled=True, type="codegen"
+        ),
+        "strip": config.TranscriptVerbConfig(
+            action="strip", enabled=True, type="builtin"
+        ),
+    }
+    if include_disabled:
+        verbs["disabled_shell"] = config.TranscriptVerbConfig(
+            action="shell", enabled=False, type="shell"
+        )
+    return verbs
+
+
+def test_suggest_verb_returns_close_typo() -> None:
+    from voicepipe.transcript_triggers._dispatch import _suggest_verb
+
+    assert _suggest_verb("pyhon", _suggest_verbs_map()) == ["python"]
+    assert _suggest_verb("strp", _suggest_verbs_map()) == ["strip"]
+
+
+def test_suggest_verb_returns_empty_for_unrelated_input() -> None:
+    from voicepipe.transcript_triggers._dispatch import _suggest_verb
+
+    assert _suggest_verb("", _suggest_verbs_map()) == []
+    assert _suggest_verb("xyzqrs", _suggest_verbs_map()) == []
+
+
+def test_suggest_verb_maps_single_token_alias_to_canonical() -> None:
+    from voicepipe.transcript_triggers._dispatch import _suggest_verb
+
+    # "p" is close to alias "py" — should resolve to canonical "python", not "py".
+    suggestions = _suggest_verb("py", _suggest_verbs_map())
+    assert suggestions == ["python"]
+
+
+def test_suggest_verb_excludes_disabled_verbs() -> None:
+    from voicepipe.transcript_triggers._dispatch import _suggest_verb
+
+    # A typo close to a disabled verb name should NOT suggest it.
+    verbs = _suggest_verbs_map(include_disabled=True)
+    suggestions = _suggest_verb("disabld_shell", verbs)
+    assert "disabled_shell" not in suggestions
+
+
+def test_suggest_verb_excludes_multi_token_aliases() -> None:
+    from voicepipe.transcript_triggers._dispatch import _suggest_verb
+
+    # "in python" is a multi-token alias; a token typo like "in pythn" wouldn't
+    # arrive here anyway (single-token verb extraction). Multi-token aliases
+    # shouldn't pollute the single-token suggestion pool.
+    verbs = _suggest_verbs_map(include_multiword_alias=True)
+    suggestions = _suggest_verb("in", verbs)
+    assert "in python" not in suggestions
+
+
+def test_apply_transcript_triggers_unknown_verb_includes_did_you_mean() -> None:
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs=_suggest_verbs_map(),
+    )
+    _out, meta = tt.apply_transcript_triggers(
+        "zwingli pyhon print hello", commands=commands
+    )
+    assert meta is not None
+    assert meta["meta"]["mode"] == "unknown-verb"
+    assert meta["meta"]["verb"] == "pyhon"
+    assert meta["meta"]["did_you_mean"] == ["python"]
+
+
+def test_apply_transcript_triggers_known_verb_has_no_did_you_mean() -> None:
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs=_suggest_verbs_map(),
+    )
+    _out, meta = tt.apply_transcript_triggers(
+        "zwingli strip hello", commands=commands
+    )
+    assert meta is not None
+    assert "did_you_mean" not in meta["meta"]
+
+
+def test_dry_run_unknown_verb_includes_did_you_mean() -> None:
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs=_suggest_verbs_map(),
+    )
+    trace = tt.dry_run_dispatch("zwingli pyhon print hello", commands=commands)
+    step = trace["steps"][0]
+    assert step["resolution"] == "unknown_verb"
+    assert step["verb"] == "pyhon"
+    assert step["did_you_mean"] == ["python"]
+
+
+def test_dry_run_disabled_verb_includes_did_you_mean_when_match_exists() -> None:
+    # If user types the exact disabled verb name, the suggestion list should
+    # contain other ENABLED verbs that are close (none in this map are, so
+    # the field is absent — proves we don't echo back the disabled name).
+    commands = config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs=_suggest_verbs_map(include_disabled=True),
+    )
+    trace = tt.dry_run_dispatch(
+        "zwingli disabled_shell hi", commands=commands
+    )
+    step = trace["steps"][0]
+    assert step["resolution"] == "disabled_verb"
+    assert step["verb"] == "disabled_shell"
+    # disabled_shell is the only thing close to itself, but it's excluded.
+    assert step.get("did_you_mean") in (None, [])

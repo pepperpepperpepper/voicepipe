@@ -497,6 +497,8 @@ def test_log_summarizes_action_error(runner, tmp_path: Path) -> None:
 
 
 def test_log_summarizes_rate_limited(runner, tmp_path: Path) -> None:
+    # Real rate_limited events use `cap_per_min` (see _dispatch.py); we also
+    # accept the legacy `limit` key.
     log = _write_log(
         tmp_path / "z.log",
         [
@@ -505,7 +507,7 @@ def test_log_summarizes_rate_limited(runner, tmp_path: Path) -> None:
                 "ts_ms": 1779633876900,
                 "verb": "python",
                 "retry_after_seconds": 12,
-                "limit": 5,
+                "cap_per_min": 5,
             }
         ],
     )
@@ -514,7 +516,7 @@ def test_log_summarizes_rate_limited(runner, tmp_path: Path) -> None:
     assert "rate_limited" in result.output
     assert "verb='python'" in result.output
     assert "retry_after=12s" in result.output
-    assert "limit=5" in result.output
+    assert "cap_per_min=5" in result.output
 
 
 def test_log_summarizes_shell_complete(runner, tmp_path: Path) -> None:
@@ -764,3 +766,149 @@ def test_path_prints_canonical_triggers_json_path(runner) -> None:
     result = runner.invoke(main, ["triggers", "path"])
     assert result.exit_code == 0, result.output
     assert result.output.strip() == str(triggers_json_path())
+
+
+# ---------- triggers stats ----------
+
+
+def _stats_log() -> list[dict]:
+    """A small synthetic log covering every verb-extraction path."""
+    base = 1779633876900
+    return [
+        # 3 trigger_match events: 2 zwingli + 1 zwingly
+        {"event": "trigger_match", "ts_ms": base, "trigger": "zwingli", "action": "dispatch"},
+        {"event": "trigger_match", "ts_ms": base + 1, "trigger": "zwingli", "action": "dispatch"},
+        {"event": "trigger_match", "ts_ms": base + 2, "trigger": "zwingly", "action": "dispatch"},
+        # 2 dispatch_ok for verb 'python' (meta.verb)
+        {
+            "event": "dispatch_ok",
+            "ts_ms": base + 3,
+            "trigger": "zwingli",
+            "meta": {"verb": "python", "verb_type": "codegen"},
+            "output_text": "ok",
+        },
+        {
+            "event": "dispatch_ok",
+            "ts_ms": base + 4,
+            "trigger": "zwingli",
+            "meta": {"verb": "python", "verb_type": "codegen"},
+            "output_text": "ok",
+        },
+        # 1 dispatch_error for verb 'python'
+        {
+            "event": "dispatch_error",
+            "ts_ms": base + 5,
+            "trigger": "zwingli",
+            "meta": {"verb": "python"},
+            "error": "boom",
+        },
+        # 1 action_ok for action 'strip'
+        {"event": "action_ok", "ts_ms": base + 6, "action": "strip", "output_text": "x"},
+        # 1 action_missing for 'nope' — counted as unknown
+        {"event": "action_missing", "ts_ms": base + 7, "action": "nope"},
+        # 1 rate_limited for 'python'
+        {
+            "event": "rate_limited",
+            "ts_ms": base + 8,
+            "verb": "python",
+            "cap_per_min": 3,
+            "retry_after_seconds": 42,
+        },
+    ]
+
+
+def test_stats_text_output_summarizes_triggers_verbs_and_events(
+    runner, tmp_path: Path
+) -> None:
+    log = _write_log(tmp_path / "z.log", _stats_log())
+    result = runner.invoke(main, ["triggers", "stats", "--path", str(log)])
+    assert result.exit_code == 0, result.output
+    assert "Stats from" in result.output
+    assert "9 events" in result.output  # total
+    # Triggers section
+    assert "zwingli" in result.output
+    assert "zwingly" in result.output
+    # Verbs section
+    assert "python" in result.output
+    assert "2 ok" in result.output       # python: 2 ok
+    assert "1 err" in result.output      # python: 1 err
+    assert "1 limited" in result.output  # python: 1 rate_limited
+    assert "1 unknown" in result.output  # nope: 1 action_missing
+    # Event types section
+    assert "trigger_match" in result.output
+    assert "dispatch_ok" in result.output
+    assert "rate_limited" in result.output
+
+
+def test_stats_json_output_carries_all_aggregates(runner, tmp_path: Path) -> None:
+    log = _write_log(tmp_path / "z.log", _stats_log())
+    result = runner.invoke(main, ["triggers", "stats", "--path", str(log), "--json"])
+    assert result.exit_code == 0, result.output
+    parsed = json.loads(result.output)
+    assert parsed["total_events"] == 9
+    assert parsed["trigger_counts"] == {"zwingli": 2, "zwingly": 1}
+    assert parsed["event_counts"]["dispatch_ok"] == 2
+    assert parsed["event_counts"]["rate_limited"] == 1
+    python_summary = parsed["verb_counts"]["python"]
+    assert python_summary == {
+        "ok": 2,
+        "error": 1,
+        "rate_limited": 1,
+        "unknown": 0,
+        "total": 4,
+    }
+    nope_summary = parsed["verb_counts"]["nope"]
+    assert nope_summary["unknown"] == 1
+    assert nope_summary["ok"] == 0
+
+
+def test_stats_top_limits_verb_and_trigger_lists(runner, tmp_path: Path) -> None:
+    # 5 distinct verbs, 1 ok each, plus 5 distinct triggers
+    events = []
+    base = 1779633876900
+    for i, verb in enumerate(["v1", "v2", "v3", "v4", "v5"]):
+        events.append({"event": "action_ok", "ts_ms": base + i, "action": verb})
+    for i, trig in enumerate(["t1", "t2", "t3", "t4", "t5"]):
+        events.append(
+            {"event": "trigger_match", "ts_ms": base + 10 + i, "trigger": trig}
+        )
+    log = _write_log(tmp_path / "z.log", events)
+    result = runner.invoke(
+        main, ["triggers", "stats", "--path", str(log), "--top", "2"]
+    )
+    assert result.exit_code == 0, result.output
+    # Only 2 of each should show — exact ordering depends on insertion order
+    # in the Counter for ties, but the count of named verbs in output should
+    # be <= 2 for each section.
+    verb_hits = sum(1 for v in ["v1", "v2", "v3", "v4", "v5"] if v in result.output)
+    trig_hits = sum(1 for t in ["t1", "t2", "t3", "t4", "t5"] if t in result.output)
+    assert verb_hits == 2
+    assert trig_hits == 2
+
+
+def test_stats_empty_log_reports_no_events(runner, tmp_path: Path) -> None:
+    log = tmp_path / "z.log"
+    log.write_text("", encoding="utf-8")
+    result = runner.invoke(main, ["triggers", "stats", "--path", str(log)])
+    assert result.exit_code == 0, result.output
+    assert "no events" in result.output
+
+
+def test_stats_missing_file_exits_with_error(runner, tmp_path: Path) -> None:
+    result = runner.invoke(
+        main, ["triggers", "stats", "--path", str(tmp_path / "missing.log")]
+    )
+    assert result.exit_code == 1
+    assert "✗ debug log not found" in result.output
+
+
+def test_extract_verb_returns_none_for_unrelated_event_types() -> None:
+    from voicepipe.commands.triggers import _extract_verb_from_event
+
+    # Events that intentionally don't carry verb context shouldn't be
+    # mis-attributed to a fake verb name.
+    assert _extract_verb_from_event({"event": "trigger_match", "trigger": "zwingli"}) is None
+    assert _extract_verb_from_event({"event": "shell_start", "command": "ls"}) is None
+    assert _extract_verb_from_event({"event": "codegen_complete", "returncode": 0}) is None
+    # dispatch_ok without meta.verb is also None (resolution failed before verb)
+    assert _extract_verb_from_event({"event": "dispatch_ok", "trigger": "zwingli"}) is None

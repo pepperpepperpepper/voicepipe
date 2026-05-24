@@ -524,8 +524,9 @@ def _summarize_event(ev: dict[str, Any]) -> str:
         bits = [f"verb={ev.get('verb')!r}"]
         if "retry_after_seconds" in ev:
             bits.append(f"retry_after={ev['retry_after_seconds']}s")
-        if "limit" in ev:
-            bits.append(f"limit={ev['limit']}")
+        cap = ev.get("cap_per_min") if "cap_per_min" in ev else ev.get("limit")
+        if cap is not None:
+            bits.append(f"cap_per_min={cap}")
         return " ".join(bits)
     if name in ("shell_start", "codegen_start"):
         return f"command={_snippet(ev.get('command'))!r}"
@@ -733,3 +734,230 @@ def triggers_path() -> None:
     Handy for shell composition, e.g. ``$EDITOR "$(voicepipe triggers path)"``.
     """
     click.echo(str(triggers_json_path()))
+
+
+# ---------- triggers stats ----------
+
+
+def _extract_verb_from_event(ev: dict[str, Any]) -> str | None:
+    """Return the verb name associated with `ev`, or None if not applicable.
+
+    - dispatch_ok / dispatch_error: ``meta.verb`` (set by the dispatcher
+      after verb resolution; absent if resolution itself failed)
+    - action_ok / action_error / action_missing: the ``action`` field is
+      already the verb name (e.g. "shell", "python")
+    - rate_limited: the ``verb`` field
+    - shell_* / codegen_*: no direct verb context — we don't try to
+      correlate against preceding dispatch events
+    """
+    name = ev.get("event")
+    if name in ("dispatch_ok", "dispatch_error"):
+        meta = ev.get("meta")
+        if isinstance(meta, dict):
+            verb = meta.get("verb")
+            if isinstance(verb, str) and verb:
+                return verb
+        return None
+    if name in ("action_ok", "action_error", "action_missing"):
+        action = ev.get("action")
+        if isinstance(action, str) and action:
+            return action
+        return None
+    if name == "rate_limited":
+        verb = ev.get("verb")
+        if isinstance(verb, str) and verb:
+            return verb
+        return None
+    return None
+
+
+def _aggregate_log_stats(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Roll a list of debug events into the summary dict that drives both
+    the text and JSON outputs of `triggers stats`."""
+    from collections import Counter
+
+    event_counts: Counter[str] = Counter()
+    trigger_counts: Counter[str] = Counter()
+    verb_ok: Counter[str] = Counter()
+    verb_error: Counter[str] = Counter()
+    verb_rate_limited: Counter[str] = Counter()
+    verb_unknown: Counter[str] = Counter()
+    first_ts: int | None = None
+    last_ts: int | None = None
+
+    for ev in events:
+        name = ev.get("event")
+        if not isinstance(name, str):
+            continue
+        event_counts[name] += 1
+
+        ts = ev.get("ts_ms")
+        if isinstance(ts, (int, float)):
+            ts_int = int(ts)
+            if first_ts is None or ts_int < first_ts:
+                first_ts = ts_int
+            if last_ts is None or ts_int > last_ts:
+                last_ts = ts_int
+
+        if name == "trigger_match":
+            trig = ev.get("trigger")
+            if isinstance(trig, str) and trig:
+                trigger_counts[trig] += 1
+
+        verb = _extract_verb_from_event(ev)
+        if verb is not None:
+            if name in ("dispatch_ok", "action_ok"):
+                verb_ok[verb] += 1
+            elif name in ("dispatch_error", "action_error"):
+                verb_error[verb] += 1
+            elif name == "rate_limited":
+                verb_rate_limited[verb] += 1
+            elif name == "action_missing":
+                verb_unknown[verb] += 1
+
+    all_verbs = (
+        set(verb_ok)
+        | set(verb_error)
+        | set(verb_rate_limited)
+        | set(verb_unknown)
+    )
+    verb_summary: dict[str, dict[str, int]] = {}
+    for verb in all_verbs:
+        verb_summary[verb] = {
+            "ok": int(verb_ok[verb]),
+            "error": int(verb_error[verb]),
+            "rate_limited": int(verb_rate_limited[verb]),
+            "unknown": int(verb_unknown[verb]),
+            "total": int(
+                verb_ok[verb] + verb_error[verb] + verb_rate_limited[verb] + verb_unknown[verb]
+            ),
+        }
+
+    return {
+        "total_events": int(sum(event_counts.values())),
+        "first_event_ms": first_ts,
+        "last_event_ms": last_ts,
+        "event_counts": dict(event_counts.most_common()),
+        "trigger_counts": dict(trigger_counts.most_common()),
+        "verb_counts": verb_summary,
+    }
+
+
+def _format_stats_text(stats: dict[str, Any], path: Path, *, top: int) -> list[str]:
+    """Render the aggregate dict as human-readable lines."""
+    lines: list[str] = []
+    total = stats.get("total_events", 0)
+    first_ms = stats.get("first_event_ms")
+    last_ms = stats.get("last_event_ms")
+    if first_ms is not None and last_ms is not None:
+        lines.append(
+            f"Stats from {path} ({total} events, "
+            f"{_format_ts(first_ms)} to {_format_ts(last_ms)})"
+        )
+    else:
+        lines.append(f"Stats from {path} ({total} events)")
+    lines.append("")
+
+    triggers = stats.get("trigger_counts") or {}
+    lines.append("Triggers:")
+    if triggers:
+        for trig, count in list(triggers.items())[:top] if top > 0 else triggers.items():
+            lines.append(f"  {trig:<20} {count}")
+    else:
+        lines.append("  (none)")
+    lines.append("")
+
+    verbs = stats.get("verb_counts") or {}
+    ordered = sorted(verbs.items(), key=lambda kv: -kv[1]["total"])
+    if top > 0:
+        ordered = ordered[:top]
+    lines.append("Verbs by call count:")
+    if ordered:
+        for verb, counts in ordered:
+            bits = [f"{counts['ok']} ok"]
+            if counts["error"]:
+                bits.append(f"{counts['error']} err")
+            if counts["rate_limited"]:
+                bits.append(f"{counts['rate_limited']} limited")
+            if counts["unknown"]:
+                bits.append(f"{counts['unknown']} unknown")
+            lines.append(
+                f"  {verb:<20} {counts['total']:>6}  (" + ", ".join(bits) + ")"
+            )
+    else:
+        lines.append("  (none)")
+    lines.append("")
+
+    event_counts = stats.get("event_counts") or {}
+    lines.append("Event types:")
+    if event_counts:
+        for name, count in event_counts.items():
+            lines.append(f"  {name:<20} {count}")
+    else:
+        lines.append("  (none)")
+    return lines
+
+
+@triggers_group.command("stats")
+@click.option(
+    "--path",
+    "path_override",
+    type=click.Path(dir_okay=False),
+    default=None,
+    help="Path to the Zwingli debug log (defaults to VOICEPIPE_ZWINGLI_DEBUG_LOG_FILE or /tmp/zwingli-debug.log).",
+)
+@click.option(
+    "--top",
+    "top",
+    type=int,
+    default=10,
+    show_default=True,
+    help="Show only the top N triggers / verbs. Use 0 for all.",
+)
+@click.option(
+    "--json",
+    "json_output",
+    is_flag=True,
+    help="Emit aggregate counts as JSON instead of formatted text.",
+)
+def triggers_stats(path_override: str | None, top: int, json_output: bool) -> None:
+    """Aggregate the Zwingli debug log into usage stats.
+
+    Reads the JSON-lines debug log and rolls it up by event type, trigger
+    prefix, and verb. Useful for "which verbs do I actually use?" and
+    "where are my dispatch errors coming from?" without grepping the raw
+    log. Counts are derived from the events visible in the log file — no
+    inference across rotation boundaries.
+    """
+    from voicepipe.transcript_triggers._debug_log import _zwingli_debug_log_path
+
+    path = Path(path_override).expanduser() if path_override else _zwingli_debug_log_path()
+    if not path.exists():
+        click.echo(f"✗ debug log not found: {path}", err=True)
+        click.echo(
+            "  (set VOICEPIPE_ZWINGLI_DEBUG_LOG_FILE or run a trigger to create it)",
+            err=True,
+        )
+        sys.exit(1)
+
+    try:
+        # tail=0 reads everything; stats are most useful aggregated across
+        # the entire visible log.
+        events = _read_debug_log_tail(path, 0)
+    except OSError as e:
+        click.echo(f"✗ could not read debug log: {path}", err=True)
+        click.echo(f"  {e}", err=True)
+        sys.exit(1)
+
+    stats = _aggregate_log_stats(events)
+
+    if json_output:
+        click.echo(json.dumps(stats, indent=2, ensure_ascii=False))
+        return
+
+    if stats["total_events"] == 0:
+        click.echo(f"(no events in {path})")
+        return
+
+    for line in _format_stats_text(stats, path, top=top):
+        click.echo(line)

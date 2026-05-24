@@ -634,3 +634,14 @@ def test_log_unknown_event_type_falls_back_to_json_dump(runner, tmp_path: Path) 
     assert "some_future_event" in result.output
     assert "custom_field" in result.output
     assert "value" in result.output
+
+
+# ---------- triggers path ----------
+
+
+def test_path_prints_canonical_triggers_json_path(runner) -> None:
+    from voicepipe.config import triggers_json_path
+
+    result = runner.invoke(main, ["triggers", "path"])
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == str(triggers_json_path())

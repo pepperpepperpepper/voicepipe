@@ -634,3 +634,15 @@ def triggers_log(path_override: str | None, tail: int, json_output: bool) -> Non
         ts = _format_ts(ev.get("ts_ms"))
         name = ev.get("event", "?")
         click.echo(f"{ts}  {name:<20}  {_summarize_event(ev)}")
+
+
+# ---------- triggers path ----------
+
+
+@triggers_group.command("path")
+def triggers_path() -> None:
+    """Print the canonical triggers.json path (whether or not the file exists).
+
+    Handy for shell composition, e.g. ``$EDITOR "$(voicepipe triggers path)"``.
+    """
+    click.echo(str(triggers_json_path()))

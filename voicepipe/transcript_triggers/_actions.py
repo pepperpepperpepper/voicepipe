@@ -1,15 +1,22 @@
+"""All Zwingli action handlers (``_action_*``) and their direct helpers.
+
+Each handler signature is ``(prompt, *, verb_cfg, profiles, captures, commands) -> (text, meta)``.
+The handlers live together because they share a small set of helpers
+(``_run_shell_command``, ``_run_script_in_interpreter``, ``_call_llm_with_profile``,
+``_stash_pending_and_notice``) and grouping them in one file keeps the
+call sites colocated with what they call. The ``_ACTIONS`` dispatch
+table sits at the bottom.
+"""
+
 from __future__ import annotations
 
 import hashlib
 import importlib
 import importlib.util
-import json
 import os
-import re
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -18,289 +25,16 @@ from voicepipe.config import (
     TranscriptLLMProfileConfig,
     TranscriptPluginConfig,
     TranscriptVerbConfig,
-    get_transcript_triggers,
-    get_transcript_commands_config,
+)
+
+from ._debug_log import _write_zwingli_debug_event
+from ._template import (
+    _render_user_prompt_template,
+    _substitute_command_template,
 )
 
 
-@dataclass(frozen=True)
-class TranscriptTriggerMatch:
-    trigger: str
-    action: str
-    remainder: str
-    reason: str
-
-
-_ZWINGLI_DEBUG_LOG_DEFAULT_MAX_BYTES = 20 * 1024 * 1024
-
-
-def _zwingli_debug_log_max_bytes() -> int:
-    """Resolve the debug-log rotation threshold from the environment.
-
-    Accepts raw bytes ("1048576") or a K/M/G suffix ("20M", "1.5G"). A value
-    of 0 disables rotation (file grows without bound). Empty, malformed, or
-    negative values fall back to the default.
-    """
-    raw = (os.environ.get("VOICEPIPE_ZWINGLI_DEBUG_LOG_MAX_BYTES") or "").strip()
-    if not raw:
-        return _ZWINGLI_DEBUG_LOG_DEFAULT_MAX_BYTES
-
-    multiplier = 1
-    suffix = raw[-1:].lower()
-    if suffix in ("k", "m", "g"):
-        multiplier = {"k": 1024, "m": 1024 ** 2, "g": 1024 ** 3}[suffix]
-        raw = raw[:-1].strip()
-
-    try:
-        value = float(raw)
-    except ValueError:
-        return _ZWINGLI_DEBUG_LOG_DEFAULT_MAX_BYTES
-    if value < 0:
-        return _ZWINGLI_DEBUG_LOG_DEFAULT_MAX_BYTES
-    return int(value * multiplier)
-
-
-def _zwingli_debug_log_enabled() -> bool:
-    raw = (os.environ.get("VOICEPIPE_ZWINGLI_DEBUG_LOG") or "").strip().lower()
-    if raw in {"0", "false", "f", "no", "n", "off"}:
-        return False
-    return True
-
-
-def _zwingli_debug_log_path() -> Path:
-    override = (os.environ.get("VOICEPIPE_ZWINGLI_DEBUG_LOG_FILE") or "").strip()
-    if override:
-        try:
-            return Path(override).expanduser()
-        except Exception:
-            return Path(override)
-    if os.name != "nt":
-        return Path("/tmp/zwingli-debug.log")
-    try:
-        return Path(tempfile.gettempdir()) / "zwingli-debug.log"
-    except Exception:
-        return Path("zwingli-debug.log")
-
-
-def _truncate_for_log(value: object, *, max_chars: int = 20_000) -> object:
-    if not isinstance(value, str):
-        return value
-    if max_chars <= 0:
-        return ""
-    if len(value) <= max_chars:
-        return value
-    return value[: max_chars - 1] + "…"
-
-
-def _maybe_rotate_debug_log(path: Path) -> None:
-    max_bytes = _zwingli_debug_log_max_bytes()
-    if max_bytes <= 0:
-        return
-
-    try:
-        st = path.stat()
-    except FileNotFoundError:
-        return
-    except Exception:
-        return
-
-    try:
-        size = int(getattr(st, "st_size", 0) or 0)
-    except Exception:
-        size = 0
-    if size <= max_bytes:
-        return
-
-    backup = Path(str(path) + ".1")
-    try:
-        try:
-            backup.unlink(missing_ok=True)
-        except Exception:
-            pass
-        os.replace(path, backup)
-    except Exception:
-        # If rotation fails, carry on; logging should never break core behavior.
-        return
-
-
-def _write_zwingli_debug_event(event: dict[str, Any]) -> None:
-    if not _zwingli_debug_log_enabled():
-        return
-
-    payload = dict(event)
-    payload.setdefault("ts_ms", int(time.time() * 1000))
-    payload.setdefault("pid", int(os.getpid()))
-
-    # Keep the log usable when commands produce large output.
-    for key in ("text", "remainder", "prompt", "args", "command", "stdout", "stderr", "output_text", "error"):
-        if key in payload:
-            payload[key] = _truncate_for_log(payload[key])
-
-    try:
-        path = _zwingli_debug_log_path()
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-
-        _maybe_rotate_debug_log(path)
-
-        line = json.dumps(payload, ensure_ascii=False)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-        try:
-            os.chmod(path, 0o600)
-        except Exception:
-            pass
-    except Exception:
-        pass
-
-
-_ZWINGLI_ERROR_PREFIX = "⚠ zwingli"
-_ERROR_DESTINATION_FALLBACK = "type"
-_ERROR_DESTINATION_VALID = frozenset({"type", "clipboard", "both"})
-
-
-def _format_zwingli_error_text(reason: str) -> str:
-    cleaned = (reason or "").strip()
-    return f"{_ZWINGLI_ERROR_PREFIX}: {cleaned}" if cleaned else f"{_ZWINGLI_ERROR_PREFIX} error"
-
-
-def _resolve_error_destination(commands: TranscriptCommandsConfig | None) -> str:
-    """Read dispatch.error_destination; fall back to 'type' on any issue."""
-    if commands is None:
-        try:
-            commands = get_transcript_commands_config(load_env=False)
-        except Exception:
-            return _ERROR_DESTINATION_FALLBACK
-    raw = (getattr(commands.dispatch, "error_destination", None) or _ERROR_DESTINATION_FALLBACK)
-    cleaned = raw.strip().lower() if isinstance(raw, str) else _ERROR_DESTINATION_FALLBACK
-    return cleaned if cleaned in _ERROR_DESTINATION_VALID else _ERROR_DESTINATION_FALLBACK
-
-
-def _apply_error_destination(
-    reason: str, *, commands: TranscriptCommandsConfig | None
-) -> tuple[str, dict[str, Any]]:
-    """Format the error and route it per dispatch.error_destination.
-
-    Returns (output_text, meta_extras). The output_text is what callers should
-    type/echo; meta_extras carries suppress_type and clipboard flags so the
-    same downstream wiring used by the clipboard verb picks this up.
-    """
-    error_text = _format_zwingli_error_text(reason)
-    destination = _resolve_error_destination(commands)
-    extras: dict[str, Any] = {"error_destination": destination}
-
-    if destination in ("clipboard", "both"):
-        try:
-            from voicepipe.clipboard import copy_to_clipboard
-
-            ok, _err = copy_to_clipboard(error_text)
-            extras["clipboard"] = bool(ok)
-        except Exception:
-            extras["clipboard"] = False
-
-    if destination == "clipboard":
-        extras["suppress_type"] = True
-
-    return error_text, extras
-
-
-def match_transcript_trigger(
-    text: str,
-    *,
-    triggers: Mapping[str, str],
-) -> TranscriptTriggerMatch | None:
-    """Match a configured trigger prefix against transcript text.
-
-    This is intentionally lightweight (string checks only). It is not an audio
-    wake word; it operates purely on the transcription output.
-    """
-    cleaned = (text or "").strip()
-    if not cleaned:
-        return None
-
-    lowered = cleaned.lower()
-
-    word_separators: tuple[tuple[str, str], ...] = (
-        ("comma", ","),
-        ("colon", ":"),
-        ("semicolon", ";"),
-        ("semi colon", ";"),
-        ("period", "."),
-        ("full stop", "."),
-    )
-
-    for raw_trigger, raw_action in triggers.items():
-        trigger = (raw_trigger or "").strip().lower()
-        if not trigger:
-            continue
-        action = (raw_action or "").strip().lower() or "strip"
-
-        if lowered == trigger:
-            return TranscriptTriggerMatch(
-                trigger=trigger,
-                action=action,
-                remainder="",
-                reason="exact",
-            )
-
-        if not lowered.startswith(trigger):
-            continue
-
-        after = len(trigger)
-        if after >= len(lowered):
-            continue
-
-        # Boundary-aware match: allow either whitespace or a separator after
-        # the trigger. Prefer stripping a separator even when there's whitespace
-        # before it (e.g. "zwingli , do it").
-        i = after
-        while i < len(lowered) and lowered[i].isspace():
-            i += 1
-
-        if i < len(lowered):
-            # Trigger followed by a separator character.
-            for sep in (",", ":", ";", "."):
-                if lowered[i] == sep:
-                    return TranscriptTriggerMatch(
-                        trigger=trigger,
-                        action=action,
-                        remainder=cleaned[i + 1 :].lstrip(),
-                        reason=f"prefix:{sep}",
-                    )
-
-            # Trigger followed by a separator word (e.g. "zwingli comma ...").
-            for word, sep in word_separators:
-                if not lowered.startswith(word, i):
-                    continue
-                end = i + len(word)
-                if end < len(lowered):
-                    next_ch = lowered[end]
-                    if not (next_ch.isspace() or next_ch in {",", ":", ";", "."}):
-                        continue
-                j = end
-                while j < len(lowered) and lowered[j].isspace():
-                    j += 1
-                if j < len(lowered) and lowered[j] in {",", ":", ";", "."}:
-                    j += 1
-                return TranscriptTriggerMatch(
-                    trigger=trigger,
-                    action=action,
-                    remainder=cleaned[j:].lstrip(),
-                    reason=f"prefix:{sep}",
-                )
-
-        # Trigger followed by whitespace and then non-separator content.
-        if lowered[after].isspace():
-            return TranscriptTriggerMatch(
-                trigger=trigger,
-                action=action,
-                remainder=cleaned[after:].lstrip(),
-                reason="prefix:space",
-            )
-
-    return None
+# ---------- strip ----------
 
 
 def _action_strip(
@@ -313,6 +47,9 @@ def _action_strip(
 ) -> tuple[str, dict[str, Any]]:
     del verb_cfg, profiles, captures, commands
     return (prompt or "").strip(), {}
+
+
+# ---------- llm (zwingli action) + shared LLM call helper ----------
 
 
 def _call_llm_with_profile(
@@ -380,128 +117,7 @@ def _action_zwingli(
     return text, meta
 
 
-_TEMPLATE_PLACEHOLDER_RE = re.compile(r"\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}")
-
-
-def _render_user_prompt_template(
-    template: str,
-    *,
-    text: str,
-    captures: Mapping[str, str] | None = None,
-) -> str:
-    cleaned_template = (template or "").strip()
-    cleaned_text = (text or "").strip()
-    if not cleaned_template:
-        return cleaned_text
-
-    substitutions: dict[str, str] = {"text": cleaned_text}
-    if captures:
-        for name, value in captures.items():
-            substitutions[name] = "" if value is None else str(value)
-
-    used_text = False
-
-    def _resolve(match: re.Match[str]) -> str:
-        nonlocal used_text
-        name = match.group(1)
-        if name == "text":
-            used_text = True
-        if name in substitutions:
-            return substitutions[name]
-        return match.group(0)
-
-    rendered = _TEMPLATE_PLACEHOLDER_RE.sub(_resolve, cleaned_template)
-
-    if not used_text and cleaned_text:
-        return rendered.rstrip() + "\n\n" + cleaned_text
-    return rendered
-
-
-_PATTERN_COMPILE_CACHE: dict[str, tuple["re.Pattern[str]", tuple[str, ...]]] = {}
-
-
-def _compile_verb_pattern(pattern: str) -> tuple["re.Pattern[str]", tuple[str, ...]]:
-    """Compile a verb pattern into a regex + capture-name tuple.
-
-    Pattern syntax: literal text + ``{name}`` placeholders. Literals match
-    case-insensitively with flexible whitespace; placeholders capture
-    non-empty content up to the next literal or end of input. The compiled
-    regex anchors on the whole input.
-    """
-    cached = _PATTERN_COMPILE_CACHE.get(pattern)
-    if cached is not None:
-        return cached
-
-    placeholder_re = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
-    parts: list[str] = []
-    names: list[str] = []
-    last = 0
-    for m in placeholder_re.finditer(pattern):
-        literal = pattern[last : m.start()]
-        if literal.strip():
-            parts.append(r"\s+".join(re.escape(w) for w in literal.split()))
-        name = m.group(1)
-        if name in names:
-            raise ValueError(f"Duplicate capture name {name!r} in pattern {pattern!r}")
-        names.append(name)
-        # Require at least one non-whitespace char so empty/whitespace captures
-        # don't match.
-        parts.append(rf"(?P<{name}>\S(?:.*?\S)?)")
-        last = m.end()
-    trailing = pattern[last:]
-    if trailing.strip():
-        parts.append(r"\s+".join(re.escape(w) for w in trailing.split()))
-
-    body = r"\s*".join(parts) if parts else ""
-    compiled = re.compile(rf"^\s*{body}\s*$", re.IGNORECASE)
-    result = (compiled, tuple(names))
-    _PATTERN_COMPILE_CACHE[pattern] = result
-    return result
-
-
-def _find_pattern_match(
-    chunk: str, *, commands: TranscriptCommandsConfig
-) -> tuple[str, dict[str, str]] | None:
-    """Return (verb_name, captures) for the first enabled verb whose pattern
-    matches the chunk, or None when no pattern matches.
-
-    Iteration order follows the verbs dict (insertion order). Disabled verbs
-    are skipped. Verbs without a pattern are skipped.
-    """
-    text = (chunk or "").strip()
-    if not text:
-        return None
-    for verb_name, verb_cfg in commands.verbs.items():
-        if not bool(verb_cfg.enabled):
-            continue
-        pattern = getattr(verb_cfg, "pattern", None)
-        if not pattern:
-            continue
-        try:
-            compiled, _names = _compile_verb_pattern(pattern)
-        except Exception:
-            continue
-        m = compiled.match(text)
-        if m is None:
-            continue
-        captures: dict[str, str] = {}
-        for name, value in m.groupdict().items():
-            captures[name] = "" if value is None else value.strip()
-        return verb_name, captures
-    return None
-
-
-def _substitute_command_template(template: str, captures: Mapping[str, str]) -> str:
-    """Replace ``{name}`` tokens in a shell command_template with captures."""
-    placeholder_re = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
-
-    def _resolve(match: re.Match[str]) -> str:
-        name = match.group(1)
-        if name in captures:
-            return str(captures[name])
-        return match.group(0)
-
-    return placeholder_re.sub(_resolve, template)
+# ---------- shell + execute (subprocess vs type-into-terminal) ----------
 
 
 def _parse_positive_float(value: object) -> float | None:
@@ -758,6 +374,9 @@ def _action_execute(
     return cleaned, {"enter": True}
 
 
+# ---------- clipboard (passthrough; emission layer copies) ----------
+
+
 def _action_clipboard(
     prompt: str,
     *,
@@ -770,6 +389,9 @@ def _action_clipboard(
     emission layer via verb destination routing (see verb_cfg.destination)."""
     del verb_cfg, profiles, captures, commands
     return (prompt or "").strip(), {}
+
+
+# ---------- codegen (LLM script → interpreter via tempfile) ----------
 
 
 def _strip_code_fences(text: str) -> str:
@@ -959,6 +581,9 @@ def _action_codegen(
     output = (output or "").rstrip("\n")
     merged = {**llm_meta, **run_meta, "generated_script": script_text}
     return output, merged
+
+
+# ---------- type (keypress sequence parser) ----------
 
 
 _TYPE_TOKEN_TRANSLATION = str.maketrans(
@@ -1235,6 +860,9 @@ def _action_type(
     return out_text, meta
 
 
+# ---------- plugin (user-supplied Python callable) ----------
+
+
 _PLUGIN_PATH_CACHE: dict[str, tuple[int, Callable[[str], object]]] = {}
 _PLUGIN_MODULE_CACHE: dict[tuple[str, str], Callable[[str], object]] = {}
 
@@ -1358,6 +986,9 @@ def _action_plugin(
     return out_text, meta
 
 
+# ---------- help (auto-injected; describes verbs) ----------
+
+
 def _describe_verb_one_line(verb: str, cfg: TranscriptVerbConfig) -> str:
     parts = [verb]
     type_label = (cfg.type or "").strip().lower()
@@ -1423,7 +1054,6 @@ def _action_help(
     commands: TranscriptCommandsConfig | None = None,
 ) -> tuple[str, dict[str, Any]]:
     del verb_cfg, profiles, captures
-    import os
 
     args = (prompt or "").strip().lower()
     verbs = dict(commands.verbs) if commands else {}
@@ -1458,6 +1088,9 @@ def _action_help(
     lines.append("")
     lines.append("Say 'zwingli help <verb>' for details on a specific verb.")
     return "\n".join(lines), {"help_target": None}
+
+
+# ---------- yes / no (resume / cancel pending command) ----------
 
 
 def _action_yes(
@@ -1540,6 +1173,9 @@ def _action_no(
     )
 
 
+# ---------- action dispatch table ----------
+
+
 ActionHandler = Callable[..., tuple[str, dict[str, Any]]]
 
 _ACTIONS: dict[str, ActionHandler] = {
@@ -1559,700 +1195,3 @@ _ACTIONS: dict[str, ActionHandler] = {
 # Keys returned by handlers in their inner_meta that the dispatcher should
 # surface at the top level of verb metadata rather than under "handler_meta".
 _PROMOTED_META_KEYS: tuple[str, ...] = ("profile_found", "template_applied")
-
-_DISPATCH_SEPARATORS = (",", ":", ";", ".")
-
-
-def _split_dispatch_verb(prompt: str) -> tuple[str, str]:
-    cleaned = (prompt or "").strip()
-    if not cleaned:
-        return "", ""
-
-    i = 0
-    while i < len(cleaned) and not cleaned[i].isspace() and cleaned[i] not in _DISPATCH_SEPARATORS:
-        i += 1
-
-    verb = cleaned[:i].strip().lower()
-    j = i
-    if j < len(cleaned) and cleaned[j] in _DISPATCH_SEPARATORS:
-        j += 1
-    while j < len(cleaned) and cleaned[j].isspace():
-        j += 1
-    args = cleaned[j:]
-    return verb, args
-
-
-def _default_commands_for_triggers(triggers: Mapping[str, str]) -> TranscriptCommandsConfig:
-    return TranscriptCommandsConfig(triggers=dict(triggers))
-
-
-def _resolve_action_from_verb_config(_verb: str, cfg: TranscriptVerbConfig) -> str:
-    del _verb
-    return (cfg.action or "").strip().lower() or "strip"
-
-
-def _build_verb_alias_map(
-    verbs: Mapping[str, TranscriptVerbConfig],
-) -> dict[str, str]:
-    """Return a phrase -> canonical-verb map built from each verb's aliases.
-
-    Aliases that collide with an existing verb name or with another alias
-    are skipped (first-write wins) to keep verb resolution deterministic.
-    """
-    out: dict[str, str] = {}
-    for verb, cfg in verbs.items():
-        for alias in getattr(cfg, "aliases", ()) or ():
-            phrase = " ".join((alias or "").strip().lower().split())
-            if not phrase or phrase == verb or phrase in verbs:
-                continue
-            out.setdefault(phrase, verb)
-    return out
-
-
-def _resolve_verb_and_args(
-    cleaned: str, *, commands: TranscriptCommandsConfig
-) -> tuple[str, str]:
-    """Split a post-trigger prompt into (verb, args), honoring verb aliases."""
-    if not cleaned:
-        return "", ""
-
-    alias_map = _build_verb_alias_map(commands.verbs)
-
-    if alias_map:
-        lowered = cleaned.lower()
-        # Try multi-word aliases first, longest match wins.
-        for alias in sorted(
-            (a for a in alias_map if " " in a), key=lambda a: -len(a)
-        ):
-            if lowered == alias:
-                return alias_map[alias], ""
-            if not lowered.startswith(alias):
-                continue
-            tail_idx = len(alias)
-            tail_ch = cleaned[tail_idx]
-            if not (tail_ch.isspace() or tail_ch in _DISPATCH_SEPARATORS):
-                continue
-            j = tail_idx
-            if cleaned[j] in _DISPATCH_SEPARATORS:
-                j += 1
-            while j < len(cleaned) and cleaned[j].isspace():
-                j += 1
-            if j < len(cleaned) and cleaned[j] in _DISPATCH_SEPARATORS:
-                j += 1
-            while j < len(cleaned) and cleaned[j].isspace():
-                j += 1
-            return alias_map[alias], cleaned[j:]
-
-    verb, args = _split_dispatch_verb(cleaned)
-    if verb and verb in alias_map:
-        return alias_map[verb], args
-    return verb, args
-
-
-def _invoke_verb_handler(
-    verb: str,
-    verb_cfg: TranscriptVerbConfig,
-    args: str,
-    *,
-    commands: TranscriptCommandsConfig,
-    captures: Mapping[str, str] | None = None,
-) -> tuple[str, dict[str, Any]]:
-    """Run a verb's action handler and build its top-level meta payload."""
-    action = _resolve_action_from_verb_config(verb, verb_cfg)
-    handler = _ACTIONS.get(action)
-    if handler is None:
-        raise RuntimeError(f"Unknown verb action: {action!r} (verb={verb!r})")
-
-    cap = getattr(verb_cfg, "rate_limit_per_min", None)
-    if isinstance(cap, int) and cap > 0:
-        from voicepipe import rate_limit
-
-        try:
-            rate_limit.check_and_record(verb, cap)
-        except rate_limit.RateLimitExceeded as exc:
-            _write_zwingli_debug_event(
-                {
-                    "event": "rate_limited",
-                    "verb": verb,
-                    "cap_per_min": int(exc.cap_per_min),
-                    "retry_after_seconds": float(exc.retry_after_seconds),
-                }
-            )
-            raise
-
-    out_text, inner_meta = handler(
-        args,
-        verb_cfg=verb_cfg,
-        profiles=commands.llm_profiles,
-        captures=captures,
-        commands=commands,
-    )
-
-    meta: dict[str, Any] = {
-        "mode": "verb",
-        "verb": verb,
-        "verb_type": getattr(verb_cfg, "type", None),
-        "action": action,
-    }
-    if captures:
-        meta["captures"] = dict(captures)
-    destination = getattr(verb_cfg, "destination", None)
-    if not destination and action == "clipboard":
-        destination = "clipboard"
-    if destination:
-        meta["destination"] = destination
-    if getattr(verb_cfg, "profile", None):
-        meta["profile"] = verb_cfg.profile
-    if getattr(verb_cfg, "timeout_seconds", None) is not None:
-        meta["timeout_seconds"] = verb_cfg.timeout_seconds
-    if isinstance(cap, int) and cap > 0:
-        meta["rate_limit_per_min"] = cap
-    plugin = getattr(verb_cfg, "plugin", None)
-    if plugin is not None:
-        meta["plugin"] = {
-            "module": plugin.module,
-            "path": plugin.path,
-            "callable": plugin.callable,
-        }
-    for key in _PROMOTED_META_KEYS:
-        if key in inner_meta:
-            meta[key] = inner_meta.pop(key)
-    if inner_meta:
-        meta["handler_meta"] = inner_meta
-    return out_text, meta
-
-
-def _dispatch_single_step(
-    verb: str,
-    args: str,
-    raw_chunk: str,
-    *,
-    commands: TranscriptCommandsConfig,
-) -> tuple[str, dict[str, Any]]:
-    """Run one dispatch step. `raw_chunk` is the original chunk before verb
-    extraction; it is used both for pattern matching against the whole chunk
-    and as input to the unknown-verb fallback handler so the verb token isn't
-    silently dropped.
-    """
-    pattern_match = _find_pattern_match(raw_chunk, commands=commands)
-    if pattern_match is not None:
-        pattern_verb, captures = pattern_match
-        pattern_verb_cfg = commands.verbs[pattern_verb]
-        return _invoke_verb_handler(
-            pattern_verb,
-            pattern_verb_cfg,
-            raw_chunk,
-            commands=commands,
-            captures=captures,
-        )
-
-    verb_cfg = commands.verbs.get(verb) if verb else None
-
-    if verb_cfg is not None and bool(verb_cfg.enabled):
-        return _invoke_verb_handler(verb, verb_cfg, args, commands=commands)
-
-    unknown_action = (commands.dispatch.unknown_verb or "").strip().lower() or "strip"
-    handler = _ACTIONS.get(unknown_action)
-    if handler is None:
-        raise RuntimeError(f"Unknown dispatch.unknown_verb action: {unknown_action!r}")
-    out_text, inner_meta = handler(
-        raw_chunk,
-        verb_cfg=None,
-        profiles=commands.llm_profiles,
-        captures=None,
-        commands=commands,
-    )
-    meta: dict[str, Any] = {
-        "mode": "unknown-verb",
-        "verb": verb,
-        "action": unknown_action,
-    }
-    if verb_cfg is not None and not bool(verb_cfg.enabled):
-        meta["disabled_verb"] = verb
-    if inner_meta:
-        meta["handler_meta"] = inner_meta
-    return out_text, meta
-
-
-_CHAIN_KEYWORD = " then "
-
-
-def _find_chain_boundaries(
-    text: str, *, commands: TranscriptCommandsConfig
-) -> list[tuple[int, int]]:
-    """Locate ' then <verb>' boundaries where <verb> resolves via the verbs map.
-
-    Returns a list of (split_start, next_chunk_start) byte positions. Empty
-    list means no chain.
-    """
-    out: list[tuple[int, int]] = []
-    lowered = text.lower()
-    search_start = 0
-    n = len(text)
-    while True:
-        idx = lowered.find(_CHAIN_KEYWORD, search_start)
-        if idx == -1:
-            return out
-        after = idx + len(_CHAIN_KEYWORD)
-        # Skip any extra whitespace before the candidate verb token.
-        while after < n and text[after].isspace():
-            after += 1
-        if after >= n:
-            return out
-        candidate = text[after:]
-        candidate_verb, _ = _resolve_verb_and_args(candidate, commands=commands)
-        if candidate_verb and candidate_verb in commands.verbs:
-            out.append((idx, after))
-            search_start = after
-        else:
-            search_start = idx + 1
-
-
-def _split_chain_chunks(
-    cleaned: str, *, commands: TranscriptCommandsConfig
-) -> list[str]:
-    """Split the post-trigger prompt into chain chunks. Single chunk = no chain."""
-    boundaries = _find_chain_boundaries(cleaned, commands=commands)
-    if not boundaries:
-        return [cleaned]
-    chunks: list[str] = []
-    last = 0
-    for split_start, next_start in boundaries:
-        chunks.append(cleaned[last:split_start].strip())
-        last = next_start
-    chunks.append(cleaned[last:].strip())
-    return chunks
-
-
-def _dispatch_prompt(prompt: str, *, commands: TranscriptCommandsConfig) -> tuple[str, dict[str, Any]]:
-    cleaned = (prompt or "").strip()
-    chunks = _split_chain_chunks(cleaned, commands=commands)
-
-    if len(chunks) == 1:
-        verb, args = _resolve_verb_and_args(chunks[0], commands=commands)
-        return _dispatch_single_step(verb, args, chunks[0], commands=commands)
-
-    chain_metas: list[dict[str, Any]] = []
-    prior_output = ""
-    final_text = ""
-    final_meta: dict[str, Any] = {}
-
-    for i, chunk in enumerate(chunks):
-        verb, split_args = _resolve_verb_and_args(chunk, commands=commands)
-        if i == 0:
-            step_input = split_args
-            step_chunk = chunk
-        elif split_args.strip():
-            # Explicit args after the chain verb: honor them, ignore prior output.
-            step_input = split_args
-            step_chunk = chunk
-        else:
-            # Verb-only chain step: pipe the previous output in.
-            step_input = prior_output
-            step_chunk = prior_output
-
-        step_text, step_meta = _dispatch_single_step(
-            verb, step_input, step_chunk, commands=commands
-        )
-        prior_output = step_text
-
-        if i < len(chunks) - 1:
-            chain_metas.append(step_meta)
-        else:
-            final_text = step_text
-            final_meta = step_meta
-
-    final_meta["chain"] = chain_metas
-    return final_text, final_meta
-
-
-def _dry_run_verb_summary(
-    verb_cfg: TranscriptVerbConfig,
-    *,
-    commands: TranscriptCommandsConfig,
-    args: str,
-    captures: Mapping[str, str] | None,
-) -> dict[str, Any]:
-    """Build a side-effect-free summary of what a verb *would* do."""
-    summary: dict[str, Any] = {
-        "type": verb_cfg.type,
-        "action": verb_cfg.action,
-    }
-    if verb_cfg.profile:
-        summary["profile"] = verb_cfg.profile
-    if verb_cfg.interpreter:
-        summary["interpreter"] = verb_cfg.interpreter
-    if verb_cfg.timeout_seconds is not None:
-        summary["timeout_seconds"] = verb_cfg.timeout_seconds
-
-    destination = verb_cfg.destination
-    if not destination and (verb_cfg.action or "").strip().lower() == "clipboard":
-        destination = "clipboard"
-    if destination:
-        summary["destination"] = destination
-    else:
-        summary["destination"] = "(inherit from caller flags)"
-
-    if verb_cfg.confirm:
-        summary["confirm"] = True
-        if verb_cfg.confirm_timeout_seconds is not None:
-            summary["confirm_timeout_seconds"] = verb_cfg.confirm_timeout_seconds
-    if verb_cfg.rate_limit_per_min is not None:
-        summary["rate_limit_per_min"] = verb_cfg.rate_limit_per_min
-
-    if verb_cfg.command_template:
-        summary["command_template"] = verb_cfg.command_template
-        if captures:
-            summary["rendered_command"] = _substitute_command_template(
-                verb_cfg.command_template, captures
-            )
-
-    action = (verb_cfg.action or "").strip().lower()
-
-    if action in ("zwingli", "codegen"):
-        profile_name = (verb_cfg.profile or "").strip().lower()
-        profile: TranscriptLLMProfileConfig | None = None
-        if profile_name:
-            profile = commands.llm_profiles.get(profile_name)
-        if profile is None and profile_name:
-            summary["llm_profile_missing"] = profile_name
-        elif profile is not None:
-            user_prompt = args
-            if profile.user_prompt_template:
-                user_prompt = _render_user_prompt_template(
-                    profile.user_prompt_template, text=args, captures=captures
-                )
-            summary["llm_preview"] = {
-                "model": profile.model or "(zwingli default)",
-                "temperature": (
-                    profile.temperature
-                    if profile.temperature is not None
-                    else "(zwingli default)"
-                ),
-                "system_prompt": profile.system_prompt or "(none)",
-                "user_prompt": user_prompt,
-            }
-
-    if action == "shell":
-        cmd = (
-            _substitute_command_template(verb_cfg.command_template, captures)
-            if verb_cfg.command_template and captures
-            else args
-        )
-        summary["would_run_shell"] = cmd
-        if verb_cfg.confirm:
-            summary["would_stash_pending"] = True
-    elif action == "execute":
-        cmd = (
-            _substitute_command_template(verb_cfg.command_template, captures)
-            if verb_cfg.command_template and captures
-            else args
-        )
-        summary["would_type"] = cmd
-        summary["would_press_enter"] = True
-        if verb_cfg.confirm:
-            summary["would_stash_pending"] = True
-
-    return summary
-
-
-def _dry_run_dispatch_step(
-    chunk: str, *, commands: TranscriptCommandsConfig, args_override: str | None = None
-) -> dict[str, Any]:
-    """Trace one dispatch step. ``args_override`` is set for chain steps that
-    pipe the previous step's output in instead of resolving args from the chunk."""
-    step: dict[str, Any] = {"chunk": chunk}
-
-    pattern_result = _find_pattern_match(chunk, commands=commands)
-    if pattern_result is not None:
-        pattern_verb, captures = pattern_result
-        verb_cfg = commands.verbs[pattern_verb]
-        step["resolution"] = "pattern"
-        step["verb"] = pattern_verb
-        step["captures"] = dict(captures)
-        step["args"] = chunk
-        step["verb_config"] = _dry_run_verb_summary(
-            verb_cfg, commands=commands, args=chunk, captures=captures
-        )
-        return step
-
-    if args_override is not None:
-        verb, _ = _resolve_verb_and_args(chunk, commands=commands)
-        resolved_args = args_override
-        step["piped_from_previous"] = True
-    else:
-        verb, resolved_args = _resolve_verb_and_args(chunk, commands=commands)
-
-    step["args"] = resolved_args
-    if not verb:
-        step["resolution"] = "no_verb"
-        step["fallback_action"] = (
-            commands.dispatch.unknown_verb or "strip"
-        ).strip().lower() or "strip"
-        return step
-
-    verb_cfg = commands.verbs.get(verb)
-    if verb_cfg is None:
-        step["resolution"] = "unknown_verb"
-        step["verb"] = verb
-        step["fallback_action"] = (
-            commands.dispatch.unknown_verb or "strip"
-        ).strip().lower() or "strip"
-        return step
-
-    if not bool(verb_cfg.enabled):
-        step["resolution"] = "disabled_verb"
-        step["verb"] = verb
-        step["fallback_action"] = (
-            commands.dispatch.unknown_verb or "strip"
-        ).strip().lower() or "strip"
-        return step
-
-    step["resolution"] = "verb"
-    step["verb"] = verb
-    step["verb_config"] = _dry_run_verb_summary(
-        verb_cfg, commands=commands, args=resolved_args, captures=None
-    )
-    return step
-
-
-def dry_run_dispatch(
-    text: str, *, commands: TranscriptCommandsConfig
-) -> dict[str, Any]:
-    """Walk the trigger/dispatch logic without side effects.
-
-    Returns a structured trace dict suitable for human or JSON output.
-    Does not call action handlers, the LLM, subprocess, the clipboard, the
-    rate-limit windows, or the pending-command store. Useful for the
-    ``voicepipe triggers test`` CLI and for unit tests that want to inspect
-    resolution decisions without executing them.
-    """
-    trace: dict[str, Any] = {"input": text}
-
-    match = match_transcript_trigger(text, triggers=commands.triggers)
-    if match is None:
-        trace["trigger_match"] = None
-        trace["outcome"] = "no_trigger_matched"
-        return trace
-
-    trace["trigger_match"] = {
-        "trigger": match.trigger,
-        "action": match.action,
-        "remainder": match.remainder,
-        "reason": match.reason,
-    }
-
-    if match.action != "dispatch":
-        trace["outcome"] = "trigger_action"
-        trace["trigger_action"] = match.action
-        return trace
-
-    chunks = _split_chain_chunks(match.remainder, commands=commands)
-    trace["chain_length"] = len(chunks)
-
-    steps: list[dict[str, Any]] = []
-    prior_resolved_for_pipe: bool = False
-    for i, chunk in enumerate(chunks):
-        if i == 0:
-            step = _dry_run_dispatch_step(chunk, commands=commands)
-        else:
-            _, split_args = _resolve_verb_and_args(chunk, commands=commands)
-            if split_args.strip():
-                step = _dry_run_dispatch_step(chunk, commands=commands)
-            else:
-                # Verb-only chain step: would receive previous step's output.
-                step = _dry_run_dispatch_step(
-                    chunk,
-                    commands=commands,
-                    args_override="(piped from previous step's output)",
-                )
-                prior_resolved_for_pipe = True
-        step["step_index"] = i
-        steps.append(step)
-    trace["steps"] = steps
-    if prior_resolved_for_pipe:
-        trace["chain_uses_pipe"] = True
-
-    return trace
-
-
-def _maybe_play_audio_feedback(payload: dict[str, Any]) -> None:
-    """Fire the audio cue (if any) for an apply_transcript_triggers payload.
-
-    Best-effort: audio feedback must never block or break the text-output
-    path, so every failure is swallowed silently.
-    """
-    try:
-        from voicepipe import audio_feedback
-
-        event = audio_feedback.event_for_trigger_payload(payload)
-        if event:
-            audio_feedback.play(event)
-    except Exception:
-        pass
-
-
-def apply_transcript_triggers(
-    text: str,
-    *,
-    commands: TranscriptCommandsConfig | None = None,
-    triggers: Mapping[str, str] | None = None,
-) -> tuple[str, dict[str, Any] | None]:
-    """Apply a configured transcript trigger, returning (output_text, metadata).
-
-    If no trigger matches, this returns the original text and `None` metadata.
-    """
-    resolved_triggers: Mapping[str, str]
-    resolved_commands: TranscriptCommandsConfig | None = None
-
-    if commands is not None:
-        resolved_commands = commands
-        resolved_triggers = commands.triggers
-    elif triggers is not None:
-        resolved_triggers = triggers
-    else:
-        # Lightweight hot path: load trigger prefixes only. Full verbs/profiles
-        # config is loaded lazily only if a trigger matches and requests it
-        # (e.g. action=dispatch).
-        resolved_triggers = get_transcript_triggers(load_env=False)
-
-    match = match_transcript_trigger(text, triggers=resolved_triggers)
-    if match is None:
-        return text, None
-
-    _write_zwingli_debug_event(
-        {
-            "event": "trigger_match",
-            "text": (text or ""),
-            "trigger": match.trigger,
-            "action": match.action,
-            "reason": match.reason,
-            "remainder": match.remainder,
-        }
-    )
-
-    if match.action == "dispatch":
-        if resolved_commands is None:
-            if triggers is not None:
-                resolved_commands = _default_commands_for_triggers(resolved_triggers)
-            else:
-                resolved_commands = get_transcript_commands_config(load_env=False)
-
-        try:
-            output_text, meta = _dispatch_prompt(
-                match.remainder,
-                commands=resolved_commands,
-            )
-            payload: dict[str, Any] = {
-                "ok": True,
-                "trigger": match.trigger,
-                "action": match.action,
-                "reason": match.reason,
-            }
-            if meta:
-                payload["meta"] = meta
-            _write_zwingli_debug_event(
-                {
-                    "event": "dispatch_ok",
-                    "trigger": match.trigger,
-                    "reason": match.reason,
-                    "remainder": match.remainder,
-                    "output_text": output_text,
-                    "meta": meta,
-                }
-            )
-            _maybe_play_audio_feedback(payload)
-            return output_text, payload
-        except Exception as e:
-            _write_zwingli_debug_event(
-                {
-                    "event": "dispatch_error",
-                    "trigger": match.trigger,
-                    "reason": match.reason,
-                    "remainder": match.remainder,
-                    "error": str(e),
-                }
-            )
-            error_text, error_meta = _apply_error_destination(
-                str(e), commands=resolved_commands
-            )
-            error_payload = {
-                "ok": False,
-                "trigger": match.trigger,
-                "action": match.action,
-                "reason": match.reason,
-                "error": str(e),
-                "meta": error_meta,
-            }
-            _maybe_play_audio_feedback(error_payload)
-            return error_text, error_payload
-
-    handler = _ACTIONS.get(match.action)
-    if handler is None:
-        _write_zwingli_debug_event(
-            {
-                "event": "action_missing",
-                "trigger": match.trigger,
-                "action": match.action,
-                "reason": match.reason,
-                "remainder": match.remainder,
-            }
-        )
-        error_msg = f"Unknown transcript trigger action: {match.action!r}"
-        error_text, error_meta = _apply_error_destination(error_msg, commands=resolved_commands)
-        error_payload = {
-            "ok": False,
-            "trigger": match.trigger,
-            "action": match.action,
-            "reason": match.reason,
-            "error": error_msg,
-            "meta": error_meta,
-        }
-        _maybe_play_audio_feedback(error_payload)
-        return error_text, error_payload
-
-    try:
-        output_text, meta = handler(match.remainder)
-        payload: dict[str, Any] = {
-            "ok": True,
-            "trigger": match.trigger,
-            "action": match.action,
-            "reason": match.reason,
-        }
-        if meta:
-            payload["meta"] = meta
-        _write_zwingli_debug_event(
-            {
-                "event": "action_ok",
-                "trigger": match.trigger,
-                "action": match.action,
-                "reason": match.reason,
-                "remainder": match.remainder,
-                "output_text": output_text,
-                "meta": meta,
-            }
-        )
-        _maybe_play_audio_feedback(payload)
-        return output_text, payload
-    except Exception as e:
-        _write_zwingli_debug_event(
-            {
-                "event": "action_error",
-                "trigger": match.trigger,
-                "action": match.action,
-                "reason": match.reason,
-                "remainder": match.remainder,
-                "error": str(e),
-            }
-        )
-        error_text, error_meta = _apply_error_destination(str(e), commands=resolved_commands)
-        error_payload = {
-            "ok": False,
-            "trigger": match.trigger,
-            "action": match.action,
-            "reason": match.reason,
-            "error": str(e),
-            "meta": error_meta,
-        }
-        _maybe_play_audio_feedback(error_payload)
-        return error_text, error_payload

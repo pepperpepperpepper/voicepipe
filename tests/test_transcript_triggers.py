@@ -1572,7 +1572,7 @@ def test_shell_with_confirm_stashes_pending_and_does_not_run(pending_in_tmp, mon
         ran.append(args[0] if args else "")
         return "shouldnotrun", "", {}
 
-    monkeypatch.setattr(tt, "_run_shell_command", _fake_run)
+    monkeypatch.setattr(tt._actions, "_run_shell_command", _fake_run)
 
     commands = _confirm_commands(
         {
@@ -1612,7 +1612,7 @@ def test_yes_after_shell_confirm_runs_original(pending_in_tmp, monkeypatch) -> N
         ran.append(command)
         return f"ran:{command}\n", "", {"returncode": 0}
 
-    monkeypatch.setattr(tt, "_run_shell_command", _fake_run)
+    monkeypatch.setattr(tt._actions, "_run_shell_command", _fake_run)
 
     commands = _confirm_commands(
         {
@@ -1656,7 +1656,7 @@ def test_yes_without_pending_returns_friendly_message(pending_in_tmp) -> None:
 
 
 def test_no_cancels_pending(pending_in_tmp, monkeypatch) -> None:
-    monkeypatch.setattr(tt, "_run_shell_command", lambda *a, **k: ("", "", {}))
+    monkeypatch.setattr(tt._actions, "_run_shell_command", lambda *a, **k: ("", "", {}))
 
     commands = _confirm_commands(
         {
@@ -1683,7 +1683,7 @@ def test_no_without_pending_returns_friendly_message(pending_in_tmp) -> None:
 
 
 def test_second_confirm_replaces_first(pending_in_tmp, monkeypatch) -> None:
-    monkeypatch.setattr(tt, "_run_shell_command", lambda *a, **k: ("", "", {}))
+    monkeypatch.setattr(tt._actions, "_run_shell_command", lambda *a, **k: ("", "", {}))
 
     commands = _confirm_commands(
         {

@@ -13,6 +13,7 @@ from .service import service_group
 from .setup import setup
 from .launchd import launchd_group
 from .hotkey import hotkey_group
+from .triggers import triggers_group
 
 
 def register(main: click.Group) -> None:
@@ -24,6 +25,7 @@ def register(main: click.Group) -> None:
     main.add_command(doctor_group)
     main.add_command(doctor_legacy)
     main.add_command(smoke_module.smoke)
+    main.add_command(triggers_group)
 
     main.add_command(start)
     main.add_command(stop)

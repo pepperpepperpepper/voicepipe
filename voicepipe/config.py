@@ -1379,6 +1379,53 @@ def _load_transcript_commands_json(
     return dispatch, dict(verbs), dict(profiles)
 
 
+def validate_triggers_json(
+    *, path: Path | None = None
+) -> tuple[
+    dict[str, str],
+    TranscriptDispatchConfig,
+    dict[str, TranscriptVerbConfig],
+    dict[str, TranscriptLLMProfileConfig],
+]:
+    """Parse a triggers.json file and return everything it defines.
+
+    Bypasses the load cache so callers always see the file as it is on disk.
+    Raises :class:`FileNotFoundError` if the file doesn't exist and
+    :class:`VoicepipeConfigError` on any structural problem.
+
+    Used by the ``triggers validate`` CLI and any future tooling that needs
+    to inspect the live config without invoking the runtime parser path.
+    """
+    config_path = triggers_json_path() if path is None else Path(path)
+    if not config_path.exists():
+        raise FileNotFoundError(f"triggers config not found: {config_path}")
+
+    try:
+        raw = config_path.read_text(encoding="utf-8-sig")
+    except Exception as e:
+        raise VoicepipeConfigError(
+            f"Failed to read triggers config: {config_path} ({e})"
+        ) from e
+
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise VoicepipeConfigError(
+            f"Invalid JSON in triggers config: {config_path} ({e})"
+        ) from e
+
+    if not isinstance(payload, dict):
+        raise VoicepipeConfigError(
+            f"Invalid triggers config: {config_path} must contain a JSON object"
+        )
+
+    triggers = _parse_transcript_triggers_json_obj(payload) or {}
+    dispatch = _parse_transcript_dispatch_json_obj(payload)
+    verbs = _parse_transcript_verbs_json_obj(payload)
+    profiles = _parse_transcript_llm_profiles_json_obj(payload)
+    return triggers, dispatch, verbs, profiles
+
+
 def get_transcript_commands_config(
     *,
     default_triggers: dict[str, str] | None = None,

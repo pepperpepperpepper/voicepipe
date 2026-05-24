@@ -1,25 +1,26 @@
-"""ElevenLabs TTS helper for synthesized-voice round-trip tests.
+"""Cache reader for synthesized-voice test audio.
 
-`synthesize(text)` returns a Path to an MP3 of the spoken phrase. The
-MP3s are content-addressed (hash of text|voice|model) and committed to
-``tests/synth_cache/``, so CI never needs an ElevenLabs key — only the
-developer adding a new test phrase does. On a cache miss without a key,
-synthesize raises with an instructive message.
+`synthesize(text)` returns the path to a committed MP3 in
+``tests/synth_cache/``. There is *no* API fallback — pytest runs are
+guaranteed offline. To add a new test phrase, append a
+``synthesize("...")`` call to a test, then run::
 
-Key resolution order:
-  1. ELEVENLABS_API_KEY / XI_API_KEY environment variable
-  2. ~/.api-keys (supports both `KEY=value` and `export KEY=value` lines)
+    python -m tests.regen_synth
 
-Uses stdlib urllib to avoid adding a test-only dependency.
+…which AST-scans the test files for synthesize() literals and fills
+in any missing cache entries via ElevenLabs TTS (requiring the key
+only at regen time, never at test time).
+
+The cache key is sha1(text|voice|model)[:16], and the filename
+includes a short slug of the phrase so committed files are scrutable
+at a glance.
 """
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 from pathlib import Path
 from typing import Optional
-from urllib import error, request
 
 
 # Rachel — ElevenLabs' standard demo voice. Clean American English, transcribes
@@ -40,7 +41,22 @@ def _cache_key(text: str, voice_id: str, model: str) -> str:
     return h.hexdigest()[:16]
 
 
-def _resolve_api_key() -> Optional[str]:
+def _slugify(text: str, max_len: int = 40) -> str:
+    out = "".join(c if c.isalnum() else "-" for c in text.lower())
+    while "--" in out:
+        out = out.replace("--", "-")
+    return out.strip("-")[:max_len].strip("-")
+
+
+def _cache_path(text: str, voice_id: str, model: str) -> Path:
+    key = _cache_key(text, voice_id, model)
+    return CACHE_DIR / f"{key}-{_slugify(text)}.mp3"
+
+
+def resolve_api_key() -> Optional[str]:
+    """Look up the ElevenLabs API key. Used only by regen_synth, not by
+    synthesize() — but lives here so it's a single source of truth for
+    key resolution policy."""
     for name in ("ELEVENLABS_API_KEY", "XI_API_KEY"):
         val = (os.environ.get(name) or "").strip()
         if val:
@@ -68,75 +84,20 @@ def _resolve_api_key() -> Optional[str]:
     return None
 
 
-def _slugify(text: str, max_len: int = 40) -> str:
-    out = "".join(c if c.isalnum() else "-" for c in text.lower())
-    while "--" in out:
-        out = out.replace("--", "-")
-    return out.strip("-")[:max_len].strip("-")
-
-
 def synthesize(
     text: str,
     *,
     voice_id: str = DEFAULT_VOICE,
     model: str = DEFAULT_MODEL,
 ) -> Path:
-    """Return a cached MP3 path for `text` rendered via ElevenLabs TTS.
-
-    First call hashes (text, voice, model), generates the MP3, caches it
-    under tests/synth_cache, and returns the path. Subsequent calls (or
-    CI runs against a committed cache) skip the API call entirely.
-
-    Raises RuntimeError on a cache miss when no ElevenLabs key is
-    available — the test author should commit the generated MP3.
-    """
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    key = _cache_key(text, voice_id, model)
-    out = CACHE_DIR / f"{key}-{_slugify(text)}.mp3"
-    if out.exists():
-        return out
-
-    api_key = _resolve_api_key()
-    if not api_key:
-        raise RuntimeError(
-            f"No cached synth for {text!r} at {out.name}, and "
-            "ELEVENLABS_API_KEY isn't set (also checked ~/.api-keys). "
-            "Set the key locally, run the test once to generate, then "
-            "commit the resulting MP3."
+    """Return the cached MP3 path for `text`. Raises FileNotFoundError
+    with a clear regen hint if the cache is missing the entry — pytest
+    never calls ElevenLabs."""
+    out = _cache_path(text, voice_id, model)
+    if not out.exists():
+        raise FileNotFoundError(
+            f"No cached synth for {text!r} at {out.name}. "
+            "Run `python -m tests.regen_synth` to populate it "
+            "(needs ELEVENLABS_API_KEY)."
         )
-
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-    body = json.dumps(
-        {
-            "text": text,
-            "model_id": model,
-            "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
-        }
-    ).encode("utf-8")
-    req = request.Request(
-        url,
-        data=body,
-        headers={
-            "xi-api-key": api_key,
-            "Content-Type": "application/json",
-            "Accept": "audio/mpeg",
-        },
-        method="POST",
-    )
-    try:
-        with request.urlopen(req, timeout=60) as resp:
-            audio = resp.read()
-    except error.HTTPError as e:
-        detail = e.read().decode("utf-8", "replace")
-        raise RuntimeError(
-            f"ElevenLabs TTS failed for {text!r} ({e.code}): {detail}"
-        ) from e
-    except error.URLError as e:
-        raise RuntimeError(
-            f"ElevenLabs TTS network error for {text!r}: {e.reason}"
-        ) from e
-
-    if not audio:
-        raise RuntimeError(f"ElevenLabs TTS returned empty audio for {text!r}")
-    out.write_bytes(audio)
     return out

@@ -562,10 +562,15 @@ VOICEPIPE_LIVE_TESTS=1 pytest -q tests/test_live_integration.py
 Synthesized-voice round-trip tests for Zwingli dispatch (`pytest -m synth`):
 the test phrases are rendered to MP3 via ElevenLabs TTS and the audio is
 committed under `tests/synth_cache/` (hash-keyed by text+voice+model).
-Running the existing tests only needs `OPENAI_API_KEY` (for STT) —
-ElevenLabs is never called when the cache hits. Adding a *new* test
-phrase requires `ELEVENLABS_API_KEY` (read from env or `~/.api-keys`)
-one time to generate the MP3; commit that file alongside the new test.
+**pytest never calls ElevenLabs** — `synthesize()` is a pure cache reader
+that raises if an MP3 is missing. Running the tests only needs
+`OPENAI_API_KEY` (for STT). To add a *new* test phrase, write the
+`synthesize("...")` call into a test, then run once:
+```bash
+python -m tests.regen_synth   # AST-scans for new phrases, fills the cache
+```
+This needs `ELEVENLABS_API_KEY` (env or `~/.api-keys`). Commit the new
+MP3 alongside your test change.
 
 ## License
 

@@ -882,6 +882,7 @@ class TranscriptVerbConfig:
     command_template: str | None = None
     confirm: bool = False
     confirm_timeout_seconds: float | None = None
+    interpreter: str | None = None
 
 
 @dataclass(frozen=True)
@@ -976,6 +977,7 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
         command_template: str | None = None
         confirm: bool = False
         confirm_timeout_seconds: float | None = None
+        interpreter: str | None = None
         if isinstance(raw_value, str):
             action = raw_value
             enabled = True
@@ -988,7 +990,7 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
             if not verb_type:
                 verb_type = "action"
 
-            default_enabled = False if verb_type in ("shell", "execute", "plugin") else True
+            default_enabled = False if verb_type in ("shell", "execute", "plugin", "codegen") else True
             enabled_value = raw_value.get("enabled", default_enabled)
             if not isinstance(enabled_value, bool):
                 raise VoicepipeConfigError(
@@ -1071,6 +1073,21 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
                 if template_clean:
                     command_template = template_clean
 
+            raw_interpreter = raw_value.get("interpreter")
+            if raw_interpreter is not None:
+                if not isinstance(raw_interpreter, str):
+                    raise VoicepipeConfigError(
+                        f"Invalid triggers.json: verb {raw_verb!r} 'interpreter' must be a string"
+                    )
+                interp_clean = raw_interpreter.strip()
+                if interp_clean:
+                    interpreter = interp_clean
+
+            if verb_type == "codegen" and not interpreter:
+                raise VoicepipeConfigError(
+                    f"Invalid triggers.json: verb {raw_verb!r} of type 'codegen' must set 'interpreter' (non-empty string)"
+                )
+
             if verb_type == "plugin":
                 raw_plugin = raw_value.get("plugin")
                 if not isinstance(raw_plugin, dict):
@@ -1105,6 +1122,8 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
             action: str
             if verb_type == "plugin":
                 action = "plugin"
+            elif verb_type == "codegen":
+                action = "codegen"
             elif isinstance(raw_action, str) and raw_action.strip():
                 action = raw_action
             elif verb_type == "builtin":
@@ -1138,6 +1157,7 @@ def _parse_transcript_verbs_json_obj(obj: dict[str, Any]) -> dict[str, Transcrip
             command_template=command_template,
             confirm=confirm,
             confirm_timeout_seconds=confirm_timeout_seconds,
+            interpreter=interpreter,
         )
 
     if "help" not in out:

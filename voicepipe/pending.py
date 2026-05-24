@@ -25,10 +25,11 @@ _FILENAME = "pending-command.json"
 @dataclass(frozen=True)
 class PendingCommand:
     verb: str
-    verb_type: str  # "shell" or "execute"
+    verb_type: str  # "shell", "execute", or "script"
     command: str
     created_at: float
     expires_at: float
+    interpreter: Optional[str] = None  # set for verb_type="script"
 
     def expired(self, *, now: Optional[float] = None) -> bool:
         return float(now if now is not None else time.time()) >= self.expires_at
@@ -70,12 +71,15 @@ def load_pending(*, now: Optional[float] = None) -> Optional[PendingCommand]:
         clear_pending()
         return None
     try:
+        raw_interpreter = raw.get("interpreter") if isinstance(raw, dict) else None
+        interpreter = str(raw_interpreter) if raw_interpreter else None
         pending = PendingCommand(
             verb=str(raw["verb"]),
             verb_type=str(raw["verb_type"]),
             command=str(raw["command"]),
             created_at=float(raw["created_at"]),
             expires_at=float(raw["expires_at"]),
+            interpreter=interpreter,
         )
     except (KeyError, TypeError, ValueError):
         clear_pending()
@@ -101,6 +105,7 @@ def make_pending(
     command: str,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     now: Optional[float] = None,
+    interpreter: Optional[str] = None,
 ) -> PendingCommand:
     created = float(now if now is not None else time.time())
     return PendingCommand(
@@ -109,4 +114,5 @@ def make_pending(
         command=command,
         created_at=created,
         expires_at=created + float(timeout_seconds),
+        interpreter=interpreter,
     )

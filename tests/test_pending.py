@@ -83,3 +83,19 @@ def test_save_pending_overwrites_prior(pending_in_tmp: Path) -> None:
     assert loaded.verb == "y"
     assert loaded.verb_type == "execute"
     assert loaded.command == "echo hi"
+
+
+def test_pending_with_interpreter_roundtrips(pending_in_tmp: Path) -> None:
+    entry = pending_mod.make_pending(
+        verb="pyrun",
+        verb_type="script",
+        command="print('hi')",
+        timeout_seconds=30,
+        interpreter="python3",
+    )
+    pending_mod.save_pending(entry)
+    loaded = pending_mod.load_pending()
+    assert loaded is not None
+    assert loaded.verb_type == "script"
+    assert loaded.interpreter == "python3"
+    assert loaded.command == "print('hi')"

@@ -1756,3 +1756,266 @@ def test_confirm_field_rejects_non_bool(tmp_path, monkeypatch) -> None:
     with pytest.raises(cfg.VoicepipeConfigError) as exc_info:
         cfg._load_transcript_commands_json()
     assert "confirm" in str(exc_info.value)
+
+
+# ---------- Codegen verb (LLM-generated script run by an interpreter) ----------
+
+
+def _codegen_commands(
+    verb_name: str,
+    verb_cfg: config.TranscriptVerbConfig,
+    *,
+    profile: config.TranscriptLLMProfileConfig | None = None,
+) -> config.TranscriptCommandsConfig:
+    profiles: dict[str, config.TranscriptLLMProfileConfig] = {}
+    if profile is not None and verb_cfg.profile:
+        profiles[verb_cfg.profile] = profile
+    return config.TranscriptCommandsConfig(
+        triggers={"zwingli": "dispatch"},
+        dispatch=config.TranscriptDispatchConfig(unknown_verb="strip"),
+        verbs={
+            verb_name: verb_cfg,
+            "yes": config.TranscriptVerbConfig(action="yes", enabled=True, type="builtin"),
+            "no": config.TranscriptVerbConfig(action="no", enabled=True, type="builtin"),
+        },
+        llm_profiles=profiles,
+    )
+
+
+def test_codegen_calls_llm_then_runs_interpreter_on_tempfile(monkeypatch) -> None:
+    monkeypatch.setenv("VOICEPIPE_SHELL_ALLOW", "1")
+
+    import voicepipe.zwingli as zwingli
+
+    def _fake_process(prompt: str, **kwargs):
+        return "print('hi')\n", {"backend": "fake", "model": kwargs.get("model")}
+
+    monkeypatch.setattr(zwingli, "process_zwingli_prompt_result", _fake_process)
+
+    captured: dict = {}
+
+    def _fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        from pathlib import Path
+
+        captured["script"] = Path(argv[1]).read_text(encoding="utf-8")
+        return subprocess.CompletedProcess(
+            args=argv, returncode=0, stdout="hi\n", stderr=""
+        )
+
+    monkeypatch.setattr(tt.subprocess, "run", _fake_run)
+
+    commands = _codegen_commands(
+        "pyrun",
+        config.TranscriptVerbConfig(
+            action="codegen",
+            enabled=True,
+            type="codegen",
+            profile="pyscript",
+            interpreter="python3",
+        ),
+        profile=config.TranscriptLLMProfileConfig(
+            system_prompt="Write a Python script. Output only code.",
+            user_prompt_template="Write a Python script for: {{text}}",
+        ),
+    )
+
+    out, meta = tt.apply_transcript_triggers(
+        "zwingli pyrun say hi to the user", commands=commands
+    )
+    assert out == "hi"
+    assert meta["ok"] is True
+    handler_meta = meta["meta"]["handler_meta"]
+    assert handler_meta["interpreter"] == "python3"
+    assert handler_meta["returncode"] == 0
+    assert handler_meta["generated_script"] == "print('hi')"
+    assert captured["argv"][0] == "python3"
+    assert captured["script"] == "print('hi')"
+
+
+def test_codegen_strips_markdown_fences_from_llm_output(monkeypatch) -> None:
+    monkeypatch.setenv("VOICEPIPE_SHELL_ALLOW", "1")
+
+    import voicepipe.zwingli as zwingli
+
+    fenced = "```python\nprint('hi')\n```"
+    monkeypatch.setattr(
+        zwingli,
+        "process_zwingli_prompt_result",
+        lambda prompt, **kw: (fenced, {}),
+    )
+
+    captured: dict = {}
+
+    def _fake_run(argv, **kwargs):
+        from pathlib import Path
+
+        captured["script"] = Path(argv[1]).read_text(encoding="utf-8")
+        return subprocess.CompletedProcess(args=argv, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(tt.subprocess, "run", _fake_run)
+
+    commands = _codegen_commands(
+        "pyrun",
+        config.TranscriptVerbConfig(
+            action="codegen",
+            enabled=True,
+            type="codegen",
+            interpreter="python3",
+        ),
+    )
+    tt.apply_transcript_triggers("zwingli pyrun anything", commands=commands)
+    assert captured["script"] == "print('hi')"
+
+
+def test_codegen_blocked_when_shell_not_allowed(monkeypatch) -> None:
+    monkeypatch.delenv("VOICEPIPE_SHELL_ALLOW", raising=False)
+
+    import voicepipe.zwingli as zwingli
+
+    monkeypatch.setattr(
+        zwingli,
+        "process_zwingli_prompt_result",
+        lambda prompt, **kw: ("print('hi')", {}),
+    )
+
+    commands = _codegen_commands(
+        "pyrun",
+        config.TranscriptVerbConfig(
+            action="codegen",
+            enabled=True,
+            type="codegen",
+            interpreter="python3",
+        ),
+    )
+    out, meta = tt.apply_transcript_triggers("zwingli pyrun do it", commands=commands)
+    assert meta["ok"] is False
+    assert "Codegen execution is disabled" in (meta.get("error") or "")
+    assert out.startswith("⚠ zwingli")
+
+
+def test_codegen_with_confirm_stashes_generated_script_then_yes_runs_it(
+    pending_in_tmp, monkeypatch
+) -> None:
+    monkeypatch.setenv("VOICEPIPE_SHELL_ALLOW", "1")
+
+    import voicepipe.zwingli as zwingli
+
+    monkeypatch.setattr(
+        zwingli,
+        "process_zwingli_prompt_result",
+        lambda prompt, **kw: ("print('hello')", {}),
+    )
+
+    runs: list[list[str]] = []
+
+    def _fake_run(argv, **kwargs):
+        from pathlib import Path
+
+        runs.append([argv[0], Path(argv[1]).read_text(encoding="utf-8")])
+        return subprocess.CompletedProcess(
+            args=argv, returncode=0, stdout="hello\n", stderr=""
+        )
+
+    monkeypatch.setattr(tt.subprocess, "run", _fake_run)
+
+    commands = _codegen_commands(
+        "pyrun",
+        config.TranscriptVerbConfig(
+            action="codegen",
+            enabled=True,
+            type="codegen",
+            interpreter="python3",
+            confirm=True,
+        ),
+    )
+
+    out, meta = tt.apply_transcript_triggers(
+        "zwingli pyrun greet the user", commands=commands
+    )
+    assert "Pending python3 script" in out
+    assert "print('hello')" in out
+    assert runs == []
+    assert pending_in_tmp.exists()
+
+    import voicepipe.pending as pending_mod
+
+    entry = pending_mod.load_pending()
+    assert entry is not None
+    assert entry.verb_type == "script"
+    assert entry.interpreter == "python3"
+    assert entry.command == "print('hello')"
+
+    out2, meta2 = tt.apply_transcript_triggers("zwingli yes", commands=commands)
+    assert out2 == "hello"
+    assert runs == [["python3", "print('hello')"]]
+    handler_meta = meta2["meta"]["handler_meta"]
+    assert handler_meta["resumed_pending"] is True
+    assert handler_meta["interpreter"] == "python3"
+    assert not pending_in_tmp.exists()
+
+
+def test_codegen_config_requires_interpreter(tmp_path, monkeypatch) -> None:
+    import json
+
+    import voicepipe.config as cfg
+
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = cfg.config_dir(create=True) / "triggers.json"
+    triggers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "verbs": {
+                    "pyrun": {"type": "codegen", "enabled": True},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg.invalidate_transcript_commands_cache()
+    with pytest.raises(cfg.VoicepipeConfigError) as exc_info:
+        cfg._load_transcript_commands_json()
+    assert "interpreter" in str(exc_info.value)
+
+
+def test_codegen_config_accepts_interpreter(tmp_path, monkeypatch) -> None:
+    import json
+
+    import voicepipe.config as cfg
+
+    monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+
+    triggers_path = cfg.config_dir(create=True) / "triggers.json"
+    triggers_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "verbs": {
+                    "pyrun": {
+                        "type": "codegen",
+                        "enabled": True,
+                        "interpreter": "python3",
+                        "profile": "pyscript",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg.invalidate_transcript_commands_cache()
+    loaded = cfg.get_transcript_commands_config(load_env=False)
+    pyrun = loaded.verbs["pyrun"]
+    assert pyrun.action == "codegen"
+    assert pyrun.interpreter == "python3"
+    assert pyrun.profile == "pyscript"
+    assert pyrun.enabled is True

@@ -704,30 +704,32 @@ def test_log_follow_help_lists_flag(runner) -> None:
     assert "-f" in result.output
 
 
-def test_log_follow_with_no_events_says_waiting(runner, tmp_path: Path) -> None:
+@pytest.mark.timeout(10)
+def test_log_follow_with_no_events_says_waiting(
+    runner, tmp_path: Path, monkeypatch
+) -> None:
+    # Swap the follow generator for an immediate-empty one so we exercise
+    # the "(no events yet … waiting …)" branch without actually entering
+    # the poll loop. Earlier this test used _thread.interrupt_main() to
+    # break out of the real loop, which hung indefinitely on Windows
+    # under click's CliRunner — the cross-platform-safe equivalent is to
+    # monkeypatch the loop away.
     log = tmp_path / "z.log"
     log.write_text("", encoding="utf-8")
-    # Provide stdin EOF so any blocking reads exit promptly. The follow loop
-    # blocks on its own; we need to bail out via _iter_follow_log which is
-    # tested directly. Here we only verify the pre-follow waiting message.
-    # To stop the follow loop, simulate a keyboard interrupt.
-    import threading
-    import _thread
 
-    def interrupt_after():
-        # Give the command time to print the waiting message and enter the
-        # follow loop, then trip a KeyboardInterrupt to exit it.
-        import time
-        time.sleep(0.2)
-        _thread.interrupt_main()
+    def _noop_follow(_path, *, poll_seconds=0.5):
+        return iter(())
 
-    t = threading.Thread(target=interrupt_after, daemon=True)
-    t.start()
+    monkeypatch.setattr(
+        "voicepipe.commands.triggers._iter_follow_log", _noop_follow
+    )
+
     result = runner.invoke(main, ["triggers", "log", "--follow", "--path", str(log)])
     assert result.exit_code == 0, result.output
     assert "waiting" in result.output
 
 
+@pytest.mark.timeout(10)
 def test_iter_follow_log_yields_new_appended_lines(tmp_path: Path) -> None:
     from voicepipe.commands.triggers import _iter_follow_log
     import threading
@@ -754,6 +756,7 @@ def test_iter_follow_log_yields_new_appended_lines(tmp_path: Path) -> None:
     assert second == "second line"
 
 
+@pytest.mark.timeout(10)
 def test_iter_follow_log_buffers_partial_line_until_newline(tmp_path: Path) -> None:
     from voicepipe.commands.triggers import _iter_follow_log
     import threading
@@ -782,6 +785,7 @@ def test_iter_follow_log_buffers_partial_line_until_newline(tmp_path: Path) -> N
     assert line == "hello"
 
 
+@pytest.mark.timeout(10)
 def test_iter_follow_log_handles_rotation(tmp_path: Path) -> None:
     from voicepipe.commands.triggers import _iter_follow_log
     import threading

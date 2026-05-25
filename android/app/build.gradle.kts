@@ -17,6 +17,42 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    val releaseSigning = run {
+        val keystorePath = (project.findProperty("zwangliKeystorePath") as String?)
+            ?: System.getenv("ZWANGLI_KEYSTORE_PATH")
+        val storePass = (project.findProperty("zwangliKeystorePassword") as String?)
+            ?: System.getenv("ZWANGLI_KEYSTORE_PASSWORD")
+        val alias = (project.findProperty("zwangliKeyAlias") as String?)
+            ?: System.getenv("ZWANGLI_KEY_ALIAS")
+        val keyPass = (project.findProperty("zwangliKeyPassword") as String?)
+            ?: System.getenv("ZWANGLI_KEY_PASSWORD")
+        if (
+            !keystorePath.isNullOrBlank() &&
+            !storePass.isNullOrBlank() &&
+            !alias.isNullOrBlank() &&
+            !keyPass.isNullOrBlank() &&
+            file(keystorePath).exists()
+        ) {
+            mapOf(
+                "path" to keystorePath,
+                "storePass" to storePass,
+                "alias" to alias,
+                "keyPass" to keyPass,
+            )
+        } else null
+    }
+
+    signingConfigs {
+        releaseSigning?.let { conf ->
+            create("release") {
+                storeFile = file(conf.getValue("path"))
+                storePassword = conf.getValue("storePass")
+                keyAlias = conf.getValue("alias")
+                keyPassword = conf.getValue("keyPass")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -24,6 +60,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 

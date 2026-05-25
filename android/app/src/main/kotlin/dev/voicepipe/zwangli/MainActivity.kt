@@ -37,6 +37,7 @@ class MainActivity : AppCompatActivity() {
 
     private var speech: SpeechRecognitionController? = null
     private var pendingAutoListen: Boolean = false
+    private lateinit var executor: ClientActionExecutor
 
     private val requestMicPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -53,6 +54,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         settings = Settings.from(this)
+        executor = ClientActionExecutor(applicationContext)
         accessibilityStatus = findViewById(R.id.accessibility_status)
         openAccessibilitySettings = findViewById(R.id.open_accessibility_settings)
         serverUrl = findViewById(R.id.server_url)
@@ -225,7 +227,10 @@ class MainActivity : AppCompatActivity() {
                     client.dispatch(
                         normalizedUrl,
                         bearer,
-                        DispatchRequest(transcript = text),
+                        DispatchRequest(
+                            transcript = text,
+                            capabilities = ClientActions.CAPABILITIES,
+                        ),
                     )
                 }
             }.fold(
@@ -239,12 +244,19 @@ class MainActivity : AppCompatActivity() {
 
     private fun renderSuccess(resp: DispatchResponse): String {
         val typingResult = tryTypeOutput(resp.outputText)
+        val summary = executor.execute(resp.clientActions)
         return buildString {
             append("ok=").append(resp.ok).append('\n')
             append("output_text=").append(resp.outputText).append('\n')
             append(typingResult).append('\n')
             if (resp.clientActions.isNotEmpty()) {
                 append("client_actions=").append(resp.clientActions).append('\n')
+                append("applied: clipboard=").append(summary.clipboardApplied)
+                    .append(" feedback=").append(summary.feedbackPlayed)
+                if (summary.unknownSkipped > 0) {
+                    append(" unknown=").append(summary.unknownSkipped)
+                }
+                append('\n')
             }
             resp.payload?.let { append("payload=").append(it).append('\n') }
         }

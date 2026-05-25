@@ -124,5 +124,18 @@ tunnel like `cloudflared`).
   `EXTRA_AUTO_LISTEN=true`, which triggers the mic flow on resume.
   A "Start on boot" checkbox in Settings re-arms the service after
   reboot via `BootReceiver`.
-- **3e** — Execute `client_actions[]` (clipboard, audio feedback) +
-  F-Droid release
+- **3e** ✅ — Executes `client_actions[]` (clipboard via
+  `ClipboardManager`, audio feedback via `MediaPlayer` from
+  `res/raw/*.ogg`). Capabilities `["clipboard", "audio_feedback"]`
+  are advertised in every `/dispatch` request. Release signingConfig
+  reads `ZWANGLI_KEYSTORE_*` from gradle properties or env; falls
+  back to an unsigned release APK when unset. **F-Droid publish is
+  not yet wired** — it touches the central keystore + S3 +
+  CloudFront, so it stays a manual user-authorized step.
+
+## Bundled audio
+
+`res/raw/{success,error,match}.ogg` ship as **0.4-second silent
+placeholders** so the dispatch pipeline can be exercised end-to-end.
+Replace with real CC0 sounds (freesound.org or similar) before any
+public release.

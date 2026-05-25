@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Zwangli</string>
+    <string name="hint_server_url">Server URL</string>
+    <string name="hint_token">Bearer token (optional)</string>
+    <string name="hint_transcript">Transcript</string>
+    <string name="action_send">Send</string>
+    <string name="default_server_url">http://localhost:8765</string>
+    <string name="default_transcript">zwingli strip hello</string>
+    <string name="response_placeholder">Response will appear here.</string>
+</resources>

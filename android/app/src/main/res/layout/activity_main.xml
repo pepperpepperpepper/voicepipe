@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <EditText
+            android:id="@+id/server_url"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:autofillHints="url"
+            android:hint="@string/hint_server_url"
+            android:inputType="textUri"
+            android:text="@string/default_server_url" />
+
+        <EditText
+            android:id="@+id/token"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:autofillHints="password"
+            android:hint="@string/hint_token"
+            android:inputType="textPassword" />
+
+        <EditText
+            android:id="@+id/transcript"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:autofillHints="no"
+            android:hint="@string/hint_transcript"
+            android:inputType="text"
+            android:text="@string/default_transcript" />
+
+        <Button
+            android:id="@+id/send"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/action_send" />
+
+        <TextView
+            android:id="@+id/response"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:fontFamily="monospace"
+            android:text="@string/response_placeholder"
+            android:textIsSelectable="true" />
+
+    </LinearLayout>
+
+</ScrollView>

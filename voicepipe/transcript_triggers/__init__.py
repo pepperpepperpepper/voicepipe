@@ -42,6 +42,15 @@ from ._dry_run import dry_run_dispatch
 # Internal symbols re-exported for tests/CLI that reach for them by name.
 # Keep this list in sync with what's referenced via `tt.<name>` in tests.
 from ._actions import _ACTIONS
+from ._actuator import (
+    Actuator,
+    ActuatorCapabilityError,
+    DesktopActuator,
+    InMemoryActuator,
+    SubprocessResult,
+    get_default_actuator,
+    resolve_actuator,
+)
 from ._shell import _run_shell_command, subprocess  # subprocess for tt.subprocess.run patches
 from ._type import _action_type
 from ._template import (
@@ -67,21 +76,33 @@ __all__ = [
     "match_transcript_trigger",
     "dry_run_dispatch",
     "apply_transcript_triggers",
+    "Actuator",
+    "ActuatorCapabilityError",
+    "DesktopActuator",
+    "InMemoryActuator",
+    "SubprocessResult",
+    "get_default_actuator",
 ]
 
 
-def _maybe_play_audio_feedback(payload: dict[str, Any]) -> None:
+def _maybe_play_audio_feedback(payload: dict[str, Any], *, actuator: Actuator) -> None:
     """Fire the audio cue (if any) for an apply_transcript_triggers payload.
 
     Best-effort: audio feedback must never block or break the text-output
-    path, so every failure is swallowed silently.
+    path, so every failure is swallowed silently. The actuator decides
+    whether it can actually play; we skip the lookup entirely if the
+    capability is absent.
     """
+    from ._actuator import CAP_AUDIO_FEEDBACK
+
+    if CAP_AUDIO_FEEDBACK not in actuator.capabilities():
+        return
     try:
         from voicepipe import audio_feedback
 
         event = audio_feedback.event_for_trigger_payload(payload)
         if event:
-            audio_feedback.play(event)
+            actuator.play_feedback(event)
     except Exception:
         pass
 
@@ -91,11 +112,19 @@ def apply_transcript_triggers(
     *,
     commands: TranscriptCommandsConfig | None = None,
     triggers: Mapping[str, str] | None = None,
+    actuator: Actuator | None = None,
 ) -> tuple[str, dict[str, Any] | None]:
     """Apply a configured transcript trigger, returning (output_text, metadata).
 
     If no trigger matches, this returns the original text and `None` metadata.
+
+    Pass ``actuator=`` to swap the OS-touching boundary (subprocess,
+    clipboard, audio feedback). Defaults to the process-wide
+    :class:`DesktopActuator` singleton, preserving prior behaviour for
+    every existing call site.
     """
+    act = resolve_actuator(actuator)
+
     resolved_triggers: Mapping[str, str]
     resolved_commands: TranscriptCommandsConfig | None = None
 
@@ -136,6 +165,7 @@ def apply_transcript_triggers(
             output_text, meta = _dispatch_prompt(
                 match.remainder,
                 commands=resolved_commands,
+                actuator=act,
             )
             payload: dict[str, Any] = {
                 "ok": True,
@@ -155,7 +185,7 @@ def apply_transcript_triggers(
                     "meta": meta,
                 }
             )
-            _maybe_play_audio_feedback(payload)
+            _maybe_play_audio_feedback(payload, actuator=act)
             return output_text, payload
         except Exception as e:
             _write_zwingli_debug_event(
@@ -168,7 +198,7 @@ def apply_transcript_triggers(
                 }
             )
             error_text, error_meta = _apply_error_destination(
-                str(e), commands=resolved_commands
+                str(e), commands=resolved_commands, actuator=act
             )
             error_payload = {
                 "ok": False,
@@ -178,7 +208,7 @@ def apply_transcript_triggers(
                 "error": str(e),
                 "meta": error_meta,
             }
-            _maybe_play_audio_feedback(error_payload)
+            _maybe_play_audio_feedback(error_payload, actuator=act)
             return error_text, error_payload
 
     handler = _ACTIONS.get(match.action)
@@ -193,7 +223,9 @@ def apply_transcript_triggers(
             }
         )
         error_msg = f"Unknown transcript trigger action: {match.action!r}"
-        error_text, error_meta = _apply_error_destination(error_msg, commands=resolved_commands)
+        error_text, error_meta = _apply_error_destination(
+            error_msg, commands=resolved_commands, actuator=act
+        )
         error_payload = {
             "ok": False,
             "trigger": match.trigger,
@@ -202,10 +234,15 @@ def apply_transcript_triggers(
             "error": error_msg,
             "meta": error_meta,
         }
-        _maybe_play_audio_feedback(error_payload)
+        _maybe_play_audio_feedback(error_payload, actuator=act)
         return error_text, error_payload
 
     try:
+        # Non-dispatch action: call with just the remainder. Tests stub these
+        # handlers with single-arg signatures; threading the actuator here
+        # would force every fake to accept it. Handlers that need OS access
+        # (shell/codegen) are only reached through the dispatch verb pipeline,
+        # which forwards `actuator` explicitly.
         output_text, meta = handler(match.remainder)
         payload: dict[str, Any] = {
             "ok": True,
@@ -226,7 +263,7 @@ def apply_transcript_triggers(
                 "meta": meta,
             }
         )
-        _maybe_play_audio_feedback(payload)
+        _maybe_play_audio_feedback(payload, actuator=act)
         return output_text, payload
     except Exception as e:
         _write_zwingli_debug_event(
@@ -239,7 +276,9 @@ def apply_transcript_triggers(
                 "error": str(e),
             }
         )
-        error_text, error_meta = _apply_error_destination(str(e), commands=resolved_commands)
+        error_text, error_meta = _apply_error_destination(
+            str(e), commands=resolved_commands, actuator=act
+        )
         error_payload = {
             "ok": False,
             "trigger": match.trigger,
@@ -248,5 +287,5 @@ def apply_transcript_triggers(
             "error": str(e),
             "meta": error_meta,
         }
-        _maybe_play_audio_feedback(error_payload)
+        _maybe_play_audio_feedback(error_payload, actuator=act)
         return error_text, error_payload

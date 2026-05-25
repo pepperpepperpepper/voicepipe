@@ -24,6 +24,8 @@ from voicepipe.config import (
     TranscriptVerbConfig,
 )
 
+from ._actuator import Actuator
+
 
 _PLUGIN_PATH_CACHE: dict[str, tuple[int, Callable[[str], object]]] = {}
 _PLUGIN_MODULE_CACHE: dict[tuple[str, str], Callable[[str], object]] = {}
@@ -125,8 +127,9 @@ def _action_plugin(
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
     captures: Mapping[str, str] | None = None,
     commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    del profiles, captures, commands
+    del profiles, captures, commands, actuator
     cleaned = (prompt or "").strip()
     plugin = getattr(verb_cfg, "plugin", None) if verb_cfg else None
     if plugin is None:

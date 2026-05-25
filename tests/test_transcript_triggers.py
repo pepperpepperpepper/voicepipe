@@ -772,7 +772,15 @@ def test_apply_transcript_triggers_chain_step_with_explicit_args_ignores_pipe(
 ) -> None:
     seen_inputs: list[str] = []
 
-    def _spy_strip(prompt, *, verb_cfg=None, profiles=None, captures=None, commands=None):
+    def _spy_strip(
+        prompt,
+        *,
+        verb_cfg=None,
+        profiles=None,
+        captures=None,
+        commands=None,
+        actuator=None,
+    ):
         seen_inputs.append(prompt)
         return (prompt or "").strip(), {}
 
@@ -1608,7 +1616,7 @@ def test_execute_with_confirm_stashes_pending_and_skips_enter(pending_in_tmp) ->
 def test_yes_after_shell_confirm_runs_original(pending_in_tmp, monkeypatch) -> None:
     ran: list[str] = []
 
-    def _fake_run(command, *, timeout_seconds=None):
+    def _fake_run(command, *, timeout_seconds=None, actuator=None):
         ran.append(command)
         return f"ran:{command}\n", "", {"returncode": 0}
 

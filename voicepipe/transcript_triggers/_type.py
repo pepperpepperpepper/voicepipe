@@ -18,6 +18,8 @@ from voicepipe.config import (
     TranscriptVerbConfig,
 )
 
+from ._actuator import Actuator
+
 
 _TYPE_TOKEN_TRANSLATION = str.maketrans(
     {
@@ -220,6 +222,7 @@ def _action_type(
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
     captures: Mapping[str, str] | None = None,
     commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Type a sequence of keypresses and/or literal words.
 
@@ -228,7 +231,7 @@ def _action_type(
       - "up arrow up arrow"
       - "control b d"
     """
-    del verb_cfg, profiles, captures, commands
+    del verb_cfg, profiles, captures, commands, actuator
     tokens = _tokenize_type_prompt(prompt)
     sequence: list[dict[str, Any]] = []
     pending_mods: list[str] = []

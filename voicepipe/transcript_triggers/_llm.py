@@ -14,6 +14,7 @@ from voicepipe.config import (
     TranscriptVerbConfig,
 )
 
+from ._actuator import Actuator
 from ._template import _render_user_prompt_template
 
 
@@ -65,8 +66,9 @@ def _action_zwingli(
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
     captures: Mapping[str, str] | None = None,
     commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    del commands
+    del commands, actuator
 
     profile_name = ""
     if verb_cfg is not None:

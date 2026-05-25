@@ -1,0 +1,57 @@
+# F-Droid metadata template for Zwangli.
+#
+# On the first release, copy this file to
+#   /mnt/subtitled/fdroid/metadata/dev.voicepipe.zwangli.yml
+# and tweak fields if needed. Subsequent releases do NOT need to
+# re-copy — /mnt/subtitled/fdroid/publish-live.sh rewrites
+# CurrentVersion / CurrentVersionCode automatically from the APK
+# manifest each time.
+#
+# Publish flow (once this file is in place):
+#   android/scripts/release.sh
+#   /mnt/subtitled/fdroid/publish-live.sh --dry-run \
+#       android/app/build/outputs/apk/release/app-release-unsigned.apk \
+#       dev.voicepipe.zwangli
+#   /mnt/subtitled/fdroid/publish-live.sh \
+#       android/app/build/outputs/apk/release/app-release-unsigned.apk \
+#       dev.voicepipe.zwangli
+#
+# Signing is handled centrally by the F-Droid repo's keystore at
+# publish time; Zwangli does NOT ship its own keystore.
+
+Categories:
+  - Phone & SMS
+  - System
+License: MIT
+WebSite: https://github.com/pepperpepperpepper/voicepipe
+SourceCode: https://github.com/pepperpepperpepper/voicepipe
+IssueTracker: https://github.com/pepperpepperpepper/voicepipe/issues
+Name: Zwangli
+Summary: Voice-driven Android client for a voicepipe dispatch server.
+Description: |
+  Zwangli is the Android sibling of desktop Zwingli — a thin Kotlin
+  client that POSTs a transcript to a voicepipe dispatch server and
+  acts on the response in your focused app.
+
+  - Thin client to a self-hosted voicepipe dispatch server; all
+    transcript-trigger logic lives server-side, the phone just
+    speaks and acts.
+  - On-device speech recognition (Android's SpeechRecognizer) drives
+    a mic button with live partial results and auto-submit on final
+    transcript.
+  - Accessibility service types the dispatch response straight into
+    whatever app currently has focus — no copy/paste shuffle.
+  - Persistent dictation notification with a "Dictate" quick-action
+    so you can start a recording without first opening the app;
+    optional auto-start on boot.
+  - Executes the server's queued client_actions[]: clipboard writes
+    via ClipboardManager, audio feedback via short bundled tones.
+    Capabilities ["clipboard", "audio_feedback"] are advertised in
+    every request so the server degrades gracefully on older
+    clients.
+AuthorName: voicepipe
+AutoUpdateMode: None
+UpdateCheckMode: None
+CurrentVersion: 0.1.0
+CurrentVersionCode: 1
+Builds: []

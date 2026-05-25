@@ -133,6 +133,43 @@ tunnel like `cloudflared`).
   not yet wired** — it touches the central keystore + S3 +
   CloudFront, so it stays a manual user-authorized step.
 
+## Release flow
+
+Three steps to publish a new Zwangli release to
+[fdroid.uh-oh.wtf](https://fdroid.uh-oh.wtf/repo). The central F-Droid
+keystore signs the APK at publish time — Zwangli does **not** ship its
+own keystore.
+
+1. **Build the unsigned release APK.**
+   ```bash
+   android/scripts/release.sh
+   # → android/app/build/outputs/apk/release/app-release-unsigned.apk
+   ```
+   `--dry-run` prints what would run without invoking Gradle.
+
+2. **First release only:** copy the metadata template into the F-Droid
+   repo (and edit if needed — `Summary`, `Description`, etc.):
+   ```bash
+   cp android/fdroid-metadata-template.yml \
+      /mnt/subtitled/fdroid/metadata/dev.voicepipe.zwangli.yml
+   ```
+   Later releases skip this step — `publish-live.sh` rewrites
+   `CurrentVersion` / `CurrentVersionCode` from the APK manifest each
+   time.
+
+3. **Publish.** Verify with `--dry-run` first, then run for real:
+   ```bash
+   /mnt/subtitled/fdroid/publish-live.sh --dry-run \
+       android/app/build/outputs/apk/release/app-release-unsigned.apk \
+       dev.voicepipe.zwangli
+
+   /mnt/subtitled/fdroid/publish-live.sh \
+       android/app/build/outputs/apk/release/app-release-unsigned.apk \
+       dev.voicepipe.zwangli
+   ```
+   Requires the `FDROID_AWS_*` and `FDROID_KEYSTORE_PASS` /
+   `FDROID_KEY_PASS` env vars from `~/.api-keys`.
+
 ## Bundled audio
 
 `res/raw/{success,error,match}.ogg` are short CC0-licensed feedback

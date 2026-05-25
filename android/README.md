@@ -135,7 +135,8 @@ tunnel like `cloudflared`).
 
 ## Bundled audio
 
-`res/raw/{success,error,match}.ogg` ship as **0.4-second silent
-placeholders** so the dispatch pipeline can be exercised end-to-end.
-Replace with real CC0 sounds (freesound.org or similar) before any
-public release.
+`res/raw/{success,error,match}.ogg` are short CC0-licensed feedback
+tones (ascending chime / descending tone / single blip) generated
+locally with ffmpeg's `sine` source + `afade` envelope. See
+[`AUDIO_NOTICE.md`](AUDIO_NOTICE.md) for per-file durations, the
+reproducible recipes, and license info.

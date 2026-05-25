@@ -12,6 +12,7 @@ import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity() {
     private val client = DispatchClient()
+    private lateinit var settings: Settings
 
     private lateinit var serverUrl: EditText
     private lateinit var token: EditText
@@ -22,11 +23,14 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        settings = Settings.from(this)
         serverUrl = findViewById(R.id.server_url)
         token = findViewById(R.id.token)
         transcript = findViewById(R.id.transcript)
         send = findViewById(R.id.send)
         response = findViewById(R.id.response)
+        serverUrl.setText(settings.serverUrl)
+        token.setText(settings.token)
         send.setOnClickListener { onSend() }
     }
 
@@ -38,13 +42,16 @@ class MainActivity : AppCompatActivity() {
             response.text = getString(R.string.response_placeholder)
             return
         }
+        settings.serverUrl = url
+        settings.token = bearer
+        val normalizedUrl = Settings.normalizeUrl(url)
         send.isEnabled = false
         response.text = "…"
         lifecycleScope.launch {
             val rendered = runCatching {
                 withContext(Dispatchers.IO) {
                     client.dispatch(
-                        url,
+                        normalizedUrl,
                         bearer,
                         DispatchRequest(transcript = text),
                     )

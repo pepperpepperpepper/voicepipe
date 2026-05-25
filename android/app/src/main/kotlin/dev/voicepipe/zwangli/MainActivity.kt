@@ -1,12 +1,18 @@
 package dev.voicepipe.zwangli
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.provider.Settings as AndroidSettings
+import android.speech.SpeechRecognizer
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -20,9 +26,18 @@ class MainActivity : AppCompatActivity() {
     private lateinit var openAccessibilitySettings: Button
     private lateinit var serverUrl: EditText
     private lateinit var token: EditText
+    private lateinit var mic: Button
     private lateinit var transcript: EditText
     private lateinit var send: Button
     private lateinit var response: TextView
+
+    private var speech: SpeechRecognitionController? = null
+
+    private val requestMicPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) startListening()
+            else Toast.makeText(this, R.string.mic_permission_denied, Toast.LENGTH_SHORT).show()
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -32,6 +47,7 @@ class MainActivity : AppCompatActivity() {
         openAccessibilitySettings = findViewById(R.id.open_accessibility_settings)
         serverUrl = findViewById(R.id.server_url)
         token = findViewById(R.id.token)
+        mic = findViewById(R.id.mic)
         transcript = findViewById(R.id.transcript)
         send = findViewById(R.id.send)
         response = findViewById(R.id.response)
@@ -41,11 +57,18 @@ class MainActivity : AppCompatActivity() {
         openAccessibilitySettings.setOnClickListener {
             startActivity(Intent(AndroidSettings.ACTION_ACCESSIBILITY_SETTINGS))
         }
+        configureMic()
     }
 
     override fun onResume() {
         super.onResume()
         refreshAccessibilityStatus()
+    }
+
+    override fun onDestroy() {
+        speech?.destroy()
+        speech = null
+        super.onDestroy()
     }
 
     private fun refreshAccessibilityStatus() {
@@ -55,6 +78,62 @@ class MainActivity : AppCompatActivity() {
         )
         openAccessibilitySettings.visibility =
             if (on) android.view.View.GONE else android.view.View.VISIBLE
+    }
+
+    private fun configureMic() {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            mic.isEnabled = false
+            mic.text = getString(R.string.action_mic_unavailable)
+            return
+        }
+        speech = SpeechRecognitionController(this, micCallbacks)
+        mic.setOnClickListener { onMicClick() }
+    }
+
+    private fun onMicClick() {
+        val controller = speech ?: return
+        if (controller.isListening) {
+            controller.stop()
+            return
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            == PackageManager.PERMISSION_GRANTED
+        ) {
+            startListening()
+        } else {
+            requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    private fun startListening() {
+        speech?.start()
+    }
+
+    private val micCallbacks = object : SpeechRecognitionController.Callbacks {
+        override fun onListeningStart() {
+            mic.text = getString(R.string.action_mic_listening)
+        }
+
+        override fun onPartial(text: String) {
+            transcript.setText(text)
+        }
+
+        override fun onFinal(text: String) {
+            transcript.setText(text)
+            onSend()
+        }
+
+        override fun onError(message: String, recoverable: Boolean) {
+            Toast.makeText(
+                this@MainActivity,
+                getString(R.string.mic_error_prefix) + message,
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
+
+        override fun onListeningStop() {
+            mic.text = getString(R.string.action_mic_start)
+        }
     }
 
     private fun onSend() {

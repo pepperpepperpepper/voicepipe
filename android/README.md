@@ -113,9 +113,12 @@ tunnel like `cloudflared`).
 
 `../ZWANGLI_PLAN.md` is the operational roadmap.
 
-- **3b** — AccessibilityService: type the response into whatever app is
-  focused
-- **3c** — STT: mic button driving `SpeechRecognizer`
+- **3b** ✅ — AccessibilityService: types the response into whatever
+  app is focused
+- **3c** ✅ — STT: mic button drives `SpeechRecognizer`; partial
+  results stream into the transcript field, final result auto-submits.
+  EditText stays as a fallback when no on-device recognizer is
+  installed.
 - **3d** — Foreground service + persistent notification (the
   coexist-with-Assistant pattern from the architecture explainer)
 - **3e** — Execute `client_actions[]` (clipboard, audio feedback) +

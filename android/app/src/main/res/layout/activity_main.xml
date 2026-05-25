@@ -41,6 +41,13 @@
             android:hint="@string/hint_token"
             android:inputType="textPassword" />
 
+        <Button
+            android:id="@+id/mic"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/action_mic_start" />
+
         <EditText
             android:id="@+id/transcript"
             android:layout_width="match_parent"

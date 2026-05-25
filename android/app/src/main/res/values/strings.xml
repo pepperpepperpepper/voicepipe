@@ -14,4 +14,9 @@
     <string name="status_accessibility_on">Accessibility service is ON.</string>
     <string name="typed_ok">✓ typed into focused field</string>
     <string name="typed_failed">⚠ no editable field focused — text was not typed</string>
+    <string name="action_mic_start">🎤 Hold to speak</string>
+    <string name="action_mic_listening">● Listening… tap to stop</string>
+    <string name="action_mic_unavailable">Speech recognition unavailable on this device</string>
+    <string name="mic_permission_denied">Microphone permission denied — using text input instead</string>
+    <string name="mic_error_prefix">Speech: </string>
 </resources>

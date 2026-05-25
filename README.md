@@ -592,6 +592,10 @@ A client without `subprocess` in its capability list (e.g. an Android phone with
 
 Auth (when `VOICEPIPE_DISPATCH_TOKEN` is set) is bearer-token: `Authorization: Bearer <token>` on every endpoint except `/health`.
 
+### Android client (Zwangli)
+
+A thin Kotlin client lives in [`android/`](android/) — `dev.voicepipe.zwangli`. It POSTs a transcript to a dispatch server and renders the response. Phase 3a is the bare skeleton (text input + Send button); subsequent phases (3b–3e) layer on `AccessibilityService` typing, on-device STT, a foreground service, and `client_actions[]` execution. See [`android/README.md`](android/README.md) and [`ZWANGLI_PLAN.md`](ZWANGLI_PLAN.md) for the build plan.
+
 ## Technical Details
 
 - Audio format: 16kHz, 16-bit, mono WAV (optimal for speech recognition)

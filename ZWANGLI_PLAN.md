@@ -289,6 +289,42 @@ Verified the entire Genymotion path end-to-end before writing any Android code, 
 - **Always pass `--max-run-duration N` for ephemeral runs.** Without it, an instance left orphaned by a crashed smoke run keeps billing indefinitely. 5 minutes is enough for any 3a-3e smoke test; bump up for instrumented test suites later.
 - **`adb disconnect <serial>` before `gmsaas instances stop`** to keep the local adb-server clean. Not strictly required but avoids stale entries in `adb devices`.
 
+### 2026-05-25 — Phase 3a smoke: `adb reverse` does not bridge from Genymotion SaaS
+
+Tried to verify the in-app wire by tapping Send → POST `/dispatch` →
+response. Set up `adb -s $SERIAL reverse tcp:8765 tcp:8765`, confirmed
+the rule with `adb reverse --list`. The Android app's connection (and
+even `adb shell curl http://127.0.0.1:8765/health`) timed out / failed
+to connect. The dispatch server logged only the host-side
+`curl` from the smoke script — no traffic from the device.
+
+**Conclusion.** `adb reverse` works for *local* adb-server-to-device
+bridges (USB devices, local Genymotion Desktop) but Genymotion SaaS's
+adb proxy doesn't forward reverse connections from the cloud VM back
+through the tunnel. The current smoke script keeps the `adb reverse`
+call as a no-op for that environment but the in-app roundtrip itself
+needs a different bridge for SaaS.
+
+**Workarounds for Phase 3b+ smokes that need the full wire:**
+
+1. **Local Genymotion Desktop** (downloaded image, not SaaS) — `adb
+   reverse` works normally.
+2. **Real device on USB** — same.
+3. **Public tunnel** — `cloudflared tunnel` / `ngrok http 8765` / `ssh
+   -R` to a reachable host. Update the app's Server URL to the public
+   URL. *Bearer auth becomes required* (don't expose `voicepipe serve`
+   without `VOICEPIPE_DISPATCH_TOKEN`).
+4. **Host's LAN IP** — bind `voicepipe serve --host 0.0.0.0`, set a
+   token, and use `http://<host-LAN-IP>:8765` in the app. Only works if
+   the device is on the same network as the host (i.e. local
+   Genymotion, not SaaS).
+
+Phase 3a's smoke still proves: APK installs on Android 14 SaaS, the
+activity launches and is foreground, the UI renders correctly, defaults
+are populated, and the error path (`⚠ HTTP error: timeout`) handles
+network failures gracefully. The actual wire was verified out-of-band
+by `curl localhost:8765/dispatch` from the host.
+
 ---
 
 ## Explicitly out of scope

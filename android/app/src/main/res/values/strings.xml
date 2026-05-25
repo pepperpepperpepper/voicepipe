@@ -8,4 +8,10 @@
     <string name="default_server_url">http://localhost:8765</string>
     <string name="default_transcript">zwingli strip hello</string>
     <string name="response_placeholder">Response will appear here.</string>
+    <string name="accessibility_service_description">Lets Zwangli type dispatch responses into whatever app you are currently in. Grant this permission so voice commands can write text into your focused field.</string>
+    <string name="action_open_accessibility_settings">Open accessibility settings</string>
+    <string name="status_accessibility_off">Accessibility service is OFF — tap below to enable, then return.</string>
+    <string name="status_accessibility_on">Accessibility service is ON.</string>
+    <string name="typed_ok">✓ typed into focused field</string>
+    <string name="typed_failed">⚠ no editable field focused — text was not typed</string>
 </resources>

@@ -9,6 +9,21 @@
         android:orientation="vertical"
         android:padding="16dp">
 
+        <TextView
+            android:id="@+id/accessibility_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="4dp"
+            android:padding="8dp"
+            android:textIsSelectable="true" />
+
+        <Button
+            android:id="@+id/open_accessibility_settings"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:text="@string/action_open_accessibility_settings" />
+
         <EditText
             android:id="@+id/server_url"
             android:layout_width="match_parent"

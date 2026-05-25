@@ -17,6 +17,8 @@ from voicepipe.config import (
     TranscriptVerbConfig,
 )
 
+from ._actuator import Actuator
+
 
 def _describe_verb_one_line(verb: str, cfg: TranscriptVerbConfig) -> str:
     parts = [verb]
@@ -81,8 +83,9 @@ def _action_help(
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
     captures: Mapping[str, str] | None = None,
     commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    del verb_cfg, profiles, captures
+    del verb_cfg, profiles, captures, actuator
 
     args = (prompt or "").strip().lower()
     verbs = dict(commands.verbs) if commands else {}

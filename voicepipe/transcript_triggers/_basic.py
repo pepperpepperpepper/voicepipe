@@ -10,6 +10,8 @@ from voicepipe.config import (
     TranscriptVerbConfig,
 )
 
+from ._actuator import Actuator
+
 
 def _action_strip(
     prompt: str,
@@ -18,8 +20,9 @@ def _action_strip(
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
     captures: Mapping[str, str] | None = None,
     commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    del verb_cfg, profiles, captures, commands
+    del verb_cfg, profiles, captures, commands, actuator
     return (prompt or "").strip(), {}
 
 
@@ -30,8 +33,9 @@ def _action_clipboard(
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
     captures: Mapping[str, str] | None = None,
     commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Passthrough handler: the actual clipboard copy is performed by the
     emission layer via verb destination routing (see verb_cfg.destination)."""
-    del verb_cfg, profiles, captures, commands
+    del verb_cfg, profiles, captures, commands, actuator
     return (prompt or "").strip(), {}

@@ -15,6 +15,8 @@ from voicepipe.config import (
     get_transcript_commands_config,
 )
 
+from ._actuator import CAP_CLIPBOARD, Actuator, resolve_actuator
+
 
 _ZWINGLI_ERROR_PREFIX = "⚠ zwingli"
 _ERROR_DESTINATION_FALLBACK = "type"
@@ -39,7 +41,10 @@ def _resolve_error_destination(commands: TranscriptCommandsConfig | None) -> str
 
 
 def _apply_error_destination(
-    reason: str, *, commands: TranscriptCommandsConfig | None
+    reason: str,
+    *,
+    commands: TranscriptCommandsConfig | None,
+    actuator: Actuator | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Format the error and route it per dispatch.error_destination.
 
@@ -52,12 +57,10 @@ def _apply_error_destination(
     extras: dict[str, Any] = {"error_destination": destination}
 
     if destination in ("clipboard", "both"):
-        try:
-            from voicepipe.clipboard import copy_to_clipboard
-
-            ok, _err = copy_to_clipboard(error_text)
-            extras["clipboard"] = bool(ok)
-        except Exception:
+        act = resolve_actuator(actuator)
+        if CAP_CLIPBOARD in act.capabilities():
+            extras["clipboard"] = bool(act.set_clipboard(error_text))
+        else:
             extras["clipboard"] = False
 
     if destination == "clipboard":

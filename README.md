@@ -547,6 +547,10 @@ Diagnostics:
 - Automatic cleanup on process termination
 - PID-based session management prevents conflicts
 
+### Zwingli actuator boundary
+
+The Zwingli dispatcher itself is pure Python — the only places it reaches into the host OS (running a subprocess for `shell`/`codegen`, copying to the clipboard for `error_destination=clipboard`, firing audio cues) all flow through a single `Actuator` interface in `voicepipe/transcript_triggers/_actuator.py`. The default is `DesktopActuator`, which wraps `subprocess`, `voicepipe.clipboard`, and `voicepipe.audio_feedback`. Pass `actuator=` to `apply_transcript_triggers(...)` to swap the backend — tests use `InMemoryActuator` to capture calls without touching the OS, and a future Android client can run the same dispatcher with an `AccessibilityService`-backed actuator. Verbs whose capability the actuator lacks (e.g. `shell` on a no-subprocess actuator) degrade gracefully: the dispatcher routes through the standard error path with a `⚠ zwingli: …` notice rather than crashing.
+
 ## Testing
 
 Offline/unit tests (no mic/systemd/OpenAI required):

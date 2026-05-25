@@ -21,6 +21,12 @@ from voicepipe.config import (
     TranscriptVerbConfig,
 )
 
+from ._actuator import (
+    CAP_SUBPROCESS,
+    Actuator,
+    ActuatorCapabilityError,
+    resolve_actuator,
+)
 from ._debug_log import _write_zwingli_debug_event
 from ._llm import _call_llm_with_profile
 from ._pending import _stash_pending_and_notice
@@ -51,6 +57,7 @@ def _run_script_in_interpreter(
     script: str,
     *,
     timeout_seconds: float | None = None,
+    actuator: Actuator | None = None,
 ) -> tuple[str, str, dict[str, Any]]:
     """Write `script` to a tempfile and invoke `interpreter <tempfile>`.
 
@@ -60,6 +67,19 @@ def _run_script_in_interpreter(
     cleaned = (script or "").strip()
     if not cleaned:
         return "", "", {"returncode": 0, "duration_ms": 0}
+
+    act = resolve_actuator(actuator)
+    if CAP_SUBPROCESS not in act.capabilities():
+        _write_zwingli_debug_event(
+            {
+                "event": "codegen_unsupported",
+                "interpreter": interpreter,
+                "actuator": type(act).__name__,
+            }
+        )
+        raise ActuatorCapabilityError(
+            "Codegen execution is not supported on this device."
+        )
 
     if (os.environ.get("VOICEPIPE_SHELL_ALLOW") or "").strip() != "1":
         _write_zwingli_debug_event(
@@ -90,46 +110,14 @@ def _run_script_in_interpreter(
                 "timeout_seconds": float(timeout_s),
             }
         )
-        try:
-            proc = subprocess.run(
-                [interpreter, script_path],
-                text=True,
-                capture_output=True,
-                timeout=timeout_s,
-                stdin=subprocess.DEVNULL,
-            )
-            duration_ms = int((time.monotonic() - started) * 1000)
-            stdout = proc.stdout or ""
-            stderr = proc.stderr or ""
-            meta: dict[str, Any] = {
-                "returncode": int(proc.returncode),
-                "duration_ms": duration_ms,
-                "timeout_seconds": float(timeout_s),
-                "interpreter": interpreter,
-            }
-            if proc.returncode != 0:
-                meta["error"] = "nonzero-exit"
-            _write_zwingli_debug_event(
-                {
-                    "event": "codegen_complete",
-                    "interpreter": interpreter,
-                    "returncode": int(proc.returncode),
-                    "duration_ms": int(duration_ms),
-                    "stdout": stdout,
-                    "stderr": stderr,
-                }
-            )
-            return stdout, stderr, meta
-        except subprocess.TimeoutExpired as e:
-            duration_ms = int((time.monotonic() - started) * 1000)
-            raw_stdout = getattr(e, "stdout", None) or getattr(e, "output", None)
-            raw_stderr = getattr(e, "stderr", None)
-            stdout = raw_stdout or ""
-            stderr = raw_stderr or ""
-            if isinstance(stdout, bytes):
-                stdout = stdout.decode("utf-8", errors="replace")
-            if isinstance(stderr, bytes):
-                stderr = stderr.decode("utf-8", errors="replace")
+        result = act.run_subprocess(
+            [interpreter, script_path], shell=False, timeout_seconds=timeout_s
+        )
+        duration_ms = int((time.monotonic() - started) * 1000)
+        stdout = result.stdout or ""
+        stderr = result.stderr or ""
+
+        if result.timed_out:
             meta = {
                 "returncode": None,
                 "duration_ms": duration_ms,
@@ -148,6 +136,26 @@ def _run_script_in_interpreter(
                 }
             )
             return str(stdout), str(stderr), meta
+
+        meta = {
+            "returncode": int(result.returncode) if result.returncode is not None else None,
+            "duration_ms": duration_ms,
+            "timeout_seconds": float(timeout_s),
+            "interpreter": interpreter,
+        }
+        if result.returncode is not None and result.returncode != 0:
+            meta["error"] = "nonzero-exit"
+        _write_zwingli_debug_event(
+            {
+                "event": "codegen_complete",
+                "interpreter": interpreter,
+                "returncode": int(result.returncode) if result.returncode is not None else None,
+                "duration_ms": int(duration_ms),
+                "stdout": stdout,
+                "stderr": stderr,
+            }
+        )
+        return stdout, stderr, meta
     finally:
         try:
             os.unlink(script_path)
@@ -162,6 +170,7 @@ def _action_codegen(
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
     captures: Mapping[str, str] | None = None,
     commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Generate a script with the LLM, then run it through `interpreter`.
 
@@ -208,7 +217,7 @@ def _action_codegen(
 
     timeout_seconds = getattr(verb_cfg, "timeout_seconds", None)
     stdout, stderr, run_meta = _run_script_in_interpreter(
-        interpreter, script_text, timeout_seconds=timeout_seconds
+        interpreter, script_text, timeout_seconds=timeout_seconds, actuator=actuator
     )
     output = stdout if stdout.strip() else stderr
     output = (output or "").rstrip("\n")

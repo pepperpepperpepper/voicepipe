@@ -14,6 +14,7 @@ from typing import Any, Mapping
 from voicepipe.config import TranscriptCommandsConfig, TranscriptVerbConfig
 
 from ._actions import _ACTIONS, _PROMOTED_META_KEYS
+from ._actuator import Actuator
 from ._debug_log import _write_zwingli_debug_event
 from ._template import _find_pattern_match
 
@@ -156,6 +157,7 @@ def _invoke_verb_handler(
     *,
     commands: TranscriptCommandsConfig,
     captures: Mapping[str, str] | None = None,
+    actuator: Actuator | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Run a verb's action handler and build its top-level meta payload."""
     action = _resolve_action_from_verb_config(verb, verb_cfg)
@@ -186,6 +188,7 @@ def _invoke_verb_handler(
         profiles=commands.llm_profiles,
         captures=captures,
         commands=commands,
+        actuator=actuator,
     )
 
     meta: dict[str, Any] = {
@@ -228,6 +231,7 @@ def _dispatch_single_step(
     raw_chunk: str,
     *,
     commands: TranscriptCommandsConfig,
+    actuator: Actuator | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Run one dispatch step. `raw_chunk` is the original chunk before verb
     extraction; it is used both for pattern matching against the whole chunk
@@ -244,12 +248,15 @@ def _dispatch_single_step(
             raw_chunk,
             commands=commands,
             captures=captures,
+            actuator=actuator,
         )
 
     verb_cfg = commands.verbs.get(verb) if verb else None
 
     if verb_cfg is not None and bool(verb_cfg.enabled):
-        return _invoke_verb_handler(verb, verb_cfg, args, commands=commands)
+        return _invoke_verb_handler(
+            verb, verb_cfg, args, commands=commands, actuator=actuator
+        )
 
     unknown_action = (commands.dispatch.unknown_verb or "").strip().lower() or "strip"
     handler = _ACTIONS.get(unknown_action)
@@ -261,6 +268,7 @@ def _dispatch_single_step(
         profiles=commands.llm_profiles,
         captures=None,
         commands=commands,
+        actuator=actuator,
     )
     meta: dict[str, Any] = {
         "mode": "unknown-verb",
@@ -330,13 +338,20 @@ def _split_chain_chunks(
     return chunks
 
 
-def _dispatch_prompt(prompt: str, *, commands: TranscriptCommandsConfig) -> tuple[str, dict[str, Any]]:
+def _dispatch_prompt(
+    prompt: str,
+    *,
+    commands: TranscriptCommandsConfig,
+    actuator: Actuator | None = None,
+) -> tuple[str, dict[str, Any]]:
     cleaned = (prompt or "").strip()
     chunks = _split_chain_chunks(cleaned, commands=commands)
 
     if len(chunks) == 1:
         verb, args = _resolve_verb_and_args(chunks[0], commands=commands)
-        return _dispatch_single_step(verb, args, chunks[0], commands=commands)
+        return _dispatch_single_step(
+            verb, args, chunks[0], commands=commands, actuator=actuator
+        )
 
     chain_metas: list[dict[str, Any]] = []
     prior_output = ""
@@ -358,7 +373,7 @@ def _dispatch_prompt(prompt: str, *, commands: TranscriptCommandsConfig) -> tupl
             step_chunk = prior_output
 
         step_text, step_meta = _dispatch_single_step(
-            verb, step_input, step_chunk, commands=commands
+            verb, step_input, step_chunk, commands=commands, actuator=actuator
         )
         prior_output = step_text
 

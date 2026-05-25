@@ -26,6 +26,8 @@ from voicepipe.config import (
     TranscriptVerbConfig,
 )
 
+from ._actuator import Actuator
+
 
 def _stash_pending_and_notice(
     *,
@@ -86,6 +88,7 @@ def _action_yes(
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
     captures: Mapping[str, str] | None = None,
     commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Resume a previously-stashed pending command. Args are ignored."""
     del prompt, verb_cfg, profiles, captures, commands
@@ -105,7 +108,7 @@ def _action_yes(
         from voicepipe.transcript_triggers import _shell
 
         stdout, stderr, run_meta = _shell._run_shell_command(
-            entry.command, timeout_seconds=None
+            entry.command, timeout_seconds=None, actuator=actuator
         )
         output = stdout if stdout.strip() else stderr
         output = (output or "").rstrip("\n")
@@ -132,7 +135,7 @@ def _action_yes(
         from voicepipe.transcript_triggers import _codegen
 
         stdout, stderr, run_meta = _codegen._run_script_in_interpreter(
-            interpreter, entry.command, timeout_seconds=None
+            interpreter, entry.command, timeout_seconds=None, actuator=actuator
         )
         output = stdout if stdout.strip() else stderr
         output = (output or "").rstrip("\n")
@@ -152,9 +155,10 @@ def _action_no(
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
     captures: Mapping[str, str] | None = None,
     commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Cancel a previously-stashed pending command. Args are ignored."""
-    del prompt, verb_cfg, profiles, captures, commands
+    del prompt, verb_cfg, profiles, captures, commands, actuator
     from voicepipe import pending as pending_mod
 
     entry = pending_mod.load_pending()

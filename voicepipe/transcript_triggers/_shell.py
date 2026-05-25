@@ -23,6 +23,12 @@ from voicepipe.config import (
     TranscriptVerbConfig,
 )
 
+from ._actuator import (
+    CAP_SUBPROCESS,
+    Actuator,
+    ActuatorCapabilityError,
+    resolve_actuator,
+)
 from ._debug_log import _write_zwingli_debug_event
 from ._pending import _stash_pending_and_notice
 from ._template import _substitute_command_template
@@ -76,11 +82,27 @@ def _strip_trailing_sentence_punct_from_shell_command(command: str) -> str:
 
 
 def _run_shell_command(
-    command: str, *, timeout_seconds: float | None = None
+    command: str,
+    *,
+    timeout_seconds: float | None = None,
+    actuator: Actuator | None = None,
 ) -> tuple[str, str, dict[str, Any]]:
     cleaned = _strip_trailing_sentence_punct_from_shell_command(command)
     if not cleaned:
         return "", "", {"returncode": 0, "duration_ms": 0}
+
+    act = resolve_actuator(actuator)
+    if CAP_SUBPROCESS not in act.capabilities():
+        _write_zwingli_debug_event(
+            {
+                "event": "shell_unsupported",
+                "command": cleaned,
+                "actuator": type(act).__name__,
+            }
+        )
+        raise ActuatorCapabilityError(
+            "Shell verb is not supported on this device."
+        )
 
     if (os.environ.get("VOICEPIPE_SHELL_ALLOW") or "").strip() != "1":
         _write_zwingli_debug_event(
@@ -104,54 +126,13 @@ def _run_shell_command(
             "timeout_seconds": float(timeout_s),
         }
     )
-    try:
-        proc = subprocess.run(
-            cleaned,
-            shell=True,
-            text=True,
-            capture_output=True,
-            timeout=timeout_s,
-            stdin=subprocess.DEVNULL,
-        )
-        duration_ms = int((time.monotonic() - started) * 1000)
 
-        stdout = proc.stdout or ""
-        stderr = proc.stderr or ""
+    result = act.run_subprocess(cleaned, shell=True, timeout_seconds=timeout_s)
+    duration_ms = int((time.monotonic() - started) * 1000)
+    stdout = result.stdout or ""
+    stderr = result.stderr or ""
 
-        meta: dict[str, Any] = {
-            "returncode": int(proc.returncode),
-            "duration_ms": duration_ms,
-            "timeout_seconds": float(timeout_s),
-        }
-        if proc.returncode != 0:
-            meta["error"] = "nonzero-exit"
-
-        _write_zwingli_debug_event(
-            {
-                "event": "shell_complete",
-                "command": cleaned,
-                "returncode": int(proc.returncode),
-                "duration_ms": int(duration_ms),
-                "timeout_seconds": float(timeout_s),
-                "stdout": stdout,
-                "stderr": stderr,
-            }
-        )
-        return stdout, stderr, meta
-    except subprocess.TimeoutExpired as e:
-        duration_ms = int((time.monotonic() - started) * 1000)
-        raw_stdout = getattr(e, "stdout", None)
-        if raw_stdout is None:
-            raw_stdout = getattr(e, "output", None)
-        raw_stderr = getattr(e, "stderr", None)
-
-        stdout = raw_stdout or ""
-        stderr = raw_stderr or ""
-        if isinstance(stdout, bytes):
-            stdout = stdout.decode("utf-8", errors="replace")
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode("utf-8", errors="replace")
-
+    if result.timed_out:
         meta = {
             "returncode": None,
             "duration_ms": duration_ms,
@@ -170,6 +151,27 @@ def _run_shell_command(
         )
         return str(stdout), str(stderr), meta
 
+    meta = {
+        "returncode": int(result.returncode) if result.returncode is not None else None,
+        "duration_ms": duration_ms,
+        "timeout_seconds": float(timeout_s),
+    }
+    if result.returncode is not None and result.returncode != 0:
+        meta["error"] = "nonzero-exit"
+
+    _write_zwingli_debug_event(
+        {
+            "event": "shell_complete",
+            "command": cleaned,
+            "returncode": int(result.returncode) if result.returncode is not None else None,
+            "duration_ms": int(duration_ms),
+            "timeout_seconds": float(timeout_s),
+            "stdout": stdout,
+            "stderr": stderr,
+        }
+    )
+    return stdout, stderr, meta
+
 
 def _action_shell(
     prompt: str,
@@ -178,6 +180,7 @@ def _action_shell(
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
     captures: Mapping[str, str] | None = None,
     commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
 ) -> tuple[str, dict[str, Any]]:
     del profiles, commands
     timeout_seconds = getattr(verb_cfg, "timeout_seconds", None) if verb_cfg else None
@@ -193,7 +196,9 @@ def _action_shell(
             return "", {"pending": False, "reason": "empty_command"}
         return _stash_pending_and_notice(verb_cfg=verb_cfg, verb_type="shell", command=cleaned)
 
-    stdout, stderr, meta = _run_shell_command(command, timeout_seconds=timeout_seconds)
+    stdout, stderr, meta = _run_shell_command(
+        command, timeout_seconds=timeout_seconds, actuator=actuator
+    )
     output = stdout if stdout.strip() else stderr
     output = (output or "").rstrip("\n")
     return output, meta
@@ -206,6 +211,7 @@ def _action_execute(
     profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
     captures: Mapping[str, str] | None = None,
     commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Prepare a shell command for *typing* into a terminal and pressing Enter.
 
@@ -213,7 +219,7 @@ def _action_execute(
     returns the cleaned command text and metadata indicating that an Enter
     keystroke should be sent by the caller when typing is the destination.
     """
-    del profiles, commands
+    del profiles, commands, actuator
     command_template = getattr(verb_cfg, "command_template", None) if verb_cfg else None
     if command_template and captures is not None:
         source = _substitute_command_template(command_template, captures)

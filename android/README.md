@@ -119,7 +119,10 @@ tunnel like `cloudflared`).
   results stream into the transcript field, final result auto-submits.
   EditText stays as a fallback when no on-device recognizer is
   installed.
-- **3d** — Foreground service + persistent notification (the
-  coexist-with-Assistant pattern from the architecture explainer)
+- **3d** ✅ — Foreground service + persistent notification. The
+  notification's **Dictate** action launches MainActivity with
+  `EXTRA_AUTO_LISTEN=true`, which triggers the mic flow on resume.
+  A "Start on boot" checkbox in Settings re-arms the service after
+  reboot via `BootReceiver`.
 - **3e** — Execute `client_actions[]` (clipboard, audio feedback) +
   F-Droid release

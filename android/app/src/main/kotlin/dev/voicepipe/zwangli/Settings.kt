@@ -17,10 +17,17 @@ class Settings(private val prefs: SharedPreferences) {
             prefs.edit().putString(KEY_TOKEN, value.trim()).apply()
         }
 
+    var startOnBoot: Boolean
+        get() = prefs.getBoolean(KEY_START_ON_BOOT, false)
+        set(value) {
+            prefs.edit().putBoolean(KEY_START_ON_BOOT, value).apply()
+        }
+
     companion object {
         const val PREFS_NAME = "zwangli"
         const val KEY_SERVER_URL = "server_url"
         const val KEY_TOKEN = "token"
+        const val KEY_START_ON_BOOT = "start_on_boot"
         const val DEFAULT_SERVER_URL = "http://localhost:8765"
 
         fun from(context: Context): Settings =

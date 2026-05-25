@@ -14,6 +14,15 @@
     <string name="status_accessibility_on">Accessibility service is ON.</string>
     <string name="typed_ok">✓ typed into focused field</string>
     <string name="typed_failed">⚠ no editable field focused — text was not typed</string>
+    <string name="notification_channel_name">Persistent dictation</string>
+    <string name="notification_channel_description">Keeps Zwangli reachable from the status bar so you can dictate without opening the app first.</string>
+    <string name="notification_title">Zwangli</string>
+    <string name="notification_text">Tap Dictate to speak.</string>
+    <string name="notification_action_dictate">Dictate</string>
+    <string name="notification_action_stop">Stop</string>
+    <string name="action_service_enable">Enable persistent dictation notification</string>
+    <string name="action_service_disable">Disable persistent dictation notification</string>
+    <string name="action_start_on_boot">Auto-start notification on boot</string>
     <string name="action_mic_start">🎤 Hold to speak</string>
     <string name="action_mic_listening">● Listening… tap to stop</string>
     <string name="action_mic_unavailable">Speech recognition unavailable on this device</string>

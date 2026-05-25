@@ -10,6 +10,7 @@ from .recording import cancel, daemon, dictate, start, status, stop, transcribe_
 from .replay import replay
 from . import smoke as smoke_module
 from .service import service_group
+from .serve import serve
 from .setup import setup
 from .launchd import launchd_group
 from .hotkey import hotkey_group
@@ -26,6 +27,7 @@ def register(main: click.Group) -> None:
     main.add_command(doctor_legacy)
     main.add_command(smoke_module.smoke)
     main.add_command(triggers_group)
+    main.add_command(serve)
 
     main.add_command(start)
     main.add_command(stop)

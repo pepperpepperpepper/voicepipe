@@ -535,6 +535,63 @@ Diagnostics:
 - `voicepipe doctor daemon --record-test --record-seconds 2 --play`
 - `voicepipe doctor audio`
 
+## Dispatch server
+
+Voicepipe can run the Zwingli dispatcher as a small HTTP service so thin clients (the planned Android "Zwangli" app, browser extensions, smartwatch apps, etc.) can share one configuration without embedding Python. Install with the `server` extra:
+
+```bash
+pip install 'voicepipe[server]'
+```
+
+Start it with:
+
+```bash
+voicepipe serve                 # binds 127.0.0.1:8765
+voicepipe serve --port 9000
+VOICEPIPE_DISPATCH_TOKEN=<secret> voicepipe serve --host 0.0.0.0
+```
+
+Non-loopback binds require `VOICEPIPE_DISPATCH_TOKEN` to be set; the server refuses to start otherwise so an unauthenticated dispatcher can't accidentally end up on the open internet.
+
+### Endpoints
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `POST` | `/dispatch` | Run a transcript through the dispatcher. |
+| `GET`  | `/triggers` | Resolved `triggers.json` (verbs, profiles, prefixes). |
+| `GET`  | `/log/tail?n=20` | Recent JSON-line debug events. |
+| `GET`  | `/health` | Liveness; also reports whether auth is required. |
+
+`POST /dispatch` body:
+
+```json
+{
+  "transcript": "zwingli subprocess ls -la",
+  "session_id": "phone-42",
+  "capabilities": ["clipboard", "audio_feedback"]
+}
+```
+
+Response:
+
+```json
+{
+  "ok": true,
+  "output_text": "...stdout from server-side ls...",
+  "payload": { "trigger": "zwingli", "meta": { ... } },
+  "client_actions": [
+    { "type": "clipboard", "text": "..." },
+    { "type": "feedback", "event": "success" }
+  ]
+}
+```
+
+The `capabilities` list tells the server what the client itself can do. Shell verbs always run server-side (that's the value-add), but `clipboard` and `audio_feedback` side-effects are returned as `client_actions` for the client to execute locally. A client that omits `capabilities` is treated as fully-capable.
+
+A client without `subprocess` in its capability list (e.g. an Android phone with no shell) sees `zwingli subprocess …` graceful-skip to a `⚠ zwingli: Shell verb is not supported on this device.` notice rather than the server quietly running shell on the user's behalf.
+
+Auth (when `VOICEPIPE_DISPATCH_TOKEN` is set) is bearer-token: `Authorization: Bearer <token>` on every endpoint except `/health`.
+
 ## Technical Details
 
 - Audio format: 16kHz, 16-bit, mono WAV (optimal for speech recognition)

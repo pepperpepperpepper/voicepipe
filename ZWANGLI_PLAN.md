@@ -227,7 +227,7 @@ All via `MockWebServer`; no network or device required.
 ### Genymotion SaaS
 
 - **Pattern**: port `~/AnySoftKeyboard/scripts/gmsaas_start_and_connect.sh` to `android/scripts/gmsaas_start_and_connect.sh`. The script auto-resolves an existing instance by name (`zwangli-android14`) or starts a fresh one from recipe UUID `9074ccc1-7aba-4c9b-b615-e69ef389738c` (Android 14.0 Phone), then `gmsaas instances adbconnect <uuid>` returns the adb serial in `host:port` form. Output is shell-safe assignments for `eval`.
-- **Prereq**: `pip install --user gmsaas` (binary lands at `~/.local/bin/gmsaas`). Credentials come from `GENYMOTION_API_KEY` in `~/.api-keys`.
+- **Prereq**: install via `pipx install gmsaas` (Arch's Python enforces PEP 668 so plain `pip install --user` fails — binary lands at `/mnt/extra/pipx/bin/gmsaas`). Credentials come from `GENYMOTION_API_KEY` in `~/.api-keys`.
 - **Local dev loop:**
   ```bash
   eval "$(android/scripts/gmsaas_start_and_connect.sh)"
@@ -253,6 +253,44 @@ All via `MockWebServer`; no network or device required.
 
 ---
 
+## Operational verification log
+
+### 2026-05-25 — gmsaas + zwangli-android14 cold start
+
+Verified the entire Genymotion path end-to-end before writing any Android code, so Phase 3a's smoke step is known-good.
+
+**Install** — `pipx install gmsaas` → `gmsaas 1.16.0` at `/mnt/extra/pipx/bin/gmsaas`. Plain `pip install --user` fails on Arch (PEP 668 "externally managed environment"). An earlier broken venv (built against Python 3.13 before the system upgraded to 3.14) was fixed with `pipx reinstall gmsaas`.
+
+**Auth** — `gmsaas doctor` → `Authentication OK. Android SDK OK.` No login dance needed; existing creds in `~/.api-keys` (`GENYMOTION_API_KEY`) were valid. The Android SDK at `~/android-sdk` was already configured in `~/.Genymobile/gmsaas/config.json`.
+
+**Quota** — account allows **1 concurrent running VD**. First attempt to start `zwangli-android14` while `nsk-android14` was running returned `403 TOO_MANY_RUNNING_VDS`. The Phase 3a smoke script must therefore either reuse a running instance of the requested name or stop-and-start; it cannot assume a free slot.
+
+**Cold-start sequence** (5-step swap, see chat log):
+
+```
+1. gmsaas instances stop <nsk-uuid>                                         # free the slot
+2. gmsaas instances start --max-run-duration 5 9074ccc1-... zwangli-android14
+   → 2a0e5753-6f4e-43f6-89e7-2b6a2e7dc43e                                   # new UUID, blocks until ONLINE
+3. gmsaas instances adbconnect 2a0e5753-...                                 # → localhost:34919
+   adb -s localhost:34919 wait-for-device
+   getprop ro.product.model           → zwangli-android14                   # device labels match name
+   getprop ro.build.version.release   → 14
+   getprop sys.boot_completed         → 1
+4. gmsaas instances stop 2a0e5753-...                                       # release the slot
+5. gmsaas instances start 9074ccc1-... nsk-android14                        # restore prior state
+   → 361ee71d-ef54-4734-a21f-9f44d351cf34                                   # NEW uuid (see "Important" below)
+   gmsaas instances adbconnect 361ee71d-...                                 # → localhost:41247
+```
+
+**Important script-writing rules drawn from this:**
+
+- **Look up by name, never by UUID.** Both the instance UUID and the adb port change on every restart. `nsk-android14` went from `4f4e21b3-…@localhost:38325` to `361ee71d-…@localhost:41247` across a single stop/start. The `gmsaas_start_and_connect.sh` pattern in `~/AnySoftKeyboard/scripts/` does this correctly — port it verbatim, just change the default name to `zwangli-android14`.
+- **`gmsaas instances start` blocks until ONLINE.** No need for the 90-iteration poll loop the AnySoftKeyboard script uses — that's defensive code from an older gmsaas version. A single foreground call is sufficient. The poll loop is still fine to keep for safety on retries.
+- **Always pass `--max-run-duration N` for ephemeral runs.** Without it, an instance left orphaned by a crashed smoke run keeps billing indefinitely. 5 minutes is enough for any 3a-3e smoke test; bump up for instrumented test suites later.
+- **`adb disconnect <serial>` before `gmsaas instances stop`** to keep the local adb-server clean. Not strictly required but avoids stale entries in `adb devices`.
+
+---
+
 ## Explicitly out of scope
 
 | Item | Reason |
@@ -270,7 +308,7 @@ All via `MockWebServer`; no network or device required.
 
 All resolved as of plan v1. Decisions captured above:
 
-1. ~~Genymotion connection~~ — `gmsaas` CLI (pip install --user) + AnySoftKeyboard pattern, recipe `9074ccc1-7aba-4c9b-b615-e69ef389738c`, instance name `zwangli-android14`. Credentials in `~/.api-keys`.
+1. ~~Genymotion connection~~ — `gmsaas` CLI (pipx-installed) + AnySoftKeyboard pattern, recipe `9074ccc1-7aba-4c9b-b615-e69ef389738c`, instance name `zwangli-android14`. Credentials in `~/.api-keys`. **Cold-start path verified end-to-end 2026-05-25** — see "Operational verification log" below.
 2. ~~F-Droid distribution~~ — existing repo at `/mnt/subtitled/fdroid`, publish via `publish-live.sh`, central keystore.
 3. ~~Package name~~ — `dev.voicepipe.zwangli`.
 4. ~~Min SDK~~ — API 24.

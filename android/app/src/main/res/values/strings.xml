@@ -58,4 +58,7 @@
     <string name="hint_search_template">Search URL template (optional)</string>
     <string name="helper_search_template">e.g. https://duckduckgo.com/?q={query}  •  Leave blank to use system default.</string>
     <string name="error_search_template_invalid">Template must contain {query} and start with http(s)://</string>
+    <string name="action_try_search">Try a search</string>
+    <string name="try_search_query">zwangli configurator test</string>
+    <string name="try_search_no_handler">No browser or search app could handle the request.</string>
 </resources>

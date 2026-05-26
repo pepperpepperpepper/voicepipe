@@ -12,6 +12,7 @@ import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -22,6 +23,7 @@ import com.google.android.material.textfield.TextInputLayout
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 
 /** The "configurator" screen: permissions dashboard + server settings + a
  *  live connection test against the configured dispatch server.
@@ -54,6 +56,7 @@ class ConfiguratorActivity : AppCompatActivity() {
     private lateinit var textTestResult: TextView
     private lateinit var editSearchTemplate: EditText
     private lateinit var layoutSearchTemplate: TextInputLayout
+    private lateinit var buttonTrySearch: Button
 
     private val requestMicPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -114,6 +117,7 @@ class ConfiguratorActivity : AppCompatActivity() {
         textTestResult = findViewById(R.id.text_test_result)
         editSearchTemplate = findViewById(R.id.edit_search_template)
         layoutSearchTemplate = findViewById(R.id.layout_search_template)
+        buttonTrySearch = findViewById(R.id.button_try_search)
     }
 
     private fun wireListeners() {
@@ -150,13 +154,31 @@ class ConfiguratorActivity : AppCompatActivity() {
             },
         )
         buttonTest.setOnClickListener { runConnectionTest() }
+        buttonTrySearch.setOnClickListener { runSearchProbe() }
     }
 
     private fun validateSearchTemplate(value: String) {
-        layoutSearchTemplate.error = if (Settings.isValidSearchUrlTemplate(value)) {
+        val valid = Settings.isValidSearchUrlTemplate(value)
+        layoutSearchTemplate.error = if (valid) {
             null
         } else {
             getString(R.string.error_search_template_invalid)
+        }
+        buttonTrySearch.isEnabled = valid
+    }
+
+    /** Fires a sample web_search through the live [ClientActionExecutor]
+     *  so the user sees exactly what their template (or the system
+     *  default fallback) will do. Uses the same Settings-backed provider
+     *  that runtime searches use — no separate code path. */
+    private fun runSearchProbe() {
+        val executor = ClientActionExecutor(applicationContext)
+        val action = Json.parseToJsonElement(
+            """{"type":"web_search","query":"${getString(R.string.try_search_query)}"}""",
+        )
+        val summary = executor.execute(listOf(action))
+        if (summary.intentsFired == 0) {
+            Toast.makeText(this, R.string.try_search_no_handler, Toast.LENGTH_LONG).show()
         }
     }
 

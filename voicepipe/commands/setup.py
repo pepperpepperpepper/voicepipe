@@ -37,6 +37,42 @@ def _read_key_from_file(path: Path) -> str:
         return ""
 
 
+def _ensure_builtin_verb(verbs: dict, name: str) -> bool:
+    """Ensure ``verbs[name]`` is present as an enabled ``builtin`` verb.
+
+    The ``builtin`` type tells the config parser to default the verb's
+    ``action`` to its own name, which is what
+    :mod:`voicepipe.transcript_triggers._intents` registers
+    (``search``→``_action_search`` etc.). Returns True if the entry was
+    added or repaired.
+    """
+    existing = verbs.get(name)
+    if isinstance(existing, dict):
+        changed = False
+        if str(existing.get("type") or "").strip().lower() != "builtin":
+            existing["type"] = "builtin"
+            changed = True
+        if existing.get("enabled") is not True:
+            existing["enabled"] = True
+            changed = True
+        return changed
+    verbs[name] = {"type": "builtin", "enabled": True}
+    return True
+
+
+# Intent-style verbs added in the alarm/search/etc. work. Enabled by
+# default so a fresh `voicepipe setup` ships a working "zwingli alarm
+# 7am" / "zwingli search …" experience. Remove from triggers.json to
+# disable individually.
+_DEFAULT_INTENT_VERBS: tuple[str, ...] = (
+    "search",
+    "open",
+    "alarm",
+    "timer",
+    "dial",
+)
+
+
 def _ensure_zwingli_verbs_in_triggers_json(path: Path) -> bool:
     """Best-effort: ensure key Zwingli verbs exist/enabled in triggers.json."""
     try:
@@ -107,6 +143,10 @@ def _ensure_zwingli_verbs_in_triggers_json(path: Path) -> bool:
             "enabled": True,
         }
         changed = True
+
+    for intent_verb in _DEFAULT_INTENT_VERBS:
+        if _ensure_builtin_verb(verbs, intent_verb):
+            changed = True
 
     if not changed:
         return False
@@ -283,7 +323,10 @@ def setup(
     triggers_path = ensure_triggers_json()
     click.echo(f"triggers config: {triggers_path}")
     if _ensure_zwingli_verbs_in_triggers_json(triggers_path):
-        click.echo("Enabled `execute`, `subprocess`, and `type` verbs in triggers.json.")
+        click.echo(
+            "Enabled `execute`, `subprocess`, `type`, `search`, `open`, "
+            "`alarm`, `timer`, and `dial` verbs in triggers.json."
+        )
 
     if systemd:
         if is_windows():

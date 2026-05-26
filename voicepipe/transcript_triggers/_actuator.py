@@ -113,6 +113,9 @@ class Actuator(Protocol):
         ...
 
 
+_DEFAULT_SEARCH_URL_TEMPLATE = "https://duckduckgo.com/?q={query}"
+
+
 class DesktopActuator:
     """Default actuator — wraps :mod:`subprocess`, :mod:`voicepipe.clipboard`,
     and :mod:`voicepipe.audio_feedback`.
@@ -123,13 +126,34 @@ class DesktopActuator:
     ``voicepipe.clipboard.copy_to_clipboard`` continue to intercept this
     actuator's calls without modification.
 
-    ``web_search`` and ``open_url`` route through :mod:`webbrowser`.
+    ``web_search`` and ``open_url`` route through :mod:`webbrowser`. The
+    search URL is configurable via the ``search_url_template`` ctor arg
+    or the ``VOICEPIPE_SEARCH_URL_TEMPLATE`` env var; the template must
+    contain ``{query}`` which will be substituted with the URL-encoded
+    query. Defaults to DuckDuckGo.
+
     ``set_alarm`` / ``set_timer`` / ``dial`` have no standard desktop
     equivalent and are intentionally not advertised in
     :meth:`capabilities`; they always return ``False`` so dispatcher
     graceful-skip surfaces a polite error rather than the verb silently
     no-op'ing.
     """
+
+    def __init__(self, *, search_url_template: str | None = None) -> None:
+        import os as _os
+
+        template = (
+            search_url_template
+            or _os.environ.get("VOICEPIPE_SEARCH_URL_TEMPLATE")
+            or _DEFAULT_SEARCH_URL_TEMPLATE
+        )
+        if "{query}" not in template:
+            template = _DEFAULT_SEARCH_URL_TEMPLATE
+        self._search_url_template = template
+
+    @property
+    def search_url_template(self) -> str:
+        return self._search_url_template
 
     def capabilities(self) -> frozenset[str]:
         return frozenset(
@@ -205,9 +229,8 @@ class DesktopActuator:
         if not query.strip():
             return False
         from urllib.parse import quote_plus
-        return self.open_url(
-            f"https://duckduckgo.com/?q={quote_plus(query)}"
-        )
+        url = self._search_url_template.replace("{query}", quote_plus(query))
+        return self.open_url(url)
 
     def open_url(self, url: str) -> bool:
         if not url.strip():

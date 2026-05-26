@@ -262,6 +262,64 @@ def test_desktop_actuator_web_search_routes_through_open_url(monkeypatch) -> Non
     assert "weather+tokyo" in seen[0] or "weather%20tokyo" in seen[0]
 
 
+def test_desktop_actuator_search_url_template_is_configurable_via_ctor(
+    monkeypatch,
+) -> None:
+    import webbrowser
+
+    seen: list[str] = []
+    monkeypatch.setattr(
+        webbrowser, "open", lambda url, new=0, autoraise=True: seen.append(url) or True
+    )
+    act = DesktopActuator(
+        search_url_template="https://kagi.com/search?q={query}"
+    )
+    assert act.search_url_template == "https://kagi.com/search?q={query}"
+    assert act.web_search("octopus facts") is True
+    assert seen == ["https://kagi.com/search?q=octopus+facts"]
+
+
+def test_desktop_actuator_search_url_template_falls_back_to_env(
+    monkeypatch,
+) -> None:
+    import webbrowser
+
+    seen: list[str] = []
+    monkeypatch.setattr(
+        webbrowser, "open", lambda url, new=0, autoraise=True: seen.append(url) or True
+    )
+    monkeypatch.setenv(
+        "VOICEPIPE_SEARCH_URL_TEMPLATE",
+        "https://search.brave.com/search?q={query}",
+    )
+    assert DesktopActuator().web_search("rain in spain") is True
+    assert seen == ["https://search.brave.com/search?q=rain+in+spain"]
+
+
+def test_desktop_actuator_search_url_template_ctor_arg_beats_env(monkeypatch) -> None:
+    import webbrowser
+
+    seen: list[str] = []
+    monkeypatch.setattr(
+        webbrowser, "open", lambda url, new=0, autoraise=True: seen.append(url) or True
+    )
+    monkeypatch.setenv("VOICEPIPE_SEARCH_URL_TEMPLATE", "https://env/?q={query}")
+    act = DesktopActuator(search_url_template="https://ctor/?q={query}")
+    assert act.search_url_template == "https://ctor/?q={query}"
+    act.web_search("hi")
+    assert seen == ["https://ctor/?q=hi"]
+
+
+def test_desktop_actuator_search_url_template_rejects_template_without_query_token(
+    monkeypatch,
+) -> None:
+    """A template missing {query} would silently search for nothing —
+    fall back to the default rather than honor a broken setting."""
+    monkeypatch.setenv("VOICEPIPE_SEARCH_URL_TEMPLATE", "https://broken.example/")
+    act = DesktopActuator()
+    assert act.search_url_template == "https://duckduckgo.com/?q={query}"
+
+
 def test_desktop_actuator_open_url_returns_false_when_webbrowser_fails(
     monkeypatch,
 ) -> None:

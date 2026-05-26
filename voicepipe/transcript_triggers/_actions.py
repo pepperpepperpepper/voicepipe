@@ -17,6 +17,13 @@ from typing import Any, Callable
 from ._basic import _action_clipboard, _action_strip
 from ._codegen import _action_codegen
 from ._help import _action_help
+from ._intents import (
+    _action_alarm,
+    _action_dial,
+    _action_open,
+    _action_search,
+    _action_timer,
+)
 from ._llm import _action_zwingli
 from ._pending import _action_no, _action_yes
 from ._plugin import _action_plugin
@@ -38,6 +45,11 @@ _ACTIONS: dict[str, ActionHandler] = {
     "help": _action_help,
     "yes": _action_yes,
     "no": _action_no,
+    "search": _action_search,
+    "open": _action_open,
+    "alarm": _action_alarm,
+    "timer": _action_timer,
+    "dial": _action_dial,
 }
 
 # Keys returned by handlers in their inner_meta that the dispatcher should

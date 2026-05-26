@@ -53,4 +53,9 @@
     <string name="perm_service_desc">Foreground service that keeps Zwangli reachable from the status bar so you can dictate without opening the app first.</string>
     <string name="perm_alarm_title">Alarm</string>
     <string name="perm_alarm_desc">Granted at install. Lets the Clock app create alarms and timers from voice commands.</string>
+    <string name="configurator_header_search">Search</string>
+    <string name="search_template_blurb">By default, voice searches go through Android\'s system search engine. To override (e.g., DuckDuckGo, Kagi, a self-hosted instance), enter a URL template below using {query} as the placeholder.</string>
+    <string name="hint_search_template">Search URL template (optional)</string>
+    <string name="helper_search_template">e.g. https://duckduckgo.com/?q={query}  •  Leave blank to use system default.</string>
+    <string name="error_search_template_invalid">Template must contain {query} and start with http(s)://</string>
 </resources>

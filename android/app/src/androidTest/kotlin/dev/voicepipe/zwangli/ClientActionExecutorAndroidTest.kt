@@ -108,6 +108,63 @@ class ClientActionExecutorAndroidTest {
     )
 
     @Test
+    fun web_search_with_template_override_fires_view_intent() {
+        // The override path builds an ACTION_VIEW intent to the templated
+        // URL instead of ACTION_WEB_SEARCH. Both resolve on a stock device
+        // (browser), so we assert the executor accepted the action and
+        // counted it.
+        val executor = ClientActionExecutor(
+            context,
+            searchUrlTemplateProvider = { "https://duckduckgo.com/?q={query}" },
+        )
+        val summary = executor.execute(
+            listOf(Json.parseToJsonElement("""{"type":"web_search","query":"hello world"}""")),
+        )
+        assertEquals(1, summary.intentsFired)
+    }
+
+    @Test
+    fun web_search_with_blank_template_falls_back_to_system_search() {
+        val executor = ClientActionExecutor(
+            context,
+            searchUrlTemplateProvider = { "" },
+        )
+        val summary = executor.execute(
+            listOf(Json.parseToJsonElement("""{"type":"web_search","query":"fallback"}""")),
+        )
+        assertEquals(1, summary.intentsFired)
+    }
+
+    @Test
+    fun web_search_with_template_missing_placeholder_falls_back_to_system_search() {
+        val executor = ClientActionExecutor(
+            context,
+            searchUrlTemplateProvider = { "https://example.com/?q=" }, // no {query}
+        )
+        val summary = executor.execute(
+            listOf(Json.parseToJsonElement("""{"type":"web_search","query":"x"}""")),
+        )
+        // Should still fire something — the fallback ACTION_WEB_SEARCH path.
+        assertEquals(1, summary.intentsFired)
+    }
+
+    @Test
+    fun web_search_default_provider_reads_from_settings() {
+        val settings = Settings.from(context)
+        val previous = settings.searchUrlTemplate
+        settings.searchUrlTemplate = "https://kagi.com/search?q={query}"
+        try {
+            val executor = ClientActionExecutor(context)
+            val summary = executor.execute(
+                listOf(Json.parseToJsonElement("""{"type":"web_search","query":"settings round trip"}""")),
+            )
+            assertEquals(1, summary.intentsFired)
+        } finally {
+            settings.searchUrlTemplate = previous
+        }
+    }
+
+    @Test
     fun open_url_fires_intent() = assertIntentFires(
         """{"type":"open_url","url":"https://example.com/"}""",
     )

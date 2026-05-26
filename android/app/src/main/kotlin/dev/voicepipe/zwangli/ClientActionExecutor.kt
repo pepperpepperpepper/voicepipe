@@ -15,6 +15,9 @@ import kotlinx.serialization.json.JsonElement
 class ClientActionExecutor(
     private val context: Context,
     private val feedbackListener: FeedbackListener? = null,
+    private val searchUrlTemplateProvider: () -> String? = {
+        Settings.from(context).searchUrlTemplate.takeIf { it.isNotBlank() }
+    },
 ) {
 
     interface FeedbackListener {
@@ -106,7 +109,27 @@ class ClientActionExecutor(
         }
     }
 
-    private fun fireWebSearch(query: String): Boolean = fireIntent(
+    private fun fireWebSearch(query: String): Boolean {
+        val template = searchUrlTemplateProvider()
+        if (!template.isNullOrBlank() &&
+            template.contains(Settings.SEARCH_TEMPLATE_PLACEHOLDER)
+        ) {
+            val url = template.replace(
+                Settings.SEARCH_TEMPLATE_PLACEHOLDER,
+                Uri.encode(query),
+            )
+            val uri = try {
+                Uri.parse(url)
+            } catch (e: Exception) {
+                Log.w(TAG, "web_search: cannot parse override url '$url'", e)
+                return fireSystemSearch(query)
+            }
+            return fireIntent(Intent(Intent.ACTION_VIEW, uri), "web_search")
+        }
+        return fireSystemSearch(query)
+    }
+
+    private fun fireSystemSearch(query: String): Boolean = fireIntent(
         Intent(Intent.ACTION_WEB_SEARCH).putExtra(SearchManager.QUERY, query),
         "web_search",
     )

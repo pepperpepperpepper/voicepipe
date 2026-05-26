@@ -51,4 +51,36 @@ class SettingsTest {
     fun `isValidUrl rejects garbage`() {
         assertFalse(isValidUrl("http://"))
     }
+
+    @Test
+    fun `isValidSearchUrlTemplate accepts empty as use-system-default`() {
+        assertTrue(Settings.isValidSearchUrlTemplate(""))
+        assertTrue(Settings.isValidSearchUrlTemplate("   "))
+    }
+
+    @Test
+    fun `isValidSearchUrlTemplate accepts common engine templates`() {
+        assertTrue(Settings.isValidSearchUrlTemplate("https://duckduckgo.com/?q={query}"))
+        assertTrue(Settings.isValidSearchUrlTemplate("https://www.google.com/search?q={query}"))
+        assertTrue(Settings.isValidSearchUrlTemplate("https://kagi.com/search?q={query}"))
+        assertTrue(Settings.isValidSearchUrlTemplate("http://search.local/?q={query}&safe=on"))
+    }
+
+    @Test
+    fun `isValidSearchUrlTemplate rejects template missing query placeholder`() {
+        assertFalse(Settings.isValidSearchUrlTemplate("https://duckduckgo.com/?q="))
+        assertFalse(Settings.isValidSearchUrlTemplate("https://example.com/search"))
+    }
+
+    @Test
+    fun `isValidSearchUrlTemplate rejects template without http or https scheme`() {
+        assertFalse(Settings.isValidSearchUrlTemplate("duckduckgo.com/?q={query}"))
+        assertFalse(Settings.isValidSearchUrlTemplate("ftp://search/?q={query}"))
+        assertFalse(Settings.isValidSearchUrlTemplate("javascript:alert({query})"))
+    }
+
+    @Test
+    fun `isValidSearchUrlTemplate rejects template that wouldn't URL-parse`() {
+        assertFalse(Settings.isValidSearchUrlTemplate("https:///?q={query}"))
+    }
 }

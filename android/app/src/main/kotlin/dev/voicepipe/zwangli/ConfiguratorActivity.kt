@@ -18,6 +18,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.switchmaterial.SwitchMaterial
+import com.google.android.material.textfield.TextInputLayout
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -51,6 +52,8 @@ class ConfiguratorActivity : AppCompatActivity() {
     private lateinit var editToken: EditText
     private lateinit var buttonTest: Button
     private lateinit var textTestResult: TextView
+    private lateinit var editSearchTemplate: EditText
+    private lateinit var layoutSearchTemplate: TextInputLayout
 
     private val requestMicPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -73,7 +76,9 @@ class ConfiguratorActivity : AppCompatActivity() {
         wireListeners()
         editServerUrl.setText(settings.serverUrl)
         editToken.setText(settings.token)
+        editSearchTemplate.setText(settings.searchUrlTemplate)
         switchStartOnBoot.isChecked = settings.startOnBoot
+        validateSearchTemplate(settings.searchUrlTemplate)
 
         // The notifications permission only exists on SDK 33+.
         cardNotifications.visibility =
@@ -107,6 +112,8 @@ class ConfiguratorActivity : AppCompatActivity() {
         editToken = findViewById(R.id.edit_token)
         buttonTest = findViewById(R.id.button_test)
         textTestResult = findViewById(R.id.text_test_result)
+        editSearchTemplate = findViewById(R.id.edit_search_template)
+        layoutSearchTemplate = findViewById(R.id.layout_search_template)
     }
 
     private fun wireListeners() {
@@ -136,7 +143,21 @@ class ConfiguratorActivity : AppCompatActivity() {
         }
         editServerUrl.addTextChangedListener(savingTextWatcher { settings.serverUrl = it })
         editToken.addTextChangedListener(savingTextWatcher { settings.token = it })
+        editSearchTemplate.addTextChangedListener(
+            savingTextWatcher {
+                settings.searchUrlTemplate = it
+                validateSearchTemplate(it)
+            },
+        )
         buttonTest.setOnClickListener { runConnectionTest() }
+    }
+
+    private fun validateSearchTemplate(value: String) {
+        layoutSearchTemplate.error = if (Settings.isValidSearchUrlTemplate(value)) {
+            null
+        } else {
+            getString(R.string.error_search_template_invalid)
+        }
     }
 
     private fun savingTextWatcher(save: (String) -> Unit): TextWatcher = object : TextWatcher {

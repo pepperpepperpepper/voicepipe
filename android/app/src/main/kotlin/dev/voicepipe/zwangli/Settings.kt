@@ -23,12 +23,27 @@ class Settings(private val prefs: SharedPreferences) {
             prefs.edit().putBoolean(KEY_START_ON_BOOT, value).apply()
         }
 
+    /** Optional URL template used to override the system default search
+     *  engine for voice-driven `web_search` actions. Empty string means
+     *  "fall back to `ACTION_WEB_SEARCH` and let Android route to the
+     *  user's chosen default." When set, must contain `{query}` which
+     *  will be substituted with the URL-encoded query. Malformed values
+     *  (missing `{query}`) are stored as-is but ignored at fire time —
+     *  see [ClientActionExecutor.fireWebSearch]. */
+    var searchUrlTemplate: String
+        get() = prefs.getString(KEY_SEARCH_URL_TEMPLATE, "") ?: ""
+        set(value) {
+            prefs.edit().putString(KEY_SEARCH_URL_TEMPLATE, value.trim()).apply()
+        }
+
     companion object {
         const val PREFS_NAME = "zwangli"
         const val KEY_SERVER_URL = "server_url"
         const val KEY_TOKEN = "token"
         const val KEY_START_ON_BOOT = "start_on_boot"
+        const val KEY_SEARCH_URL_TEMPLATE = "search_url_template"
         const val DEFAULT_SERVER_URL = "http://localhost:8765"
+        const val SEARCH_TEMPLATE_PLACEHOLDER = "{query}"
 
         fun from(context: Context): Settings =
             Settings(context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE))
@@ -55,6 +70,26 @@ class Settings(private val prefs: SharedPreferences) {
             return try {
                 val url = java.net.URL(withScheme)
                 !url.host.isNullOrBlank()
+            } catch (_: java.net.MalformedURLException) {
+                false
+            }
+        }
+
+        /** A search URL template is valid iff:
+         *  - it is empty (meaning "use system default search"), OR
+         *  - it parses as an http(s) URL AND contains `{query}` so the
+         *    user's query has somewhere to land. */
+        fun isValidSearchUrlTemplate(raw: String): Boolean {
+            val trimmed = raw.trim()
+            if (trimmed.isEmpty()) return true
+            if (!trimmed.contains(SEARCH_TEMPLATE_PLACEHOLDER)) return false
+            // Substitute a sample query and try to URL-parse the result.
+            val sample = trimmed.replace(SEARCH_TEMPLATE_PLACEHOLDER, "test")
+            if (!sample.startsWith("http://") && !sample.startsWith("https://")) {
+                return false
+            }
+            return try {
+                java.net.URL(sample).host?.isNotBlank() == true
             } catch (_: java.net.MalformedURLException) {
                 false
             }

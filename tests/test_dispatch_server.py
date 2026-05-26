@@ -23,7 +23,12 @@ from voicepipe.dispatch_server import (  # noqa: E402
 from voicepipe.transcript_triggers._actuator import (  # noqa: E402
     CAP_AUDIO_FEEDBACK,
     CAP_CLIPBOARD,
+    CAP_DIAL,
+    CAP_OPEN_URL,
+    CAP_SET_ALARM,
+    CAP_SET_TIMER,
     CAP_SUBPROCESS,
+    CAP_WEB_SEARCH,
 )
 
 
@@ -114,6 +119,96 @@ def test_server_actuator_clipboard_noops_when_capability_missing() -> None:
 def test_server_actuator_filters_unknown_capability_strings() -> None:
     act = ServerActuator(capabilities={"clipboard", "made_up_thing"})
     assert act.capabilities() == frozenset({CAP_CLIPBOARD})
+
+
+def test_server_actuator_advertises_all_intent_caps_by_default() -> None:
+    """ServerActuator() with no caps argument defaults to _ALL_CAPS, which
+    now includes the five Intent-style verbs. Each must be present so the
+    dispatcher doesn't graceful-skip them when no client caps are sent."""
+    caps = ServerActuator().capabilities()
+    assert CAP_WEB_SEARCH in caps
+    assert CAP_OPEN_URL in caps
+    assert CAP_SET_ALARM in caps
+    assert CAP_SET_TIMER in caps
+    assert CAP_DIAL in caps
+
+
+def test_server_actuator_web_search_queues_client_action() -> None:
+    act = ServerActuator()
+    assert act.web_search("weather tokyo") is True
+    assert act.client_actions == [{"type": "web_search", "query": "weather tokyo"}]
+
+
+def test_server_actuator_open_url_queues_client_action() -> None:
+    act = ServerActuator()
+    assert act.open_url("https://example.com/") is True
+    assert act.client_actions == [
+        {"type": "open_url", "url": "https://example.com/"}
+    ]
+
+
+def test_server_actuator_set_alarm_queues_with_optional_message() -> None:
+    act = ServerActuator()
+    assert act.set_alarm(7, 30, "wake up") is True
+    assert act.set_alarm(6, 0) is True
+    assert act.client_actions == [
+        {"type": "set_alarm", "hour": 7, "minutes": 30, "message": "wake up"},
+        {"type": "set_alarm", "hour": 6, "minutes": 0},
+    ]
+
+
+def test_server_actuator_set_alarm_rejects_out_of_range() -> None:
+    act = ServerActuator()
+    assert act.set_alarm(24, 0) is False
+    assert act.set_alarm(-1, 0) is False
+    assert act.set_alarm(0, 60) is False
+    assert act.set_alarm(0, -1) is False
+    assert act.client_actions == []
+
+
+def test_server_actuator_set_timer_queues_with_optional_message() -> None:
+    act = ServerActuator()
+    assert act.set_timer(300, "pasta") is True
+    assert act.set_timer(60) is True
+    assert act.client_actions == [
+        {"type": "set_timer", "seconds": 300, "message": "pasta"},
+        {"type": "set_timer", "seconds": 60},
+    ]
+
+
+def test_server_actuator_set_timer_rejects_out_of_range() -> None:
+    act = ServerActuator()
+    assert act.set_timer(0) is False
+    assert act.set_timer(86_401) is False
+    assert act.client_actions == []
+
+
+def test_server_actuator_dial_queues_client_action() -> None:
+    act = ServerActuator()
+    assert act.dial("+15555550100") is True
+    assert act.client_actions == [{"type": "dial", "number": "+15555550100"}]
+
+
+def test_server_actuator_intent_verbs_noop_when_capabilities_missing() -> None:
+    """A client that only advertises clipboard/audio_feedback (existing
+    behavior pre-Phase A) must NOT receive Intent-style client_actions."""
+    bare = {CAP_CLIPBOARD, CAP_AUDIO_FEEDBACK}
+    act = ServerActuator(capabilities=bare)
+    assert act.web_search("q") is False
+    assert act.open_url("https://x") is False
+    assert act.set_alarm(7, 0) is False
+    assert act.set_timer(60) is False
+    assert act.dial("+1") is False
+    assert act.client_actions == []
+
+
+def test_server_actuator_intent_verbs_reject_blank_input() -> None:
+    act = ServerActuator()
+    assert act.web_search("") is False
+    assert act.web_search("   ") is False
+    assert act.open_url("") is False
+    assert act.dial("") is False
+    assert act.client_actions == []
 
 
 # ---------------------------------------------------------------------------

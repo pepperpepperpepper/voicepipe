@@ -29,6 +29,11 @@ from typing import Any, Protocol, runtime_checkable
 CAP_SUBPROCESS = "subprocess"
 CAP_CLIPBOARD = "clipboard"
 CAP_AUDIO_FEEDBACK = "audio_feedback"
+CAP_WEB_SEARCH = "web_search"
+CAP_OPEN_URL = "open_url"
+CAP_SET_ALARM = "set_alarm"
+CAP_SET_TIMER = "set_timer"
+CAP_DIAL = "dial"
 
 
 class ActuatorCapabilityError(RuntimeError):
@@ -62,6 +67,14 @@ class Actuator(Protocol):
     Implementations should not raise on "capability unsupported" beyond
     :class:`ActuatorCapabilityError`. Callers may pre-check via
     :meth:`capabilities` if they want to short-circuit.
+
+    The ``web_search`` / ``open_url`` / ``set_alarm`` / ``set_timer`` /
+    ``dial`` methods are "Intent-style" verbs: on desktop they may map
+    to the system browser / clock / dialer; on Android (via
+    :class:`~voicepipe.dispatch_server.ServerActuator`) they queue
+    ``client_actions`` for the phone to execute via the corresponding
+    Android Intent. All return ``True`` if the action was carried out
+    or queued, ``False`` if the actuator can't do it.
     """
 
     def capabilities(self) -> frozenset[str]:
@@ -82,6 +95,23 @@ class Actuator(Protocol):
     def play_feedback(self, event: str) -> None:
         ...
 
+    def web_search(self, query: str) -> bool:
+        ...
+
+    def open_url(self, url: str) -> bool:
+        ...
+
+    def set_alarm(
+        self, hour: int, minutes: int, message: str | None = None
+    ) -> bool:
+        ...
+
+    def set_timer(self, seconds: int, message: str | None = None) -> bool:
+        ...
+
+    def dial(self, number: str) -> bool:
+        ...
+
 
 class DesktopActuator:
     """Default actuator — wraps :mod:`subprocess`, :mod:`voicepipe.clipboard`,
@@ -92,10 +122,25 @@ class DesktopActuator:
     monkeypatch ``voicepipe.transcript_triggers.subprocess.run`` or
     ``voicepipe.clipboard.copy_to_clipboard`` continue to intercept this
     actuator's calls without modification.
+
+    ``web_search`` and ``open_url`` route through :mod:`webbrowser`.
+    ``set_alarm`` / ``set_timer`` / ``dial`` have no standard desktop
+    equivalent and are intentionally not advertised in
+    :meth:`capabilities`; they always return ``False`` so dispatcher
+    graceful-skip surfaces a polite error rather than the verb silently
+    no-op'ing.
     """
 
     def capabilities(self) -> frozenset[str]:
-        return frozenset({CAP_SUBPROCESS, CAP_CLIPBOARD, CAP_AUDIO_FEEDBACK})
+        return frozenset(
+            {
+                CAP_SUBPROCESS,
+                CAP_CLIPBOARD,
+                CAP_AUDIO_FEEDBACK,
+                CAP_WEB_SEARCH,
+                CAP_OPEN_URL,
+            }
+        )
 
     def run_subprocess(
         self,
@@ -156,6 +201,38 @@ class DesktopActuator:
         except Exception:
             pass
 
+    def web_search(self, query: str) -> bool:
+        if not query.strip():
+            return False
+        from urllib.parse import quote_plus
+        return self.open_url(
+            f"https://duckduckgo.com/?q={quote_plus(query)}"
+        )
+
+    def open_url(self, url: str) -> bool:
+        if not url.strip():
+            return False
+        try:
+            import webbrowser
+
+            return bool(webbrowser.open(url, new=2))
+        except Exception:
+            return False
+
+    def set_alarm(
+        self, hour: int, minutes: int, message: str | None = None
+    ) -> bool:
+        # No standard desktop equivalent; not in capabilities().
+        return False
+
+    def set_timer(self, seconds: int, message: str | None = None) -> bool:
+        # No standard desktop equivalent; not in capabilities().
+        return False
+
+    def dial(self, number: str) -> bool:
+        # No standard desktop equivalent; not in capabilities().
+        return False
+
 
 @dataclass
 class InMemoryActuator:
@@ -171,12 +248,26 @@ class InMemoryActuator:
 
     caps: frozenset[str] = field(
         default_factory=lambda: frozenset(
-            {CAP_SUBPROCESS, CAP_CLIPBOARD, CAP_AUDIO_FEEDBACK}
+            {
+                CAP_SUBPROCESS,
+                CAP_CLIPBOARD,
+                CAP_AUDIO_FEEDBACK,
+                CAP_WEB_SEARCH,
+                CAP_OPEN_URL,
+                CAP_SET_ALARM,
+                CAP_SET_TIMER,
+                CAP_DIAL,
+            }
         )
     )
     subprocess_calls: list[dict[str, Any]] = field(default_factory=list)
     clipboard_calls: list[str] = field(default_factory=list)
     feedback_calls: list[str] = field(default_factory=list)
+    web_search_calls: list[str] = field(default_factory=list)
+    open_url_calls: list[str] = field(default_factory=list)
+    set_alarm_calls: list[dict[str, Any]] = field(default_factory=list)
+    set_timer_calls: list[dict[str, Any]] = field(default_factory=list)
+    dial_calls: list[str] = field(default_factory=list)
     subprocess_result: SubprocessResult = field(
         default_factory=lambda: SubprocessResult(returncode=0, stdout="", stderr="")
     )
@@ -211,6 +302,40 @@ class InMemoryActuator:
         if CAP_AUDIO_FEEDBACK not in self.caps:
             return
         self.feedback_calls.append(event)
+
+    def web_search(self, query: str) -> bool:
+        if CAP_WEB_SEARCH not in self.caps:
+            return False
+        self.web_search_calls.append(query)
+        return True
+
+    def open_url(self, url: str) -> bool:
+        if CAP_OPEN_URL not in self.caps:
+            return False
+        self.open_url_calls.append(url)
+        return True
+
+    def set_alarm(
+        self, hour: int, minutes: int, message: str | None = None
+    ) -> bool:
+        if CAP_SET_ALARM not in self.caps:
+            return False
+        self.set_alarm_calls.append(
+            {"hour": hour, "minutes": minutes, "message": message}
+        )
+        return True
+
+    def set_timer(self, seconds: int, message: str | None = None) -> bool:
+        if CAP_SET_TIMER not in self.caps:
+            return False
+        self.set_timer_calls.append({"seconds": seconds, "message": message})
+        return True
+
+    def dial(self, number: str) -> bool:
+        if CAP_DIAL not in self.caps:
+            return False
+        self.dial_calls.append(number)
+        return True
 
 
 _DEFAULT_ACTUATOR: Actuator | None = None

@@ -10,7 +10,12 @@ import voicepipe.transcript_triggers as tt
 from voicepipe.transcript_triggers._actuator import (
     CAP_AUDIO_FEEDBACK,
     CAP_CLIPBOARD,
+    CAP_DIAL,
+    CAP_OPEN_URL,
+    CAP_SET_ALARM,
+    CAP_SET_TIMER,
     CAP_SUBPROCESS,
+    CAP_WEB_SEARCH,
     Actuator,
     ActuatorCapabilityError,
     DesktopActuator,
@@ -43,8 +48,26 @@ def test_resolve_actuator_falls_back_to_default() -> None:
 
 
 def test_desktop_actuator_advertises_all_capabilities() -> None:
+    """Desktop has subprocess/clipboard/audio + browser-backed intents.
+    Alarm/timer/dial are intentionally excluded — no standard desktop
+    equivalent; verbs graceful-skip via the bool-return path."""
     caps = DesktopActuator().capabilities()
-    assert caps == frozenset({CAP_SUBPROCESS, CAP_CLIPBOARD, CAP_AUDIO_FEEDBACK})
+    assert caps == frozenset(
+        {
+            CAP_SUBPROCESS,
+            CAP_CLIPBOARD,
+            CAP_AUDIO_FEEDBACK,
+            CAP_WEB_SEARCH,
+            CAP_OPEN_URL,
+        }
+    )
+
+
+def test_desktop_actuator_does_not_advertise_alarm_timer_dial() -> None:
+    caps = DesktopActuator().capabilities()
+    assert CAP_SET_ALARM not in caps
+    assert CAP_SET_TIMER not in caps
+    assert CAP_DIAL not in caps
 
 
 def test_actuator_protocol_runtime_checkable() -> None:
@@ -117,6 +140,57 @@ def test_in_memory_actuator_feedback_noops_when_capability_missing() -> None:
     assert act.feedback_calls == []
 
 
+def test_in_memory_actuator_captures_web_search() -> None:
+    act = InMemoryActuator()
+    assert act.web_search("weather tokyo") is True
+    assert act.web_search_calls == ["weather tokyo"]
+
+
+def test_in_memory_actuator_captures_open_url() -> None:
+    act = InMemoryActuator()
+    assert act.open_url("https://example.com/") is True
+    assert act.open_url_calls == ["https://example.com/"]
+
+
+def test_in_memory_actuator_captures_set_alarm_with_and_without_message() -> None:
+    act = InMemoryActuator()
+    assert act.set_alarm(7, 30, "wake up") is True
+    assert act.set_alarm(6, 0) is True
+    assert act.set_alarm_calls == [
+        {"hour": 7, "minutes": 30, "message": "wake up"},
+        {"hour": 6, "minutes": 0, "message": None},
+    ]
+
+
+def test_in_memory_actuator_captures_set_timer() -> None:
+    act = InMemoryActuator()
+    assert act.set_timer(300, "pasta") is True
+    assert act.set_timer_calls == [{"seconds": 300, "message": "pasta"}]
+
+
+def test_in_memory_actuator_captures_dial() -> None:
+    act = InMemoryActuator()
+    assert act.dial("+15555550100") is True
+    assert act.dial_calls == ["+15555550100"]
+
+
+def test_in_memory_actuator_intent_methods_noop_when_capabilities_missing() -> None:
+    """All five Intent-style verbs gate on their own capability and return
+    False without recording when that capability is dropped."""
+    bare = frozenset({CAP_SUBPROCESS})
+    act = InMemoryActuator(caps=bare)
+    assert act.web_search("q") is False
+    assert act.open_url("https://x") is False
+    assert act.set_alarm(7, 0) is False
+    assert act.set_timer(60) is False
+    assert act.dial("+1") is False
+    assert act.web_search_calls == []
+    assert act.open_url_calls == []
+    assert act.set_alarm_calls == []
+    assert act.set_timer_calls == []
+    assert act.dial_calls == []
+
+
 # ---------------------------------------------------------------------------
 # DesktopActuator subprocess wiring
 # ---------------------------------------------------------------------------
@@ -154,6 +228,65 @@ def test_desktop_actuator_subprocess_timeout_yields_timed_out_result(monkeypatch
     result = DesktopActuator().run_subprocess(["sleep", "60"], shell=False, timeout_seconds=0.01)
     assert result.timed_out is True
     assert result.returncode is None
+
+
+# ---------------------------------------------------------------------------
+# DesktopActuator browser-backed intent verbs
+# ---------------------------------------------------------------------------
+
+
+def test_desktop_actuator_open_url_calls_webbrowser(monkeypatch) -> None:
+    import webbrowser
+
+    seen: list[tuple[str, int]] = []
+
+    def _fake_open(url, new=0, autoraise=True):
+        seen.append((url, new))
+        return True
+
+    monkeypatch.setattr(webbrowser, "open", _fake_open)
+    assert DesktopActuator().open_url("https://example.com/") is True
+    assert seen == [("https://example.com/", 2)]
+
+
+def test_desktop_actuator_web_search_routes_through_open_url(monkeypatch) -> None:
+    import webbrowser
+
+    seen: list[str] = []
+    monkeypatch.setattr(
+        webbrowser, "open", lambda url, new=0, autoraise=True: seen.append(url) or True
+    )
+    assert DesktopActuator().web_search("weather tokyo") is True
+    assert len(seen) == 1
+    assert seen[0].startswith("https://duckduckgo.com/?q=")
+    assert "weather+tokyo" in seen[0] or "weather%20tokyo" in seen[0]
+
+
+def test_desktop_actuator_open_url_returns_false_when_webbrowser_fails(
+    monkeypatch,
+) -> None:
+    import webbrowser
+
+    monkeypatch.setattr(webbrowser, "open", lambda *a, **k: False)
+    assert DesktopActuator().open_url("https://example.com/") is False
+
+
+def test_desktop_actuator_open_url_rejects_blank() -> None:
+    assert DesktopActuator().open_url("") is False
+    assert DesktopActuator().open_url("   ") is False
+
+
+def test_desktop_actuator_web_search_rejects_blank_query() -> None:
+    assert DesktopActuator().web_search("") is False
+    assert DesktopActuator().web_search("   ") is False
+
+
+def test_desktop_actuator_alarm_timer_dial_return_false() -> None:
+    """Not in capabilities() → always False. Verbs see False and graceful-skip."""
+    act = DesktopActuator()
+    assert act.set_alarm(7, 30, "wake up") is False
+    assert act.set_timer(60, "x") is False
+    assert act.dial("+15555550100") is False
 
 
 # ---------------------------------------------------------------------------

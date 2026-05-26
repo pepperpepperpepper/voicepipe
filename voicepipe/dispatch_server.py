@@ -49,7 +49,12 @@ from voicepipe.config import get_transcript_commands_config
 from voicepipe.transcript_triggers._actuator import (
     CAP_AUDIO_FEEDBACK,
     CAP_CLIPBOARD,
+    CAP_DIAL,
+    CAP_OPEN_URL,
+    CAP_SET_ALARM,
+    CAP_SET_TIMER,
     CAP_SUBPROCESS,
+    CAP_WEB_SEARCH,
     DesktopActuator,
     SubprocessResult,
 )
@@ -57,7 +62,16 @@ from voicepipe.transcript_triggers._debug_log import _zwingli_debug_log_path
 
 
 _ALL_CAPS: frozenset[str] = frozenset(
-    {CAP_SUBPROCESS, CAP_CLIPBOARD, CAP_AUDIO_FEEDBACK}
+    {
+        CAP_SUBPROCESS,
+        CAP_CLIPBOARD,
+        CAP_AUDIO_FEEDBACK,
+        CAP_WEB_SEARCH,
+        CAP_OPEN_URL,
+        CAP_SET_ALARM,
+        CAP_SET_TIMER,
+        CAP_DIAL,
+    }
 )
 
 
@@ -105,6 +119,52 @@ class ServerActuator:
         if CAP_AUDIO_FEEDBACK not in self._caps:
             return
         self.client_actions.append({"type": "feedback", "event": event})
+
+    def web_search(self, query: str) -> bool:
+        if CAP_WEB_SEARCH not in self._caps or not query.strip():
+            return False
+        self.client_actions.append({"type": "web_search", "query": query})
+        return True
+
+    def open_url(self, url: str) -> bool:
+        if CAP_OPEN_URL not in self._caps or not url.strip():
+            return False
+        self.client_actions.append({"type": "open_url", "url": url})
+        return True
+
+    def set_alarm(
+        self, hour: int, minutes: int, message: str | None = None
+    ) -> bool:
+        if CAP_SET_ALARM not in self._caps:
+            return False
+        if not (0 <= hour <= 23 and 0 <= minutes <= 59):
+            return False
+        entry: dict[str, Any] = {
+            "type": "set_alarm",
+            "hour": hour,
+            "minutes": minutes,
+        }
+        if message:
+            entry["message"] = message
+        self.client_actions.append(entry)
+        return True
+
+    def set_timer(self, seconds: int, message: str | None = None) -> bool:
+        if CAP_SET_TIMER not in self._caps:
+            return False
+        if not (1 <= seconds <= 86_400):
+            return False
+        entry: dict[str, Any] = {"type": "set_timer", "seconds": seconds}
+        if message:
+            entry["message"] = message
+        self.client_actions.append(entry)
+        return True
+
+    def dial(self, number: str) -> bool:
+        if CAP_DIAL not in self._caps or not number.strip():
+            return False
+        self.client_actions.append({"type": "dial", "number": number})
+        return True
 
 
 try:

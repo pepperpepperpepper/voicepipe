@@ -109,6 +109,11 @@ verification note in [`../ZWANGLI_PLAN.md`](../ZWANGLI_PLAN.md) for
 workarounds (local Genymotion Desktop, real device on USB, or a public
 tunnel like `cloudflared`).
 
+For `./gradlew :app:connectedDebugAndroidTest` (instrumented audio
+tests on a real device) and the ad-hoc `am broadcast` recipe that
+drives a transcript through the full pipeline without using the mic,
+see [`TESTING.md`](TESTING.md).
+
 ## What's next
 
 `../ZWANGLI_PLAN.md` is the operational roadmap.

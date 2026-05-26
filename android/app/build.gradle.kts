@@ -80,6 +80,12 @@ android {
         named("test") {
             java.srcDirs("src/test/kotlin")
         }
+        named("debug") {
+            java.srcDirs("src/debug/kotlin")
+        }
+        named("androidTest") {
+            java.srcDirs("src/androidTest/kotlin")
+        }
     }
 }
 
@@ -94,4 +100,10 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation(libs.kotlinx.coroutines.test)
+
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.rules)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.okhttp.mockwebserver)
+    androidTestImplementation(libs.kotlinx.coroutines.test)
 }

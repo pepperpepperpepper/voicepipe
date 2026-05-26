@@ -7,7 +7,14 @@ import android.media.MediaPlayer
 import android.util.Log
 import kotlinx.serialization.json.JsonElement
 
-class ClientActionExecutor(private val context: Context) {
+class ClientActionExecutor(
+    private val context: Context,
+    private val feedbackListener: FeedbackListener? = null,
+) {
+
+    interface FeedbackListener {
+        fun onCompleted(event: String, success: Boolean)
+    }
 
     fun execute(actions: List<JsonElement>): Summary {
         var clipboardCount = 0
@@ -52,13 +59,24 @@ class ClientActionExecutor(private val context: Context) {
     private fun playFeedback(event: String): Boolean {
         val resId = FeedbackSounds.resourceFor(event) ?: return false
         return try {
-            val player = MediaPlayer.create(context, resId) ?: return false
-            player.setOnCompletionListener { it.release() }
-            player.setOnErrorListener { mp, _, _ -> mp.release(); true }
+            val player = MediaPlayer.create(context, resId) ?: run {
+                feedbackListener?.onCompleted(event, false)
+                return false
+            }
+            player.setOnCompletionListener {
+                it.release()
+                feedbackListener?.onCompleted(event, true)
+            }
+            player.setOnErrorListener { mp, _, _ ->
+                mp.release()
+                feedbackListener?.onCompleted(event, false)
+                true
+            }
             player.start()
             true
         } catch (e: Exception) {
             Log.w(TAG, "Feedback playback failed for event=$event", e)
+            feedbackListener?.onCompleted(event, false)
             false
         }
     }

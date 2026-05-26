@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Zwangli</string>
+    <string name="main_subtitle">Speak a transcript, or type one and tap Send to drive the dispatch pipeline end-to-end. Server URL and permissions live in the Configurator (overflow menu).</string>
     <string name="hint_server_url">Server URL</string>
     <string name="hint_token">Bearer token (optional)</string>
     <string name="hint_transcript">Transcript</string>
@@ -28,4 +29,28 @@
     <string name="action_mic_unavailable">Speech recognition unavailable on this device</string>
     <string name="mic_permission_denied">Microphone permission denied — using text input instead</string>
     <string name="mic_error_prefix">Speech: </string>
+
+    <!-- Configurator -->
+    <string name="configurator_title">Zwangli configurator</string>
+    <string name="menu_configurator">Configurator</string>
+    <string name="configurator_header_permissions">Permissions</string>
+    <string name="configurator_header_server">Server</string>
+    <string name="badge_granted">✓ Granted</string>
+    <string name="badge_missing">✗ Missing</string>
+    <string name="action_grant">Grant</string>
+    <string name="action_revisit">Open app settings</string>
+    <string name="action_test_connection">Test connection</string>
+    <string name="test_result_placeholder">Tap "Test connection" to ping the server and list its enabled verbs.</string>
+    <string name="test_result_running">Testing…</string>
+    <string name="test_result_unreachable">Server unreachable.</string>
+    <string name="perm_accessibility_title">Accessibility service</string>
+    <string name="perm_accessibility_desc">Types dispatch responses into whichever app is focused. Required for the dictate-anywhere flow.</string>
+    <string name="perm_microphone_title">Microphone</string>
+    <string name="perm_microphone_desc">Captures speech for the on-device recognizer.</string>
+    <string name="perm_notifications_title">Notifications</string>
+    <string name="perm_notifications_desc">Shows the persistent dictation notification with the Dictate / Stop actions.</string>
+    <string name="perm_service_title">Persistent dictation</string>
+    <string name="perm_service_desc">Foreground service that keeps Zwangli reachable from the status bar so you can dictate without opening the app first.</string>
+    <string name="perm_alarm_title">Alarm</string>
+    <string name="perm_alarm_desc">Granted at install. Lets the Clock app create alarms and timers from voice commands.</string>
 </resources>

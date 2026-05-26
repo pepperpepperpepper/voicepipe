@@ -51,6 +51,12 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".ConfiguratorActivity"
+            android:exported="false"
+            android:label="@string/configurator_title"
+            android:parentActivityName=".MainActivity" />
+
         <service
             android:name=".ZwangliAccessibilityService"
             android:exported="false"

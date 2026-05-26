@@ -3,12 +3,11 @@ package dev.voicepipe.zwangli
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
-import android.provider.Settings as AndroidSettings
 import android.speech.SpeechRecognizer
+import android.view.Menu
+import android.view.MenuItem
 import android.widget.Button
-import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
@@ -20,16 +19,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/** Operational test bench: mic → transcript → /dispatch → response. All
+ *  setup state (server URL, token, permissions, foreground service) lives
+ *  in [ConfiguratorActivity], reached via the overflow menu.
+ */
 class MainActivity : AppCompatActivity() {
     private val client = DispatchClient()
     private lateinit var settings: Settings
+    private lateinit var executor: ClientActionExecutor
 
-    private lateinit var accessibilityStatus: TextView
-    private lateinit var openAccessibilitySettings: Button
-    private lateinit var serverUrl: EditText
-    private lateinit var token: EditText
-    private lateinit var serviceToggle: Button
-    private lateinit var startOnBoot: CheckBox
     private lateinit var mic: Button
     private lateinit var transcript: EditText
     private lateinit var send: Button
@@ -37,7 +35,6 @@ class MainActivity : AppCompatActivity() {
 
     private var speech: SpeechRecognitionController? = null
     private var pendingAutoListen: Boolean = false
-    private lateinit var executor: ClientActionExecutor
 
     private val requestMicPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -45,37 +42,16 @@ class MainActivity : AppCompatActivity() {
             else Toast.makeText(this, R.string.mic_permission_denied, Toast.LENGTH_SHORT).show()
         }
 
-    private val requestNotificationPermission =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            startServiceAfterPermission(granted)
-        }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         settings = Settings.from(this)
         executor = ClientActionExecutor(applicationContext)
-        accessibilityStatus = findViewById(R.id.accessibility_status)
-        openAccessibilitySettings = findViewById(R.id.open_accessibility_settings)
-        serverUrl = findViewById(R.id.server_url)
-        token = findViewById(R.id.token)
-        serviceToggle = findViewById(R.id.service_toggle)
-        startOnBoot = findViewById(R.id.start_on_boot)
         mic = findViewById(R.id.mic)
         transcript = findViewById(R.id.transcript)
         send = findViewById(R.id.send)
         response = findViewById(R.id.response)
-        serverUrl.setText(settings.serverUrl)
-        token.setText(settings.token)
-        startOnBoot.isChecked = settings.startOnBoot
-        startOnBoot.setOnCheckedChangeListener { _, checked ->
-            settings.startOnBoot = checked
-        }
-        serviceToggle.setOnClickListener { onServiceToggle() }
         send.setOnClickListener { onSend() }
-        openAccessibilitySettings.setOnClickListener {
-            startActivity(Intent(AndroidSettings.ACTION_ACCESSIBILITY_SETTINGS))
-        }
         configureMic()
         pendingAutoListen = intent?.getBooleanExtra(
             ZwangliForegroundService.EXTRA_AUTO_LISTEN,
@@ -93,8 +69,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        refreshAccessibilityStatus()
-        refreshServiceToggle()
         if (pendingAutoListen) {
             pendingAutoListen = false
             mic.post { onMicClick() }
@@ -107,49 +81,17 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    private fun refreshAccessibilityStatus() {
-        val on = ZwangliAccessibilityService.isConnected()
-        accessibilityStatus.text = getString(
-            if (on) R.string.status_accessibility_on else R.string.status_accessibility_off,
-        )
-        openAccessibilitySettings.visibility =
-            if (on) android.view.View.GONE else android.view.View.VISIBLE
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menuInflater.inflate(R.menu.main_menu, menu)
+        return true
     }
 
-    private fun refreshServiceToggle() {
-        serviceToggle.text = getString(
-            if (ZwangliForegroundService.isRunning())
-                R.string.action_service_disable
-            else
-                R.string.action_service_enable,
-        )
-    }
-
-    private fun onServiceToggle() {
-        if (ZwangliForegroundService.isRunning()) {
-            ZwangliForegroundService.stop(this)
-            refreshServiceToggle()
-            return
+    override fun onOptionsItemSelected(item: MenuItem): Boolean = when (item.itemId) {
+        R.id.menu_configurator -> {
+            startActivity(Intent(this, ConfiguratorActivity::class.java))
+            true
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
-            requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-            return
-        }
-        startServiceAfterPermission(granted = true)
-    }
-
-    private fun startServiceAfterPermission(granted: Boolean) {
-        if (!granted) {
-            Toast.makeText(this, R.string.mic_permission_denied, Toast.LENGTH_SHORT).show()
-            return
-        }
-        ZwangliForegroundService.start(this)
-        // Service flips `running` synchronously in onStartCommand on the main thread —
-        // but startForegroundService dispatches via the system, so reflect optimistically.
-        serviceToggle.text = getString(R.string.action_service_disable)
+        else -> super.onOptionsItemSelected(item)
     }
 
     private fun configureMic() {
@@ -209,15 +151,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onSend() {
-        val url = serverUrl.text.toString().trim()
-        val bearer = token.text.toString()
         val text = transcript.text.toString()
+        val url = settings.serverUrl
+        val bearer = settings.token
         if (url.isEmpty() || text.isEmpty()) {
             response.text = getString(R.string.response_placeholder)
             return
         }
-        settings.serverUrl = url
-        settings.token = bearer
         val normalizedUrl = Settings.normalizeUrl(url)
         send.isEnabled = false
         response.text = "…"
@@ -253,6 +193,7 @@ class MainActivity : AppCompatActivity() {
                 append("client_actions=").append(resp.clientActions).append('\n')
                 append("applied: clipboard=").append(summary.clipboardApplied)
                     .append(" feedback=").append(summary.feedbackPlayed)
+                    .append(" intents=").append(summary.intentsFired)
                 if (summary.unknownSkipped > 0) {
                     append(" unknown=").append(summary.unknownSkipped)
                 }

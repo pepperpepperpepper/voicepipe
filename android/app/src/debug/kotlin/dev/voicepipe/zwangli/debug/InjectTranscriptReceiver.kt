@@ -37,6 +37,7 @@ class InjectTranscriptReceiver : BroadcastReceiver() {
                     outcome.summary?.let {
                         putExtra(EXTRA_CLIPBOARD_APPLIED, it.clipboardApplied)
                         putExtra(EXTRA_FEEDBACK_PLAYED, it.feedbackPlayed)
+                        putExtra(EXTRA_INTENTS_FIRED, it.intentsFired)
                         putExtra(EXTRA_UNKNOWN_SKIPPED, it.unknownSkipped)
                     }
                 }
@@ -61,6 +62,7 @@ class InjectTranscriptReceiver : BroadcastReceiver() {
         const val EXTRA_OUTPUT_TEXT = "output_text"
         const val EXTRA_CLIPBOARD_APPLIED = "clipboard_applied"
         const val EXTRA_FEEDBACK_PLAYED = "feedback_played"
+        const val EXTRA_INTENTS_FIRED = "intents_fired"
         const val EXTRA_UNKNOWN_SKIPPED = "unknown_skipped"
         private const val TAG = "InjectTranscriptReceiver"
     }

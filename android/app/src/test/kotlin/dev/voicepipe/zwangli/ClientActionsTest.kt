@@ -10,8 +10,17 @@ import org.junit.Test
 class ClientActionsTest {
 
     @Test
-    fun `capabilities advertise clipboard and audio_feedback`() {
-        assertEquals(listOf("clipboard", "audio_feedback"), ClientActions.CAPABILITIES)
+    fun `capabilities advertise clipboard, audio, and intent action types`() {
+        val expected = listOf(
+            "clipboard",
+            "audio_feedback",
+            "web_search",
+            "open_url",
+            "set_alarm",
+            "set_timer",
+            "dial",
+        )
+        assertEquals(expected, ClientActions.CAPABILITIES)
     }
 
     @Test
@@ -67,6 +76,108 @@ class ClientActionsTest {
     @Test
     fun `parse returns null when type is non-string`() {
         assertNull(ClientActions.parse(parse("""{"type":42}""")))
+    }
+
+    @Test
+    fun `parses web_search action`() {
+        val a = ClientActions.parse(parse("""{"type":"web_search","query":"weather tokyo"}"""))
+        assertEquals(ClientAction.WebSearch("weather tokyo"), a)
+    }
+
+    @Test
+    fun `web_search rejects blank or missing query`() {
+        assertNull(ClientActions.parse(parse("""{"type":"web_search","query":""}""")))
+        assertNull(ClientActions.parse(parse("""{"type":"web_search","query":"   "}""")))
+        assertNull(ClientActions.parse(parse("""{"type":"web_search"}""")))
+    }
+
+    @Test
+    fun `parses open_url action`() {
+        val a = ClientActions.parse(parse("""{"type":"open_url","url":"https://example.com"}"""))
+        assertEquals(ClientAction.OpenUrl("https://example.com"), a)
+    }
+
+    @Test
+    fun `open_url rejects blank url`() {
+        assertNull(ClientActions.parse(parse("""{"type":"open_url","url":""}""")))
+        assertNull(ClientActions.parse(parse("""{"type":"open_url"}""")))
+    }
+
+    @Test
+    fun `parses set_alarm with message`() {
+        val a = ClientActions.parse(
+            parse("""{"type":"set_alarm","hour":7,"minutes":30,"message":"wake up"}"""),
+        )
+        assertEquals(ClientAction.SetAlarm(7, 30, "wake up"), a)
+    }
+
+    @Test
+    fun `set_alarm message is optional`() {
+        val a = ClientActions.parse(parse("""{"type":"set_alarm","hour":7,"minutes":0}"""))
+        assertEquals(ClientAction.SetAlarm(7, 0, null), a)
+    }
+
+    @Test
+    fun `set_alarm blank message normalizes to null`() {
+        val a = ClientActions.parse(
+            parse("""{"type":"set_alarm","hour":7,"minutes":0,"message":""}"""),
+        )
+        assertEquals(ClientAction.SetAlarm(7, 0, null), a)
+    }
+
+    @Test
+    fun `set_alarm rejects out-of-range hour or minutes`() {
+        assertNull(ClientActions.parse(parse("""{"type":"set_alarm","hour":24,"minutes":0}""")))
+        assertNull(ClientActions.parse(parse("""{"type":"set_alarm","hour":-1,"minutes":0}""")))
+        assertNull(ClientActions.parse(parse("""{"type":"set_alarm","hour":0,"minutes":60}""")))
+        assertNull(ClientActions.parse(parse("""{"type":"set_alarm","hour":0,"minutes":-1}""")))
+    }
+
+    @Test
+    fun `set_alarm requires hour and minutes as numbers`() {
+        assertNull(ClientActions.parse(parse("""{"type":"set_alarm","hour":7}""")))
+        assertNull(ClientActions.parse(parse("""{"type":"set_alarm","minutes":30}""")))
+        assertNull(
+            ClientActions.parse(parse("""{"type":"set_alarm","hour":"7","minutes":"30"}""")),
+        )
+    }
+
+    @Test
+    fun `parses set_timer with seconds and message`() {
+        val a = ClientActions.parse(
+            parse("""{"type":"set_timer","seconds":300,"message":"pasta"}"""),
+        )
+        assertEquals(ClientAction.SetTimer(300, "pasta"), a)
+    }
+
+    @Test
+    fun `set_timer message is optional`() {
+        val a = ClientActions.parse(parse("""{"type":"set_timer","seconds":60}"""))
+        assertEquals(ClientAction.SetTimer(60, null), a)
+    }
+
+    @Test
+    fun `set_timer rejects out-of-range seconds`() {
+        assertNull(ClientActions.parse(parse("""{"type":"set_timer","seconds":0}""")))
+        assertNull(ClientActions.parse(parse("""{"type":"set_timer","seconds":-1}""")))
+        assertNull(ClientActions.parse(parse("""{"type":"set_timer","seconds":86401}""")))
+    }
+
+    @Test
+    fun `set_timer requires seconds`() {
+        assertNull(ClientActions.parse(parse("""{"type":"set_timer","message":"x"}""")))
+    }
+
+    @Test
+    fun `parses dial action`() {
+        val a = ClientActions.parse(parse("""{"type":"dial","number":"+15555551234"}"""))
+        assertEquals(ClientAction.Dial("+15555551234"), a)
+    }
+
+    @Test
+    fun `dial rejects blank or missing number`() {
+        assertNull(ClientActions.parse(parse("""{"type":"dial","number":""}""")))
+        assertNull(ClientActions.parse(parse("""{"type":"dial"}""")))
     }
 
     private fun parse(raw: String): JsonElement = Json.parseToJsonElement(raw)

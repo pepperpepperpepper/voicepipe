@@ -102,6 +102,68 @@ class ClientActionExecutorAndroidTest {
         assertTrue("tone '$event' should report success", completedOk)
     }
 
+    @Test
+    fun web_search_fires_intent() = assertIntentFires(
+        """{"type":"web_search","query":"zwangli instrumentation"}""",
+    )
+
+    @Test
+    fun open_url_fires_intent() = assertIntentFires(
+        """{"type":"open_url","url":"https://example.com/"}""",
+    )
+
+    @Test
+    fun set_alarm_fires_intent() = assertIntentFires(
+        """{"type":"set_alarm","hour":7,"minutes":30,"message":"wake up"}""",
+    )
+
+    @Test
+    fun set_timer_fires_intent() = assertIntentFires(
+        """{"type":"set_timer","seconds":60,"message":"smoke"}""",
+    )
+
+    @Test
+    fun dial_fires_intent() = assertIntentFires(
+        """{"type":"dial","number":"+15555550100"}""",
+    )
+
+    @Test
+    fun batch_of_intents_increments_count_per_action() {
+        val executor = ClientActionExecutor(context)
+        val summary = executor.execute(
+            listOf(
+                Json.parseToJsonElement("""{"type":"web_search","query":"a"}"""),
+                Json.parseToJsonElement("""{"type":"open_url","url":"https://example.com/"}"""),
+                Json.parseToJsonElement("""{"type":"dial","number":"+15555550100"}"""),
+            ),
+        )
+        assertEquals(3, summary.intentsFired)
+        assertEquals(0, summary.unknownSkipped)
+    }
+
+    @Test
+    fun malformed_intent_action_is_filtered_before_firing() {
+        val executor = ClientActionExecutor(context)
+        val summary = executor.execute(
+            listOf(
+                Json.parseToJsonElement("""{"type":"set_alarm","hour":99,"minutes":0}"""),
+                Json.parseToJsonElement("""{"type":"set_timer","seconds":-1}"""),
+                Json.parseToJsonElement("""{"type":"web_search","query":""}"""),
+            ),
+        )
+        // All three should fail validation in ClientActions.parse and be dropped
+        // entirely (not counted as unknown either, since they had valid types).
+        assertEquals(0, summary.intentsFired)
+        assertEquals(0, summary.unknownSkipped)
+    }
+
+    private fun assertIntentFires(json: String) {
+        val executor = ClientActionExecutor(context)
+        val summary = executor.execute(listOf(Json.parseToJsonElement(json)))
+        assertEquals("intent should fire on a stock-Android device: $json", 1, summary.intentsFired)
+        assertEquals(0, summary.unknownSkipped)
+    }
+
     private fun feedbackAction(event: String): JsonElement =
         Json.parseToJsonElement("""{"type":"feedback","event":"$event"}""")
 }

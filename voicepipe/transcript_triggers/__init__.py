@@ -69,6 +69,7 @@ from ._debug_log import (
 from ._dispatch import _default_commands_for_triggers, _dispatch_prompt
 from ._debug_log import _write_zwingli_debug_event
 from ._errors import _apply_error_destination
+from ._llm_route import _llm_route_prompt
 
 
 __all__ = [
@@ -154,19 +155,30 @@ def apply_transcript_triggers(
         }
     )
 
-    if match.action == "dispatch":
+    if match.action in ("dispatch", "llm_route"):
         if resolved_commands is None:
             if triggers is not None:
                 resolved_commands = _default_commands_for_triggers(resolved_triggers)
             else:
                 resolved_commands = get_transcript_commands_config(load_env=False)
 
+        # Pick the chunking strategy: lexical "VERB ARGS [then VERB ARGS]"
+        # for the original "dispatch" action, or LLM-driven for "llm_route".
+        # Both return the same (output_text, meta) shape so downstream
+        # success/error handling is uniform.
         try:
-            output_text, meta = _dispatch_prompt(
-                match.remainder,
-                commands=resolved_commands,
-                actuator=act,
-            )
+            if match.action == "llm_route":
+                output_text, meta = _llm_route_prompt(
+                    match.remainder,
+                    commands=resolved_commands,
+                    actuator=act,
+                )
+            else:
+                output_text, meta = _dispatch_prompt(
+                    match.remainder,
+                    commands=resolved_commands,
+                    actuator=act,
+                )
             payload: dict[str, Any] = {
                 "ok": True,
                 "trigger": match.trigger,

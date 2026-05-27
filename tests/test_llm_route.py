@@ -300,14 +300,23 @@ def test_llm_route_happy_path_single_step(monkeypatch) -> None:
     assert payload is not None
     assert payload["ok"] is True
     assert payload["action"] == "llm_route"
-    assert payload["meta"]["mode"] == "llm-route"
-    assert payload["meta"]["steps"] == [{"verb": "home", "args": ""}]
+    # Under the unified planner shape, the planner source goes in `planner`
+    # and the parsed plan lives under `planner_meta.steps`. The top-level
+    # `mode` reflects the LAST step's verb-resolution mode (here: "verb"
+    # because the home verb resolved cleanly).
+    assert payload["meta"]["planner"] == "llm-route"
+    assert payload["meta"]["planner_meta"]["steps"] == [
+        {"verb": "home", "args": ""}
+    ]
+    assert payload["meta"]["mode"] == "verb"  # last step's resolution mode
     # The home verb fired through the standard pipeline.
     assert act.accessibility_global_calls == ["home"]
     # The router got the post-trigger remainder, not the raw transcript.
     assert captured["prompt"] == "go home"
     # The default router profile uses temperature 0.0.
     assert captured["kwargs"]["temperature"] == 0.0
+    # Single-step plans don't get a `chain` key — top-level IS the only step.
+    assert "chain" not in payload["meta"]
 
 
 def test_llm_route_multi_step(monkeypatch) -> None:
@@ -327,10 +336,18 @@ def test_llm_route_multi_step(monkeypatch) -> None:
     assert payload["ok"] is True
     assert act.set_alarm_calls == [{"hour": 7, "minutes": 0, "message": "wake up"}]
     assert act.set_timer_calls == [{"seconds": 300, "message": "pasta"}]
-    # Both steps surface in the meta.
-    assert len(payload["meta"]["steps_executed"]) == 2
-    assert payload["meta"]["steps_executed"][0]["verb"] == "alarm"
-    assert payload["meta"]["steps_executed"][1]["verb"] == "timer"
+    # Multi-step: prior step(s) live in `chain`; the last step's meta is
+    # promoted to the top level.
+    assert payload["meta"]["verb"] == "timer"  # last step
+    chain = payload["meta"]["chain"]
+    assert len(chain) == 1  # alarm was the only prior step
+    assert chain[0]["verb"] == "alarm"
+    # New under the unified shape: chain entries carry the resolved args and
+    # the step's output text alongside the step's own meta keys.
+    assert chain[0]["args"] == "7am wake up"
+    assert chain[0]["output_text"] == ""  # alarm returns empty text
+    # The full parsed plan is also retained under planner_meta for debug.
+    assert len(payload["meta"]["planner_meta"]["steps"]) == 2
 
 
 def test_llm_route_markdown_fenced_response_still_routes(monkeypatch) -> None:
@@ -363,7 +380,11 @@ def test_llm_route_empty_response_falls_back_to_unknown_verb(monkeypatch) -> Non
     assert payload["ok"] is True
     # Strip just echoes the cleaned input.
     assert out == "something the model cannot map"
-    assert payload["meta"]["fallback_action"] == "strip"
+    # The fallback decision lives under planner_meta so the top-level shape
+    # remains the strip handler's (empty) meta.
+    assert payload["meta"]["planner"] == "llm-route"
+    assert payload["meta"]["planner_meta"]["fallback_action"] == "strip"
+    assert payload["meta"]["planner_meta"]["steps"] == []
     # No verb-side actuator calls.
     assert act.set_alarm_calls == []
     assert act.accessibility_global_calls == []
@@ -380,7 +401,7 @@ def test_llm_route_malformed_response_falls_back(monkeypatch) -> None:
         actuator=act,
     )
     assert payload["ok"] is True
-    assert payload["meta"]["fallback_action"] == "strip"
+    assert payload["meta"]["planner_meta"]["fallback_action"] == "strip"
     assert out == "nonsense"
 
 
@@ -400,11 +421,15 @@ def test_llm_route_hallucinated_verb_runs_unknown_verb_step(monkeypatch) -> None
         actuator=act,
     )
     assert payload["ok"] is True
-    # First step's hallucinated verb fell through to unknown-verb fallback.
-    first_step = payload["meta"]["steps_executed"][0]
-    assert first_step["verb"] == "summon_dragon"
-    assert first_step["step_meta"]["mode"] == "unknown-verb"
-    # Second step ran normally.
+    # First step's hallucinated verb fell through to unknown-verb fallback
+    # and lives in `chain[0]` under the unified shape. The verb name is
+    # still recorded so debug logs can show what the LLM hallucinated.
+    chain = payload["meta"]["chain"]
+    assert chain[0]["verb"] == "summon_dragon"
+    assert chain[0]["mode"] == "unknown-verb"
+    assert chain[0]["args"] == "big red one"
+    # Second step (home) ran normally and is the promoted top-level meta.
+    assert payload["meta"]["verb"] == "home"
     assert act.accessibility_global_calls == ["home"]
 
 
@@ -416,9 +441,10 @@ def test_llm_route_empty_remainder_short_circuits(monkeypatch) -> None:
         "hey", commands=_make_router_commands(), actuator=act,
     )
     # Trigger matched "hey" but remainder is empty.
-    if payload is not None:
-        assert payload["meta"]["steps"] == []
-        assert payload["meta"]["reason"] == "empty-input"
+    assert payload is not None
+    assert payload["meta"]["planner"] == "llm-route"
+    assert payload["meta"]["planner_meta"]["steps"] == []
+    assert payload["meta"]["planner_meta"]["reason"] == "empty-input"
     # The LLM was never invoked.
     assert "prompt" not in captured
 
@@ -443,11 +469,12 @@ def test_llm_route_step_with_capability_unsupported_graceful_skips(monkeypatch) 
     )
     assert payload["ok"] is True
     # Both steps ran and both surfaced graceful-skip in their handler_meta.
-    assert len(payload["meta"]["steps_executed"]) == 2
-    alarm_handler = payload["meta"]["steps_executed"][0]["step_meta"]["handler_meta"]
-    home_handler = payload["meta"]["steps_executed"][1]["step_meta"]["handler_meta"]
-    assert alarm_handler["ok"] is False
-    assert home_handler["ok"] is False
+    # alarm is the prior step (in `chain`), home is the last step (top-level).
+    chain = payload["meta"]["chain"]
+    assert chain[0]["verb"] == "alarm"
+    assert chain[0]["handler_meta"]["ok"] is False
+    assert payload["meta"]["verb"] == "home"
+    assert payload["meta"]["handler_meta"]["ok"] is False
     assert act.set_alarm_calls == []
     assert act.accessibility_global_calls == []
 

@@ -46,8 +46,8 @@ from voicepipe.config import (
 from ._actions import _ACTIONS
 from ._actuator import Actuator
 from ._debug_log import _write_zwingli_debug_event
-from ._dispatch import _dispatch_single_step
 from ._llm import _call_llm_with_profile
+from ._planner import PlannedStep, execute_plan
 
 
 ROUTER_PROFILE_NAME = "router"
@@ -205,84 +205,93 @@ def _parse_router_response(text: str) -> list[dict[str, str]]:
     return out
 
 
-def _llm_route_prompt(
+def _plan_llm_route(
     remainder: str,
     *,
     commands: TranscriptCommandsConfig,
-    actuator: Actuator | None = None,
-) -> tuple[str, dict[str, Any]]:
-    """Route a transcript through the LLM and execute the resulting plan.
+) -> tuple[list[PlannedStep], dict[str, Any]]:
+    """LLM planner: call the router model, parse its plan into
+    :class:`PlannedStep` records. Returns ``(steps, planner_meta)``.
 
-    Returns ``(output_text, meta)`` shaped to match
-    :func:`_dispatch_prompt` so :func:`apply_transcript_triggers` can
-    handle both branches uniformly. Specifically: a final step's text
-    + a ``meta`` dict that always carries ``mode="llm-route"``,
-    ``steps`` (the parsed plan), and ``llm_meta`` (the router LLM's
-    response metadata), plus the keys of the last executed step
-    promoted to the top level.
+    ``planner_meta`` always carries ``steps`` (the parsed plan,
+    inspectable even after execution) and ``router_raw_response`` (for
+    debugging hallucinations); it also carries ``llm_meta`` (the API
+    response's provider/usage/latency block from
+    :func:`_call_llm_with_profile`) when the LLM was actually called.
+    Empty remainder short-circuits without an LLM call.
     """
     cleaned = (remainder or "").strip()
     if not cleaned:
-        return "", {"mode": "llm-route", "steps": [], "reason": "empty-input"}
+        return [], {"steps": [], "reason": "empty-input"}
 
     profile = _resolve_router_profile(commands)
     llm_text, llm_meta = _call_llm_with_profile(
         cleaned, profile=profile, captures=None
     )
-    steps = _parse_router_response(llm_text)
+    raw_steps = _parse_router_response(llm_text)
 
     _write_zwingli_debug_event(
         {
             "event": "llm_route_response",
             "transcript": cleaned,
             "llm_text": llm_text,
-            "step_count": len(steps),
+            "step_count": len(raw_steps),
         }
     )
 
-    route_meta: dict[str, Any] = {
-        "mode": "llm-route",
-        "llm_meta": llm_meta,
+    planner_meta: dict[str, Any] = {
+        "steps": raw_steps,
         "router_raw_response": llm_text,
-        "steps": steps,
+        "llm_meta": llm_meta,
     }
 
-    if not steps:
-        return _route_fallback(cleaned, commands=commands, actuator=actuator,
-                               route_meta=route_meta)
-
-    chain_metas: list[dict[str, Any]] = []
-    last_text = ""
-    last_meta: dict[str, Any] = {}
-    for step in steps:
-        verb = step["verb"]
-        args = step["args"]
-        # Use "verb args" as the raw chunk so pattern-matching has the
-        # complete reconstructed phrase to look at. This matters for
-        # verbs whose `pattern` regex anchors at the start of the chunk.
+    steps: list[PlannedStep] = []
+    for raw in raw_steps:
+        verb = raw["verb"]
+        args = raw["args"]
+        # Reconstruct ``"verb args"`` as the raw chunk so pattern-anchored
+        # verb matchers in _dispatch_single_step still see the full phrase.
         raw_chunk = f"{verb} {args}".strip() if args else verb
-        step_text, step_meta = _dispatch_single_step(
-            verb, args, raw_chunk, commands=commands, actuator=actuator
-        )
-        chain_metas.append(
-            {
-                "verb": verb,
-                "args": args,
-                "output_text": step_text,
-                "step_meta": step_meta,
-            }
-        )
-        last_text = step_text
-        last_meta = step_meta
+        steps.append(PlannedStep(verb=verb, args=args, raw_chunk=raw_chunk))
 
-    route_meta["steps_executed"] = chain_metas
-    # Promote the last step's meta keys to the top level so callers that
-    # inspect meta["verb"]/meta["action"] see the most-recent step (matches
-    # the lexical chain dispatcher's behaviour).
-    for k, v in last_meta.items():
-        route_meta.setdefault(k, v)
+    return steps, planner_meta
 
-    return last_text, route_meta
+
+def _llm_route_prompt(
+    remainder: str,
+    *,
+    commands: TranscriptCommandsConfig,
+    actuator: Actuator | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """LLM-route entry point: plan via the router model, execute via the
+    shared planner.
+
+    On an empty-plan response (LLM returned ``[]`` or malformed JSON)
+    we fall back to ``dispatch.unknown_verb`` (typically ``strip``) so
+    the user still gets *something* — usually the raw text typed via
+    the strip handler. The planner_meta records the fallback decision
+    so debug logs can tell a routing failure apart from a routing
+    success that just happened to fire ``strip``.
+    """
+    cleaned = (remainder or "").strip()
+    steps, planner_meta = _plan_llm_route(cleaned, commands=commands)
+
+    if not steps:
+        return _route_fallback(
+            cleaned,
+            commands=commands,
+            actuator=actuator,
+            planner_meta=planner_meta,
+        )
+
+    return execute_plan(
+        steps,
+        commands=commands,
+        actuator=actuator,
+        planner="llm-route",
+        planner_meta=planner_meta,
+        pipe_prior_output=False,
+    )
 
 
 def _route_fallback(
@@ -290,20 +299,28 @@ def _route_fallback(
     *,
     commands: TranscriptCommandsConfig,
     actuator: Actuator | None,
-    route_meta: dict[str, Any],
+    planner_meta: dict[str, Any],
 ) -> tuple[str, dict[str, Any]]:
     """When the LLM can't route, run the same fallback path the dispatcher
     uses for unknown verbs (defaults to ``strip``, i.e. type as-is).
 
-    Records ``fallback_action`` in the route meta so debugging can tell
-    a routing failure apart from a routing success that just happened to
-    type text."""
+    The fallback handler bypasses :func:`_dispatch_single_step` because
+    there is no resolved verb — it's the "no plan" path, not a planned
+    step. We record ``fallback_action`` in ``planner_meta`` so it's
+    introspectable without changing the top-level meta shape.
+    """
+    fallback_planner_meta = dict(planner_meta)
     unknown_action = (commands.dispatch.unknown_verb or "strip").strip().lower()
+    fallback_planner_meta["fallback_action"] = unknown_action
+
     handler = _ACTIONS.get(unknown_action)
     if handler is None:
-        route_meta["fallback_action"] = unknown_action
-        route_meta["fallback_error"] = "no_handler"
-        return "", route_meta
+        fallback_planner_meta["fallback_error"] = "no_handler"
+        return "", {
+            "planner": "llm-route",
+            "planner_meta": fallback_planner_meta,
+        }
+
     text, inner_meta = handler(
         cleaned,
         verb_cfg=None,
@@ -312,7 +329,9 @@ def _route_fallback(
         commands=commands,
         actuator=actuator,
     )
-    route_meta["fallback_action"] = unknown_action
     if inner_meta:
-        route_meta["fallback_meta"] = inner_meta
-    return text, route_meta
+        fallback_planner_meta["fallback_meta"] = inner_meta
+    return text, {
+        "planner": "llm-route",
+        "planner_meta": fallback_planner_meta,
+    }

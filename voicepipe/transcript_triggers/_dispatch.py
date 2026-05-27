@@ -338,50 +338,47 @@ def _split_chain_chunks(
     return chunks
 
 
+def _plan_lexical(
+    prompt: str, *, commands: TranscriptCommandsConfig
+) -> list["PlannedStep"]:
+    """Lexical planner: today's regex/keyword chain splitter rendered as
+    a list of :class:`PlannedStep`. Each chunk's verb is resolved via
+    alias-aware lookup; ``raw_chunk`` is the original pre-extraction
+    text so pattern-anchored verb matchers still work inside
+    :func:`_dispatch_single_step`.
+    """
+    from ._planner import PlannedStep
+
+    cleaned = (prompt or "").strip()
+    chunks = _split_chain_chunks(cleaned, commands=commands)
+    steps: list[PlannedStep] = []
+    for chunk in chunks:
+        verb, args = _resolve_verb_and_args(chunk, commands=commands)
+        steps.append(PlannedStep(verb=verb, args=args, raw_chunk=chunk))
+    return steps
+
+
 def _dispatch_prompt(
     prompt: str,
     *,
     commands: TranscriptCommandsConfig,
     actuator: Actuator | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    cleaned = (prompt or "").strip()
-    chunks = _split_chain_chunks(cleaned, commands=commands)
+    """Lexical dispatch entry point: plan → execute via the shared planner.
 
-    if len(chunks) == 1:
-        verb, args = _resolve_verb_and_args(chunks[0], commands=commands)
-        return _dispatch_single_step(
-            verb, args, chunks[0], commands=commands, actuator=actuator
-        )
+    ``pipe_prior_output=True`` preserves the lexical-chain semantics
+    where a verb-only chain step (e.g. trailing ``copy`` in
+    ``"echo hello then copy"``) receives the prior step's output as its
+    input. The LLM router calls the same executor with
+    ``pipe_prior_output=False`` since the model is expected to emit
+    complete args per step.
+    """
+    from ._planner import execute_plan
 
-    chain_metas: list[dict[str, Any]] = []
-    prior_output = ""
-    final_text = ""
-    final_meta: dict[str, Any] = {}
-
-    for i, chunk in enumerate(chunks):
-        verb, split_args = _resolve_verb_and_args(chunk, commands=commands)
-        if i == 0:
-            step_input = split_args
-            step_chunk = chunk
-        elif split_args.strip():
-            # Explicit args after the chain verb: honor them, ignore prior output.
-            step_input = split_args
-            step_chunk = chunk
-        else:
-            # Verb-only chain step: pipe the previous output in.
-            step_input = prior_output
-            step_chunk = prior_output
-
-        step_text, step_meta = _dispatch_single_step(
-            verb, step_input, step_chunk, commands=commands, actuator=actuator
-        )
-        prior_output = step_text
-
-        if i < len(chunks) - 1:
-            chain_metas.append(step_meta)
-        else:
-            final_text = step_text
-            final_meta = step_meta
-
-    final_meta["chain"] = chain_metas
-    return final_text, final_meta
+    steps = _plan_lexical(prompt, commands=commands)
+    return execute_plan(
+        steps,
+        commands=commands,
+        actuator=actuator,
+        pipe_prior_output=True,
+    )

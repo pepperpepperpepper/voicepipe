@@ -720,6 +720,10 @@ def test_apply_transcript_triggers_chain_pipes_output_to_next_step() -> None:
     assert len(chain) == 1
     assert chain[0]["verb"] == "echo"
     assert chain[0]["action"] == "strip"
+    # Unified planner shape: chain entries carry the resolved args and the
+    # step's output_text so callers don't have to re-pair against the plan.
+    assert chain[0]["args"] == "hello world"
+    assert chain[0]["output_text"] == "hello world"
 
 
 def test_apply_transcript_triggers_chain_three_steps() -> None:

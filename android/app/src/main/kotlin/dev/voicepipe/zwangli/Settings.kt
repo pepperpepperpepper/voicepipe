@@ -2,6 +2,12 @@ package dev.voicepipe.zwangli
 
 import android.content.Context
 import android.content.SharedPreferences
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 
 class Settings(private val prefs: SharedPreferences) {
 
@@ -36,12 +42,59 @@ class Settings(private val prefs: SharedPreferences) {
             prefs.edit().putString(KEY_SEARCH_URL_TEMPLATE, value.trim()).apply()
         }
 
+    /** Recent transcripts, most-recent first. Capped at [TRANSCRIPT_HISTORY_MAX].
+     *  Used by [MainActivity] to render a chip strip the user can tap to
+     *  reload a prior transcript without re-dictating it. */
+    val transcriptHistory: List<String>
+        get() {
+            val raw = prefs.getString(KEY_TRANSCRIPT_HISTORY, null) ?: return emptyList()
+            return try {
+                val arr = Json.parseToJsonElement(raw) as? JsonArray ?: return emptyList()
+                arr.mapNotNull { it.jsonPrimitive.contentOrNull?.takeIf { s -> s.isNotBlank() } }
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
+
+    /** Push [transcript] to the front of history (move-to-front semantics
+     *  if it already exists) and trim to the cap. Blank transcripts are
+     *  ignored. Returns the new history list. */
+    fun recordTranscript(transcript: String): List<String> {
+        val trimmed = transcript.trim()
+        if (trimmed.isEmpty()) return transcriptHistory
+        val current = transcriptHistory
+        val deduped = current.filter { it != trimmed }
+        val updated = (listOf(trimmed) + deduped).take(TRANSCRIPT_HISTORY_MAX)
+        writeHistory(updated)
+        return updated
+    }
+
+    /** Drop a single entry. Returns the new history list. */
+    fun removeTranscriptHistoryEntry(transcript: String): List<String> {
+        val updated = transcriptHistory.filter { it != transcript }
+        writeHistory(updated)
+        return updated
+    }
+
+    fun clearTranscriptHistory() {
+        prefs.edit().remove(KEY_TRANSCRIPT_HISTORY).apply()
+    }
+
+    private fun writeHistory(entries: List<String>) {
+        val rendered = buildJsonArray {
+            entries.forEach { add(JsonPrimitive(it)) }
+        }.toString()
+        prefs.edit().putString(KEY_TRANSCRIPT_HISTORY, rendered).apply()
+    }
+
     companion object {
         const val PREFS_NAME = "zwangli"
         const val KEY_SERVER_URL = "server_url"
         const val KEY_TOKEN = "token"
         const val KEY_START_ON_BOOT = "start_on_boot"
         const val KEY_SEARCH_URL_TEMPLATE = "search_url_template"
+        const val KEY_TRANSCRIPT_HISTORY = "transcript_history"
+        const val TRANSCRIPT_HISTORY_MAX = 20
         const val DEFAULT_SERVER_URL = "http://localhost:8765"
         const val SEARCH_TEMPLATE_PLACEHOLDER = "{query}"
 

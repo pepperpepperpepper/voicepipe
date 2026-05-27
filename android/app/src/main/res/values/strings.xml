@@ -30,6 +30,18 @@
     <string name="mic_permission_denied">Microphone permission denied — using text input instead</string>
     <string name="mic_error_prefix">Speech: </string>
 
+    <!-- Transcript history strip (MainActivity) -->
+    <string name="history_label">Recent transcripts</string>
+    <string name="history_clear_all">Clear all</string>
+    <string name="history_clear_confirm_title">Clear transcript history?</string>
+    <string name="history_clear_confirm_message">Removes all %1$d remembered transcripts. Cannot be undone.</string>
+    <string name="history_clear_confirm_positive">Clear</string>
+    <string name="history_clear_confirm_negative">Cancel</string>
+    <string name="history_remove_confirm_title">Remove from history?</string>
+    <string name="history_remove_confirm_message">Forget \"%1$s\"?</string>
+    <string name="history_remove_confirm_positive">Remove</string>
+    <string name="history_remove_confirm_negative">Cancel</string>
+
     <!-- Configurator -->
     <string name="configurator_title">Zwangli configurator</string>
     <string name="menu_configurator">Configurator</string>

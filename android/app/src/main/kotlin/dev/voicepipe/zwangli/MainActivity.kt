@@ -7,14 +7,19 @@ import android.os.Bundle
 import android.speech.SpeechRecognizer
 import android.view.Menu
 import android.view.MenuItem
+import android.view.View
 import android.widget.Button
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import com.google.android.material.chip.Chip
+import com.google.android.material.chip.ChipGroup
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -32,6 +37,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var transcript: EditText
     private lateinit var send: Button
     private lateinit var response: TextView
+    private lateinit var historySection: LinearLayout
+    private lateinit var historyChips: ChipGroup
+    private lateinit var historyClear: Button
 
     private var speech: SpeechRecognitionController? = null
     private var pendingAutoListen: Boolean = false
@@ -51,8 +59,13 @@ class MainActivity : AppCompatActivity() {
         transcript = findViewById(R.id.transcript)
         send = findViewById(R.id.send)
         response = findViewById(R.id.response)
+        historySection = findViewById(R.id.history_section)
+        historyChips = findViewById(R.id.history_chips)
+        historyClear = findViewById(R.id.history_clear)
+        historyClear.setOnClickListener { confirmClearHistory() }
         send.setOnClickListener { onSend() }
         configureMic()
+        renderHistory(settings.transcriptHistory)
         pendingAutoListen = intent?.getBooleanExtra(
             ZwangliForegroundService.EXTRA_AUTO_LISTEN,
             false,
@@ -162,7 +175,7 @@ class MainActivity : AppCompatActivity() {
         send.isEnabled = false
         response.text = "…"
         lifecycleScope.launch {
-            val rendered = runCatching {
+            val result = runCatching {
                 withContext(Dispatchers.IO) {
                     client.dispatch(
                         normalizedUrl,
@@ -173,13 +186,75 @@ class MainActivity : AppCompatActivity() {
                         ),
                     )
                 }
-            }.fold(
+            }
+            val rendered = result.fold(
                 onSuccess = { renderSuccess(it) },
                 onFailure = { "⚠ HTTP error: ${it.message}" },
             )
             response.text = rendered
             send.isEnabled = true
+            // Record the transcript on every successful HTTP round-trip,
+            // even when the server returned ok=false. The history is the
+            // user's, not the dispatcher's: a malformed verb is still
+            // something they may want to replay and edit.
+            if (result.isSuccess) {
+                renderHistory(settings.recordTranscript(text))
+            }
         }
+    }
+
+    private fun renderHistory(entries: List<String>) {
+        historyChips.removeAllViews()
+        if (entries.isEmpty()) {
+            historySection.visibility = View.GONE
+            return
+        }
+        historySection.visibility = View.VISIBLE
+        for (entry in entries) {
+            historyChips.addView(buildHistoryChip(entry))
+        }
+    }
+
+    private fun buildHistoryChip(entry: String): Chip {
+        return Chip(this).apply {
+            text = entry
+            isCheckable = false
+            isClickable = true
+            // Tap = load into the field, don't auto-send. The user almost
+            // always wants to tweak before re-firing; an auto-send would
+            // make destructive verbs (clipboard overwrite, alarm set)
+            // surprisingly easy to re-trigger.
+            setOnClickListener { transcript.setText(entry) }
+            setOnLongClickListener {
+                confirmRemoveFromHistory(entry)
+                true
+            }
+        }
+    }
+
+    private fun confirmRemoveFromHistory(entry: String) {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.history_remove_confirm_title)
+            .setMessage(getString(R.string.history_remove_confirm_message, entry))
+            .setNegativeButton(R.string.history_remove_confirm_negative, null)
+            .setPositiveButton(R.string.history_remove_confirm_positive) { _, _ ->
+                renderHistory(settings.removeTranscriptHistoryEntry(entry))
+            }
+            .show()
+    }
+
+    private fun confirmClearHistory() {
+        val current = settings.transcriptHistory
+        if (current.isEmpty()) return
+        AlertDialog.Builder(this)
+            .setTitle(R.string.history_clear_confirm_title)
+            .setMessage(getString(R.string.history_clear_confirm_message, current.size))
+            .setNegativeButton(R.string.history_clear_confirm_negative, null)
+            .setPositiveButton(R.string.history_clear_confirm_positive) { _, _ ->
+                settings.clearTranscriptHistory()
+                renderHistory(emptyList())
+            }
+            .show()
     }
 
     private fun renderSuccess(resp: DispatchResponse): String {

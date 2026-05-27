@@ -31,6 +31,8 @@ from voicepipe.config import (
 )
 
 from ._actuator import (
+    ACCESSIBILITY_GLOBAL_ACTIONS,
+    CAP_ACCESSIBILITY_GLOBAL,
     CAP_DIAL,
     CAP_NAVIGATE,
     CAP_OPEN_URL,
@@ -151,6 +153,7 @@ _UNSUPPORTED = {
     "timer": "Setting timers is not supported on this device.",
     "dial": "Dialing is not supported on this device.",
     "navigate": "Navigation is not supported on this device.",
+    "accessibility_global": "System navigation is not supported on this device.",
 }
 
 
@@ -429,3 +432,54 @@ def _action_navigate(
     if mode:
         meta["mode"] = mode
     return "", meta
+
+
+# ---------------------------------------------------------------------------
+# Accessibility-global verbs (back / home / recents / notifications /
+# quick_settings) — one verb per action, all sharing the same handler.
+# These take no args; any tail tokens are ignored so STT chatter doesn't
+# turn `zwingli back` into a bad-args path.
+# ---------------------------------------------------------------------------
+
+
+def _make_accessibility_global_handler(action: str):
+    """Build a handler that queues a single ``accessibility_global`` action.
+
+    The action name is closed over so each verb (back/home/recents/etc.)
+    becomes a distinct entry in ``_ACTIONS`` without duplicating the
+    capability-check + actuator-call dance.
+    """
+    if action not in ACCESSIBILITY_GLOBAL_ACTIONS:
+        raise ValueError(f"unsupported accessibility-global action: {action!r}")
+
+    def _handler(
+        prompt: str,
+        *,
+        verb_cfg: TranscriptVerbConfig | None = None,
+        profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+        captures: Mapping[str, str] | None = None,
+        commands: TranscriptCommandsConfig | None = None,
+        actuator: Actuator | None = None,
+    ) -> tuple[str, dict[str, Any]]:
+        del prompt, verb_cfg, profiles, captures, commands
+        act = resolve_actuator(actuator)
+        if CAP_ACCESSIBILITY_GLOBAL not in act.capabilities():
+            return _unsupported("accessibility_global")
+        if not act.accessibility_global(action):
+            return _unsupported("accessibility_global")
+        return "", {
+            "ok": True,
+            "intent": "accessibility_global",
+            "action": action,
+        }
+
+    _handler.__name__ = f"_action_{action}"
+    _handler.__qualname__ = _handler.__name__
+    return _handler
+
+
+_action_back = _make_accessibility_global_handler("back")
+_action_home = _make_accessibility_global_handler("home")
+_action_recents = _make_accessibility_global_handler("recents")
+_action_notifications = _make_accessibility_global_handler("notifications")
+_action_quick_settings = _make_accessibility_global_handler("quick_settings")

@@ -19,9 +19,14 @@ from ._codegen import _action_codegen
 from ._help import _action_help
 from ._intents import (
     _action_alarm,
+    _action_back,
     _action_dial,
+    _action_home,
     _action_navigate,
+    _action_notifications,
     _action_open,
+    _action_quick_settings,
+    _action_recents,
     _action_search,
     _action_timer,
 )
@@ -52,6 +57,11 @@ _ACTIONS: dict[str, ActionHandler] = {
     "timer": _action_timer,
     "dial": _action_dial,
     "navigate": _action_navigate,
+    "back": _action_back,
+    "home": _action_home,
+    "recents": _action_recents,
+    "notifications": _action_notifications,
+    "quick_settings": _action_quick_settings,
 }
 
 # Keys returned by handlers in their inner_meta that the dispatcher should

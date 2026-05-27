@@ -1,5 +1,6 @@
 package dev.voicepipe.zwangli
 
+import android.accessibilityservice.AccessibilityService
 import android.app.SearchManager
 import android.content.ActivityNotFoundException
 import android.content.ClipData
@@ -28,6 +29,7 @@ class ClientActionExecutor(
         var clipboardCount = 0
         var feedbackCount = 0
         var intentsFired = 0
+        var globalActionsFired = 0
         var unknownCount = 0
         for (action in ClientActions.parseAll(actions)) {
             when (action) {
@@ -57,23 +59,34 @@ class ClientActionExecutor(
                 is ClientAction.Navigate -> {
                     if (fireNavigate(action.destination, action.mode)) intentsFired++
                 }
+                is ClientAction.AccessibilityGlobal -> {
+                    if (fireAccessibilityGlobal(action.action)) globalActionsFired++
+                }
                 is ClientAction.Unknown -> {
                     unknownCount++
                     Log.i(TAG, "Skipping unknown client_action type=${action.type}")
                 }
             }
         }
-        return Summary(clipboardCount, feedbackCount, intentsFired, unknownCount)
+        return Summary(
+            clipboardCount,
+            feedbackCount,
+            intentsFired,
+            globalActionsFired,
+            unknownCount,
+        )
     }
 
     data class Summary(
         val clipboardApplied: Int,
         val feedbackPlayed: Int,
         val intentsFired: Int,
+        val globalActionsFired: Int,
         val unknownSkipped: Int,
     ) {
         fun anything(): Boolean =
-            clipboardApplied + feedbackPlayed + intentsFired + unknownSkipped > 0
+            clipboardApplied + feedbackPlayed + intentsFired +
+                globalActionsFired + unknownSkipped > 0
     }
 
     private fun applyClipboard(text: String): Boolean {
@@ -172,6 +185,32 @@ class ClientActionExecutor(
             return false
         }
         return fireIntent(Intent(Intent.ACTION_DIAL, uri), "dial")
+    }
+
+    private fun fireAccessibilityGlobal(action: String): Boolean {
+        val actionId = when (action) {
+            "back" -> AccessibilityService.GLOBAL_ACTION_BACK
+            "home" -> AccessibilityService.GLOBAL_ACTION_HOME
+            "recents" -> AccessibilityService.GLOBAL_ACTION_RECENTS
+            "notifications" -> AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS
+            "quick_settings" -> AccessibilityService.GLOBAL_ACTION_QUICK_SETTINGS
+            else -> {
+                Log.w(TAG, "accessibility_global: unknown action '$action'")
+                return false
+            }
+        }
+        if (!ZwangliAccessibilityService.isConnected()) {
+            Log.w(
+                TAG,
+                "accessibility_global '$action' skipped — service not connected",
+            )
+            return false
+        }
+        val ok = ZwangliAccessibilityService.performGlobal(actionId)
+        if (!ok) {
+            Log.w(TAG, "accessibility_global: performGlobal returned false for '$action'")
+        }
+        return ok
     }
 
     private fun fireNavigate(destination: String, mode: String?): Boolean {

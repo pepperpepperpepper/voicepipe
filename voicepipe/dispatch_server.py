@@ -49,6 +49,8 @@ import voicepipe.transcript_triggers as tt
 from voicepipe.commands.triggers import _read_debug_log_tail
 from voicepipe.config import get_transcript_commands_config, triggers_json_path
 from voicepipe.transcript_triggers._actuator import (
+    ACCESSIBILITY_GLOBAL_ACTIONS,
+    CAP_ACCESSIBILITY_GLOBAL,
     CAP_AUDIO_FEEDBACK,
     CAP_CLIPBOARD,
     CAP_DIAL,
@@ -79,6 +81,7 @@ _ALL_CAPS: frozenset[str] = frozenset(
         CAP_SET_TIMER,
         CAP_DIAL,
         CAP_NAVIGATE,
+        CAP_ACCESSIBILITY_GLOBAL,
     }
 )
 
@@ -181,6 +184,16 @@ class ServerActuator:
         if mode:
             entry["mode"] = mode
         self.client_actions.append(entry)
+        return True
+
+    def accessibility_global(self, action: str) -> bool:
+        if CAP_ACCESSIBILITY_GLOBAL not in self._caps:
+            return False
+        if action not in ACCESSIBILITY_GLOBAL_ACTIONS:
+            return False
+        self.client_actions.append(
+            {"type": "accessibility_global", "action": action}
+        )
         return True
 
 

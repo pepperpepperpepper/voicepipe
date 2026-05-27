@@ -120,6 +120,11 @@ def test_setup_idempotent_when_intent_verbs_already_present(tmp_path: Path) -> N
                 "timer": {"type": "builtin", "enabled": True},
                 "dial": {"type": "builtin", "enabled": True},
                 "navigate": {"type": "builtin", "enabled": True},
+                "back": {"type": "builtin", "enabled": True},
+                "home": {"type": "builtin", "enabled": True},
+                "recents": {"type": "builtin", "enabled": True},
+                "notifications": {"type": "builtin", "enabled": True},
+                "quick_settings": {"type": "builtin", "enabled": True},
             }
         },
     )

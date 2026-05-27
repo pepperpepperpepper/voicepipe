@@ -25,6 +25,7 @@ sealed class ClientAction {
         val destination: String,
         val mode: String?,
     ) : ClientAction()
+    data class AccessibilityGlobal(val action: String) : ClientAction()
     data class Unknown(val type: String, val raw: JsonObject) : ClientAction()
 }
 
@@ -39,6 +40,15 @@ object ClientActions {
         "set_timer",
         "dial",
         "navigate",
+        "accessibility_global",
+    )
+
+    val ACCESSIBILITY_GLOBAL_ACTIONS: Set<String> = setOf(
+        "back",
+        "home",
+        "recents",
+        "notifications",
+        "quick_settings",
     )
 
     fun parseAll(actions: List<JsonElement>): List<ClientAction> =
@@ -64,6 +74,7 @@ object ClientActions {
                 ?.takeIf { it.isNotBlank() }
                 ?.let(ClientAction::Dial)
             "navigate" -> parseNavigate(obj)
+            "accessibility_global" -> parseAccessibilityGlobal(obj)
             else -> ClientAction.Unknown(type, obj)
         }
     }
@@ -89,6 +100,14 @@ object ClientActions {
         val mode = obj.stringField("mode")
             ?.takeIf { it in NAVIGATE_MODES }
         return ClientAction.Navigate(destination, mode)
+    }
+
+    private fun parseAccessibilityGlobal(
+        obj: JsonObject,
+    ): ClientAction.AccessibilityGlobal? {
+        val action = obj.stringField("action")
+            ?.takeIf { it in ACCESSIBILITY_GLOBAL_ACTIONS } ?: return null
+        return ClientAction.AccessibilityGlobal(action)
     }
 
     private val NAVIGATE_MODES = setOf("driving", "walking", "bicycling", "transit")

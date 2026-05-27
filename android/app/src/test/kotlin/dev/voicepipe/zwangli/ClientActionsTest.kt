@@ -20,6 +20,7 @@ class ClientActionsTest {
             "set_timer",
             "dial",
             "navigate",
+            "accessibility_global",
         )
         assertEquals(expected, ClientActions.CAPABILITIES)
     }
@@ -227,6 +228,41 @@ class ClientActionsTest {
                 a,
             )
         }
+    }
+
+    @Test
+    fun `accessibility_global parses all five canonical actions`() {
+        for (a in listOf("back", "home", "recents", "notifications", "quick_settings")) {
+            val parsed = ClientActions.parse(
+                parse("""{"type":"accessibility_global","action":"$a"}"""),
+            )
+            assertEquals(
+                "action '$a' should round-trip",
+                ClientAction.AccessibilityGlobal(a),
+                parsed,
+            )
+        }
+    }
+
+    @Test
+    fun `accessibility_global rejects unknown action`() {
+        assertNull(
+            ClientActions.parse(
+                parse("""{"type":"accessibility_global","action":"reboot"}"""),
+            ),
+        )
+    }
+
+    @Test
+    fun `accessibility_global rejects missing or blank action`() {
+        assertNull(
+            ClientActions.parse(parse("""{"type":"accessibility_global"}""")),
+        )
+        assertNull(
+            ClientActions.parse(
+                parse("""{"type":"accessibility_global","action":""}"""),
+            ),
+        )
     }
 
     private fun parse(raw: String): JsonElement = Json.parseToJsonElement(raw)

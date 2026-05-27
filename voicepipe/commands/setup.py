@@ -71,6 +71,11 @@ _DEFAULT_INTENT_VERBS: tuple[str, ...] = (
     "timer",
     "dial",
     "navigate",
+    "back",
+    "home",
+    "recents",
+    "notifications",
+    "quick_settings",
 )
 
 
@@ -326,7 +331,9 @@ def setup(
     if _ensure_zwingli_verbs_in_triggers_json(triggers_path):
         click.echo(
             "Enabled `execute`, `subprocess`, `type`, `search`, `open`, "
-            "`alarm`, `timer`, `dial`, and `navigate` verbs in triggers.json."
+            "`alarm`, `timer`, `dial`, `navigate`, `back`, `home`, "
+            "`recents`, `notifications`, and `quick_settings` verbs in "
+            "triggers.json."
         )
 
     if systemd:

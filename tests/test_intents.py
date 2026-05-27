@@ -729,3 +729,99 @@ def test_navigate_via_server_actuator_respects_missing_capability() -> None:
     assert out.startswith("⚠ zwingli:")
     assert meta["meta"]["handler_meta"]["ok"] is False
     assert _intent_actions(act.client_actions) == []
+
+
+# ---------------------------------------------------------------------------
+# accessibility-global verbs (back / home / recents / notifications / quick_settings)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "verb,action",
+    [
+        ("back", "back"),
+        ("home", "home"),
+        ("recents", "recents"),
+        ("notifications", "notifications"),
+        ("quick_settings", "quick_settings"),
+    ],
+)
+def test_accessibility_global_verb_routes_through_actuator(
+    verb: str, action: str
+) -> None:
+    act = InMemoryActuator()
+    out, meta = tt.apply_transcript_triggers(
+        f"zwingli {verb}",
+        commands=_commands_for(verb, verb),
+        actuator=act,
+    )
+    assert out == ""
+    handler_meta = meta["meta"]["handler_meta"]
+    assert handler_meta["ok"] is True
+    assert handler_meta["intent"] == "accessibility_global"
+    assert handler_meta["action"] == action
+    assert act.accessibility_global_calls == [action]
+
+
+def test_accessibility_global_verb_ignores_trailing_args() -> None:
+    """`zwingli back now please` should still fire `back`. The verb takes
+    no args; tolerating STT chatter avoids spurious bad-args paths."""
+    act = InMemoryActuator()
+    out, meta = tt.apply_transcript_triggers(
+        "zwingli back now please",
+        commands=_commands_for("back", "back"),
+        actuator=act,
+    )
+    assert out == ""
+    assert meta["meta"]["handler_meta"]["ok"] is True
+    assert act.accessibility_global_calls == ["back"]
+
+
+def test_accessibility_global_graceful_skip_when_capability_missing() -> None:
+    bare = frozenset({CAP_OPEN_URL})  # no accessibility_global
+    act = InMemoryActuator(caps=bare)
+    out, meta = tt.apply_transcript_triggers(
+        "zwingli home",
+        commands=_commands_for("home", "home"),
+        actuator=act,
+    )
+    assert out.startswith("⚠ zwingli:")
+    assert "not supported on this device" in out
+    assert meta["meta"]["handler_meta"]["ok"] is False
+    assert act.accessibility_global_calls == []
+
+
+@pytest.mark.parametrize(
+    "verb,action",
+    [
+        ("back", "back"),
+        ("home", "home"),
+        ("recents", "recents"),
+        ("notifications", "notifications"),
+        ("quick_settings", "quick_settings"),
+    ],
+)
+def test_accessibility_global_via_server_actuator_queues_action(
+    verb: str, action: str
+) -> None:
+    from voicepipe.dispatch_server import ServerActuator
+
+    act = ServerActuator()
+    tt.apply_transcript_triggers(
+        f"zwingli {verb}",
+        commands=_commands_for(verb, verb),
+        actuator=act,
+    )
+    assert _intent_actions(act.client_actions) == [
+        {"type": "accessibility_global", "action": action}
+    ]
+
+
+def test_accessibility_global_factory_rejects_unknown_action() -> None:
+    """Guards against silently registering a bogus action name."""
+    from voicepipe.transcript_triggers._intents import (
+        _make_accessibility_global_handler,
+    )
+
+    with pytest.raises(ValueError):
+        _make_accessibility_global_handler("not_a_real_action")

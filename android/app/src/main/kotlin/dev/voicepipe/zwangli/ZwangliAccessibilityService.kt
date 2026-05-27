@@ -37,6 +37,8 @@ class ZwangliAccessibilityService : AccessibilityService() {
         return target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
     }
 
+    fun performGlobal(actionId: Int): Boolean = performGlobalAction(actionId)
+
     private fun findEditableFocus(): AccessibilityNodeInfo? {
         // Prefer an input-focused field; fall back to the accessibility focus.
         val input = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
@@ -65,5 +67,8 @@ class ZwangliAccessibilityService : AccessibilityService() {
             instance?.typeIntoFocusedField(text) ?: false
 
         fun isConnected(): Boolean = instance != null
+
+        fun performGlobal(actionId: Int): Boolean =
+            instance?.performGlobal(actionId) ?: false
     }
 }

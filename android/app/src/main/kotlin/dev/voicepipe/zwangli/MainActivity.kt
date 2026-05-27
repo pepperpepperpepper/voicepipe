@@ -194,6 +194,9 @@ class MainActivity : AppCompatActivity() {
                 append("applied: clipboard=").append(summary.clipboardApplied)
                     .append(" feedback=").append(summary.feedbackPlayed)
                     .append(" intents=").append(summary.intentsFired)
+                if (summary.globalActionsFired > 0) {
+                    append(" global=").append(summary.globalActionsFired)
+                }
                 if (summary.unknownSkipped > 0) {
                     append(" unknown=").append(summary.unknownSkipped)
                 }

@@ -185,7 +185,7 @@ def test_get_transcript_triggers_default(monkeypatch) -> None:
     config = _reload_config()
     monkeypatch.delenv("VOICEPIPE_TRANSCRIPT_TRIGGERS", raising=False)
     triggers = config.get_transcript_triggers(load_env=False)
-    assert triggers.get("zwingli") == "strip"
+    assert triggers.get("zwingli") == "dispatch"
 
 
 def test_get_transcript_triggers_empty_disables(monkeypatch) -> None:

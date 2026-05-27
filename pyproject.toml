@@ -84,6 +84,7 @@ markers = [
     "audio: recorded audio regression tests (network STT; no mic required)",
     "synth: synthesized-voice round-trip tests (ElevenLabs TTS cache + network STT; cache committed, so CI only needs OPENAI_API_KEY)",
     "desktop: interactive desktop required (typing/focus tests)",
+    "android: tests that drive a real Zwangli APK on an adb-attached device (debug variant + INJECT_TRANSCRIPT)",
 ]
 
 [tool.mypy]

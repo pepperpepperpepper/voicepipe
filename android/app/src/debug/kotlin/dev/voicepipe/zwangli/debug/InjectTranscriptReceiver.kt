@@ -44,6 +44,28 @@ class InjectTranscriptReceiver : BroadcastReceiver() {
                 }
                 appContext.sendBroadcast(reply)
                 Log.i(TAG, "Injected transcript='$transcript' ok=${outcome.error == null}")
+                // Single-line, key=value summary so external test harnesses can
+                // tail logcat and parse the outcome without registering a
+                // receiver of their own. The "INJECT_RESULT" prefix is the
+                // grep anchor.
+                val s = outcome.summary
+                val outLen = outcome.response?.outputText?.length ?: 0
+                val err = outcome.error?.let { it.message ?: it.javaClass.simpleName }
+                    ?.replace('\n', ' ')
+                    ?.replace('"', '\'')
+                    ?.take(200)
+                Log.i(
+                    TAG,
+                    "INJECT_RESULT" +
+                        " ok=${outcome.error == null}" +
+                        " clipboard=${s?.clipboardApplied ?: 0}" +
+                        " feedback=${s?.feedbackPlayed ?: 0}" +
+                        " intents=${s?.intentsFired ?: 0}" +
+                        " global=${s?.globalActionsFired ?: 0}" +
+                        " unknown=${s?.unknownSkipped ?: 0}" +
+                        " output_len=$outLen" +
+                        (err?.let { " error=\"$it\"" } ?: ""),
+                )
             } catch (e: Throwable) {
                 Log.e(TAG, "Inject failed", e)
             } finally {

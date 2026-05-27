@@ -331,6 +331,63 @@
             android:text="@string/test_result_placeholder"
             android:textIsSelectable="true" />
 
+        <!-- ==================== Triggers ==================== -->
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:layout_marginBottom="4dp"
+            android:text="@string/configurator_header_triggers"
+            android:textAppearance="?attr/textAppearanceTitleMedium"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:text="@string/triggers_blurb"
+            android:textAppearance="?attr/textAppearanceBodySmall" />
+
+        <com.google.android.material.chip.ChipGroup
+            android:id="@+id/chips_triggers"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="4dp"
+            app:singleLine="false" />
+
+        <TextView
+            android:id="@+id/text_triggers_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:text="@string/triggers_status_loading"
+            android:textAppearance="?attr/textAppearanceBodySmall" />
+
+        <com.google.android.material.textfield.TextInputLayout
+            android:id="@+id/layout_trigger_new"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="@string/hint_trigger_new"
+            app:helperText="@string/helper_trigger_new"
+            app:helperTextEnabled="true">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/edit_trigger_new"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="text"
+                android:imeOptions="actionDone"
+                android:maxLines="1" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <Button
+            android:id="@+id/button_trigger_add"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/action_trigger_add" />
+
         <!-- ==================== Search ==================== -->
 
         <TextView

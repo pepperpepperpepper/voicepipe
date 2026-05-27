@@ -61,4 +61,23 @@
     <string name="action_try_search">Try a search</string>
     <string name="try_search_query">zwangli configurator test</string>
     <string name="try_search_no_handler">No browser or search app could handle the request.</string>
+
+    <!-- Triggers card -->
+    <string name="configurator_header_triggers">Activation phrases</string>
+    <string name="triggers_blurb">Phrases the server listens for at the start of a transcript. \"zwingli alarm 7am wake up\" works because \"zwingli\" is here. Tap the × on a chip to remove it; type a new phrase below and tap Add to add one.</string>
+    <string name="hint_trigger_new">New activation phrase</string>
+    <string name="helper_trigger_new">Lowercase letters, optionally with single spaces (e.g. \"computer\" or \"hey assistant\").</string>
+    <string name="action_trigger_add">Add</string>
+    <string name="triggers_status_loading">Loading current phrases…</string>
+    <string name="triggers_status_unreachable">Server unreachable — cannot manage activation phrases until the connection works.</string>
+    <string name="triggers_status_auth_failed">Bearer token rejected — check the token above.</string>
+    <string name="triggers_status_empty">No activation phrases configured. Add at least one or the server can\'t dispatch any voice command.</string>
+    <string name="triggers_status_ok">%1$d activation phrase(s) configured.</string>
+    <string name="triggers_remove_last_blocked">Cannot remove the last phrase — the dispatcher needs at least one.</string>
+    <string name="triggers_add_already_present">\"%1$s\" is already an activation phrase.</string>
+    <string name="error_trigger_phrase_invalid">Lowercase letters with single-space separators only (2–40 chars).</string>
+    <string name="triggers_remove_confirm_title">Remove activation phrase?</string>
+    <string name="triggers_remove_confirm_message">Remove \"%1$s\"? Voice commands starting with that word will no longer be dispatched.</string>
+    <string name="triggers_remove_confirm_positive">Remove</string>
+    <string name="triggers_remove_confirm_negative">Cancel</string>
 </resources>

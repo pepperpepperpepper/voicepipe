@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -1004,3 +1005,182 @@ def triggers_stats(path_override: str | None, top: int, json_output: bool) -> No
 
     for line in _format_stats_text(stats, path, top=top):
         click.echo(line)
+
+
+# ---------- triggers add / triggers remove ----------
+
+# A trigger phrase is matched as a prefix of the transcript (followed by a
+# space-or-end boundary), so we keep the allowed character set narrow:
+# lowercase letters, optionally separated by single spaces. Digits and
+# punctuation would interact poorly with the transcript boundary logic and
+# with most speech recognizers (which spell out digits inconsistently).
+_PHRASE_MIN_LEN = 2
+_PHRASE_MAX_LEN = 40
+_PHRASE_RE = re.compile(r"^[a-z]+( [a-z]+)*$")
+
+
+def _normalize_phrase(raw: str) -> str:
+    """Lowercase, trim, collapse runs of whitespace to single spaces."""
+    return " ".join((raw or "").strip().lower().split())
+
+
+def _validate_phrase(phrase: str) -> str | None:
+    """Return None if `phrase` is a legal trigger; otherwise a reason string.
+
+    Assumes the input has already been through :func:`_normalize_phrase`.
+    """
+    if not phrase:
+        return "phrase is empty"
+    if len(phrase) < _PHRASE_MIN_LEN:
+        return f"phrase too short (min {_PHRASE_MIN_LEN} chars)"
+    if len(phrase) > _PHRASE_MAX_LEN:
+        return f"phrase too long (max {_PHRASE_MAX_LEN} chars)"
+    if not _PHRASE_RE.match(phrase):
+        return "phrase must be lowercase letters, optionally separated by single spaces"
+    return None
+
+
+def _read_triggers_payload(path: Path) -> dict[str, Any]:
+    """Read triggers.json into a plain dict (no validation)."""
+    if not path.exists():
+        click.echo(f"✗ triggers.json not found: {path}", err=True)
+        click.echo("  Run `voicepipe setup` to create one.", err=True)
+        sys.exit(1)
+    try:
+        raw = path.read_text(encoding="utf-8-sig")
+    except OSError as e:
+        click.echo(f"✗ could not read {path}: {e}", err=True)
+        sys.exit(1)
+    try:
+        payload = json.loads(raw or "{}")
+    except json.JSONDecodeError as e:
+        click.echo(f"✗ triggers.json is not valid JSON: {path}", err=True)
+        click.echo(f"  {e}", err=True)
+        sys.exit(1)
+    if not isinstance(payload, dict):
+        click.echo(
+            f"✗ triggers.json must contain a JSON object: {path}", err=True,
+        )
+        sys.exit(1)
+    return payload
+
+
+def _write_triggers_payload(path: Path, payload: dict[str, Any]) -> None:
+    """Write triggers.json with the same formatting `voicepipe setup` uses."""
+    rendered = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    try:
+        path.write_text(rendered, encoding="utf-8")
+    except OSError as e:
+        click.echo(f"✗ could not write {path}: {e}", err=True)
+        sys.exit(1)
+
+
+def _existing_trigger_keys(payload: dict[str, Any]) -> dict[str, str]:
+    """Return a {normalized_phrase: original_key} map for the current triggers.
+
+    Used to detect collisions case- and whitespace-insensitively while still
+    being able to address the original key for an in-place removal.
+    """
+    section = payload.get("triggers")
+    if not isinstance(section, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key in section.keys():
+        if isinstance(key, str):
+            out[_normalize_phrase(key)] = key
+    return out
+
+
+@triggers_group.command("add")
+@click.argument("phrase", required=True)
+@click.option(
+    "--path",
+    "path_override",
+    type=click.Path(dir_okay=False),
+    default=None,
+    help="Path to a triggers.json file (defaults to the canonical path).",
+)
+def triggers_add(phrase: str, path_override: str | None) -> None:
+    """Add a new activation phrase to triggers.json.
+
+    The phrase is normalized (lowercased, whitespace collapsed) and added
+    with ``action: "dispatch"`` so it routes through the verb dispatcher
+    just like the built-in ``zwingli`` trigger. Existing triggers are
+    preserved. Adding a phrase that already exists is a no-op (exit 0).
+    """
+    normalized = _normalize_phrase(phrase)
+    reason = _validate_phrase(normalized)
+    if reason is not None:
+        click.echo(f"✗ invalid phrase: {reason}", err=True)
+        sys.exit(1)
+
+    path = Path(path_override).expanduser() if path_override else triggers_json_path()
+    payload = _read_triggers_payload(path)
+
+    section = payload.get("triggers")
+    if not isinstance(section, dict):
+        section = {}
+        payload["triggers"] = section
+
+    existing = _existing_trigger_keys(payload)
+    if normalized in existing:
+        click.echo(
+            f"= trigger {normalized!r} already present (no change): {path}"
+        )
+        return
+
+    section[normalized] = {"action": "dispatch"}
+    _write_triggers_payload(path, payload)
+    click.echo(f"✓ added trigger {normalized!r} to {path}")
+
+
+@triggers_group.command("remove")
+@click.argument("phrase", required=True)
+@click.option(
+    "--path",
+    "path_override",
+    type=click.Path(dir_okay=False),
+    default=None,
+    help="Path to a triggers.json file (defaults to the canonical path).",
+)
+def triggers_remove(phrase: str, path_override: str | None) -> None:
+    """Remove an activation phrase from triggers.json.
+
+    Refuses to remove the last remaining trigger, since that would leave
+    the dispatcher unable to recognize any voice command. Removing a
+    phrase that isn't configured is a no-op (exit 0).
+    """
+    normalized = _normalize_phrase(phrase)
+    if not normalized:
+        click.echo("✗ invalid phrase: phrase is empty", err=True)
+        sys.exit(1)
+
+    path = Path(path_override).expanduser() if path_override else triggers_json_path()
+    payload = _read_triggers_payload(path)
+
+    section = payload.get("triggers")
+    if not isinstance(section, dict) or not section:
+        click.echo(f"= trigger {normalized!r} not present (no change): {path}")
+        return
+
+    existing = _existing_trigger_keys(payload)
+    original_key = existing.get(normalized)
+    if original_key is None:
+        click.echo(f"= trigger {normalized!r} not present (no change): {path}")
+        return
+
+    if len(section) <= 1:
+        click.echo(
+            f"✗ refusing to remove the last trigger ({original_key!r}); "
+            "the dispatcher would no longer match any voice commands.",
+            err=True,
+        )
+        click.echo(
+            "  Add another phrase first with `voicepipe triggers add <phrase>`.",
+            err=True,
+        )
+        sys.exit(1)
+
+    del section[original_key]
+    _write_triggers_payload(path, payload)
+    click.echo(f"✓ removed trigger {original_key!r} from {path}")

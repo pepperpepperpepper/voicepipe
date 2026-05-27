@@ -1083,3 +1083,227 @@ def test_test_dry_run_output_shows_did_you_mean(runner, tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     assert "resolution: unknown_verb" in result.output
     assert "did_you_mean: python" in result.output
+
+
+# ---------- triggers add / triggers remove ----------
+
+
+def _basic_payload(extra_triggers: dict | None = None) -> dict:
+    triggers: dict[str, Any] = {"zwingli": {"action": "dispatch"}}
+    if extra_triggers:
+        triggers.update(extra_triggers)
+    return {
+        "version": 1,
+        "triggers": triggers,
+        "verbs": {"strip": {"type": "builtin"}},
+    }
+
+
+def test_add_appends_new_trigger(runner, tmp_path: Path) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_payload())
+    result = runner.invoke(main, ["triggers", "add", "computer", "--path", str(cfg)])
+    assert result.exit_code == 0, result.output
+    assert "added trigger 'computer'" in result.output
+    written = json.loads(cfg.read_text())
+    assert written["triggers"]["computer"] == {"action": "dispatch"}
+    # Existing triggers preserved.
+    assert written["triggers"]["zwingli"] == {"action": "dispatch"}
+
+
+def test_add_normalizes_case_and_whitespace(runner, tmp_path: Path) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_payload())
+    result = runner.invoke(
+        main, ["triggers", "add", "  Hey  Computer  ", "--path", str(cfg)]
+    )
+    assert result.exit_code == 0, result.output
+    assert "added trigger 'hey computer'" in result.output
+    written = json.loads(cfg.read_text())
+    assert "hey computer" in written["triggers"]
+
+
+def test_add_is_idempotent_when_phrase_already_present(
+    runner, tmp_path: Path
+) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_payload())
+    result = runner.invoke(main, ["triggers", "add", "zwingli", "--path", str(cfg)])
+    assert result.exit_code == 0, result.output
+    assert "already present" in result.output
+    # File contents unchanged.
+    written = json.loads(cfg.read_text())
+    assert list(written["triggers"]) == ["zwingli"]
+
+
+def test_add_idempotent_detects_case_insensitive_duplicate(
+    runner, tmp_path: Path
+) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_payload())
+    result = runner.invoke(main, ["triggers", "add", "ZWINGLI", "--path", str(cfg)])
+    assert result.exit_code == 0, result.output
+    assert "already present" in result.output
+    written = json.loads(cfg.read_text())
+    assert list(written["triggers"]) == ["zwingli"]
+
+
+@pytest.mark.parametrize(
+    "phrase, reason_substr",
+    [
+        ("", "empty"),
+        ("   ", "empty"),
+        ("a", "too short"),
+        ("x" * 41, "too long"),
+        ("zwingli2", "lowercase letters"),
+        ("hey-computer", "lowercase letters"),
+        ("hey_computer", "lowercase letters"),
+        ("HEY!", "lowercase letters"),
+    ],
+)
+def test_add_rejects_invalid_phrase(
+    runner, tmp_path: Path, phrase: str, reason_substr: str
+) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_payload())
+    result = runner.invoke(main, ["triggers", "add", phrase, "--path", str(cfg)])
+    assert result.exit_code == 1, result.output
+    assert "invalid phrase" in result.output
+    assert reason_substr in result.output
+    # File unchanged.
+    written = json.loads(cfg.read_text())
+    assert list(written["triggers"]) == ["zwingli"]
+
+
+def test_add_creates_triggers_section_if_missing(runner, tmp_path: Path) -> None:
+    cfg = _write(
+        tmp_path / "triggers.json",
+        {"version": 1, "verbs": {"strip": {"type": "builtin"}}},
+    )
+    result = runner.invoke(main, ["triggers", "add", "computer", "--path", str(cfg)])
+    assert result.exit_code == 0, result.output
+    written = json.loads(cfg.read_text())
+    assert written["triggers"]["computer"] == {"action": "dispatch"}
+
+
+def test_add_preserves_other_top_level_keys(runner, tmp_path: Path) -> None:
+    payload = _basic_payload()
+    payload["verbs"]["custom"] = {"type": "builtin", "enabled": True}
+    payload["llm_profiles"] = {"foo": {"temperature": 0.7}}
+    payload["dispatch"] = {"unknown_verb": "strip"}
+    cfg = _write(tmp_path / "triggers.json", payload)
+    result = runner.invoke(main, ["triggers", "add", "computer", "--path", str(cfg)])
+    assert result.exit_code == 0, result.output
+    written = json.loads(cfg.read_text())
+    assert written["verbs"]["custom"] == {"type": "builtin", "enabled": True}
+    assert written["llm_profiles"] == {"foo": {"temperature": 0.7}}
+    assert written["dispatch"] == {"unknown_verb": "strip"}
+
+
+def test_add_exits_when_triggers_json_missing(runner, tmp_path: Path) -> None:
+    missing = tmp_path / "nope.json"
+    result = runner.invoke(main, ["triggers", "add", "computer", "--path", str(missing)])
+    assert result.exit_code == 1
+    assert "not found" in result.output
+    assert "voicepipe setup" in result.output
+
+
+def test_add_exits_on_malformed_json(runner, tmp_path: Path) -> None:
+    cfg = tmp_path / "triggers.json"
+    cfg.write_text("{this is not json", encoding="utf-8")
+    result = runner.invoke(main, ["triggers", "add", "computer", "--path", str(cfg)])
+    assert result.exit_code == 1
+    assert "not valid JSON" in result.output
+
+
+def test_remove_drops_existing_trigger(runner, tmp_path: Path) -> None:
+    cfg = _write(
+        tmp_path / "triggers.json",
+        _basic_payload({"zwingly": {"action": "dispatch"}}),
+    )
+    result = runner.invoke(main, ["triggers", "remove", "zwingly", "--path", str(cfg)])
+    assert result.exit_code == 0, result.output
+    assert "removed trigger 'zwingly'" in result.output
+    written = json.loads(cfg.read_text())
+    assert list(written["triggers"]) == ["zwingli"]
+
+
+def test_remove_normalizes_input(runner, tmp_path: Path) -> None:
+    cfg = _write(
+        tmp_path / "triggers.json",
+        _basic_payload({"hey computer": {"action": "dispatch"}}),
+    )
+    result = runner.invoke(
+        main, ["triggers", "remove", "  Hey  Computer  ", "--path", str(cfg)]
+    )
+    assert result.exit_code == 0, result.output
+    assert "removed trigger 'hey computer'" in result.output
+    written = json.loads(cfg.read_text())
+    assert list(written["triggers"]) == ["zwingli"]
+
+
+def test_remove_is_idempotent_when_phrase_absent(
+    runner, tmp_path: Path
+) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_payload())
+    result = runner.invoke(main, ["triggers", "remove", "computer", "--path", str(cfg)])
+    assert result.exit_code == 0, result.output
+    assert "not present" in result.output
+    written = json.loads(cfg.read_text())
+    assert list(written["triggers"]) == ["zwingli"]
+
+
+def test_remove_refuses_to_drop_last_trigger(runner, tmp_path: Path) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_payload())
+    result = runner.invoke(main, ["triggers", "remove", "zwingli", "--path", str(cfg)])
+    assert result.exit_code == 1
+    assert "refusing to remove the last trigger" in result.output
+    assert "voicepipe triggers add" in result.output
+    # File unchanged.
+    written = json.loads(cfg.read_text())
+    assert list(written["triggers"]) == ["zwingli"]
+
+
+def test_remove_empty_phrase_is_invalid(runner, tmp_path: Path) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_payload())
+    result = runner.invoke(main, ["triggers", "remove", "  ", "--path", str(cfg)])
+    assert result.exit_code == 1
+    assert "invalid phrase" in result.output
+
+
+def test_remove_handles_missing_triggers_section(
+    runner, tmp_path: Path
+) -> None:
+    cfg = _write(
+        tmp_path / "triggers.json",
+        {"version": 1, "verbs": {"strip": {"type": "builtin"}}},
+    )
+    result = runner.invoke(main, ["triggers", "remove", "computer", "--path", str(cfg)])
+    assert result.exit_code == 0, result.output
+    assert "not present" in result.output
+
+
+def test_add_then_remove_round_trip(runner, tmp_path: Path) -> None:
+    cfg = _write(tmp_path / "triggers.json", _basic_payload())
+    r1 = runner.invoke(main, ["triggers", "add", "computer", "--path", str(cfg)])
+    assert r1.exit_code == 0
+    r2 = runner.invoke(main, ["triggers", "remove", "computer", "--path", str(cfg)])
+    assert r2.exit_code == 0
+    written = json.loads(cfg.read_text())
+    assert list(written["triggers"]) == ["zwingli"]
+
+
+def test_add_preserves_existing_trigger_object_shape(
+    runner, tmp_path: Path
+) -> None:
+    # Some users may write triggers using the short-string form
+    # (``"zwingli": "dispatch"``) instead of the long-object form.
+    # The add command must not rewrite the existing entries.
+    cfg = _write(
+        tmp_path / "triggers.json",
+        {
+            "version": 1,
+            "triggers": {"zwingli": "dispatch"},
+            "verbs": {"strip": {"type": "builtin"}},
+        },
+    )
+    result = runner.invoke(main, ["triggers", "add", "computer", "--path", str(cfg)])
+    assert result.exit_code == 0, result.output
+    written = json.loads(cfg.read_text())
+    assert written["triggers"]["zwingli"] == "dispatch"  # unchanged short form
+    assert written["triggers"]["computer"] == {"action": "dispatch"}

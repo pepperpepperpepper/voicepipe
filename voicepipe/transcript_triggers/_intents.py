@@ -192,6 +192,34 @@ def _action_search(
     return "", {"ok": True, "intent": "web_search", "query": query}
 
 
+# Matches a leading bare scheme word like ``http example.com`` or
+# ``HTTPS example.com``. STT usually emits the scheme as a literal word
+# rather than as ``https://``, so without this normalization those
+# transcripts get the scheme prepended twice.
+_OPEN_SCHEME_WORD_RE = re.compile(r"^(https?)\s+(\S.*)$", re.IGNORECASE)
+
+
+def _normalize_open_url(raw: str) -> str:
+    """Coerce a spoken ``open …`` argument into a parseable URL.
+
+    Three shapes are handled:
+
+    * ``https://example.com`` — already a URL, returned as-is.
+    * ``http example.com`` / ``HTTPS example.com`` — a spoken scheme
+      followed by the host; the scheme word is replaced with
+      ``scheme://``.
+    * ``example.com`` — a bare host with no scheme word; ``https://``
+      is prepended.
+    """
+    raw = raw.strip()
+    if re.match(r"^[a-zA-Z][a-zA-Z0-9+\-.]*://", raw):
+        return raw
+    m = _OPEN_SCHEME_WORD_RE.match(raw)
+    if m:
+        return f"{m.group(1).lower()}://{m.group(2).strip()}"
+    return "https://" + raw
+
+
 def _action_open(
     prompt: str,
     *,
@@ -202,12 +230,10 @@ def _action_open(
     actuator: Actuator | None = None,
 ) -> tuple[str, dict[str, Any]]:
     del verb_cfg, profiles, captures, commands
-    url = (prompt or "").strip()
-    if not url:
+    raw = (prompt or "").strip()
+    if not raw:
         return _bad_args("open", "empty url")
-    # Accept bare hostnames like `example.com` by prepending https://
-    if not re.match(r"^[a-zA-Z][a-zA-Z0-9+\-.]*://", url):
-        url = "https://" + url
+    url = _normalize_open_url(raw)
     act = resolve_actuator(actuator)
     if CAP_OPEN_URL not in act.capabilities():
         return _unsupported("open")
@@ -277,6 +303,17 @@ def _action_timer(
 
 _DIAL_KEEP_RE = re.compile(r"[+0-9*#,;]")
 
+# STT typically transcribes dial-pad symbols as words (``plus``, ``star``,
+# ``pound``…) rather than the literal characters. Without this map the
+# subsequent keep-filter strips them entirely, so a spoken
+# ``plus 1 800 …`` would silently drop the international ``+``. Word
+# boundaries keep matches from chewing into adjacent tokens.
+_DIAL_SPOKEN_SYMBOLS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bplus\b", re.IGNORECASE), "+"),
+    (re.compile(r"\b(?:pound|hash)\b", re.IGNORECASE), "#"),
+    (re.compile(r"\b(?:star|asterisk)\b", re.IGNORECASE), "*"),
+)
+
 
 def _action_dial(
     prompt: str,
@@ -291,6 +328,8 @@ def _action_dial(
     raw = (prompt or "").strip()
     if not raw:
         return _bad_args("dial", "empty number")
+    for pattern, replacement in _DIAL_SPOKEN_SYMBOLS:
+        raw = pattern.sub(replacement, raw)
     # Keep digits, +, *, #, and pause separators; strip spaces, dashes,
     # parentheses, etc., that STT loves to insert. tel: URIs don't want
     # them anyway.

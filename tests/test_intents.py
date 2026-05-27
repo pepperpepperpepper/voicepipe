@@ -25,6 +25,7 @@ from voicepipe.transcript_triggers._actuator import (
     InMemoryActuator,
 )
 from voicepipe.transcript_triggers._intents import (
+    _normalize_open_url,
     parse_alarm_args,
     parse_timer_args,
 )
@@ -237,6 +238,93 @@ def test_dial_verb_strips_punctuation() -> None:
     assert out == ""
     assert meta["meta"]["handler_meta"]["ok"] is True
     assert act.dial_calls == ["+15555550100"]
+
+
+@pytest.mark.parametrize(
+    "transcript,expected",
+    [
+        # The original bug: spoken "plus" got dropped by the keep-filter,
+        # turning an international call into a domestic one.
+        ("dial plus 1 800 555 0100", "+18005550100"),
+        ("dial Plus 44 20 7946 0958", "+442079460958"),
+        # Star / pound for in-call codes and pre-dial features.
+        ("dial star 67 5550100", "*675550100"),
+        ("dial asterisk 67 5550100", "*675550100"),
+        ("dial pound 1234", "#1234"),
+        ("dial hash 1234", "#1234"),
+        # Spoken symbol words are case-insensitive.
+        ("dial PLUS 1 555 0100", "+15550100"),
+        # Mixed: a literal "+" alongside a spoken "star" should keep both.
+        ("dial +1 star 5550100", "+1*5550100"),
+    ],
+)
+def test_dial_verb_converts_spoken_symbols(transcript: str, expected: str) -> None:
+    act = InMemoryActuator()
+    out, meta = tt.apply_transcript_triggers(
+        f"zwingli {transcript}",
+        commands=_commands_for("dial", "dial"),
+        actuator=act,
+    )
+    assert out == "", out
+    assert meta["meta"]["handler_meta"]["ok"] is True
+    assert act.dial_calls == [expected]
+
+
+# ---------------------------------------------------------------------------
+# _normalize_open_url (unit tests for the spoken-scheme fix)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        # Already a URL — passed through untouched.
+        ("https://example.com", "https://example.com"),
+        ("http://example.com/path?q=1", "http://example.com/path?q=1"),
+        ("ftp://files.example.com/", "ftp://files.example.com/"),
+        # Bare host — https:// is prepended.
+        ("example.com", "https://example.com"),
+        ("sub.example.com/x", "https://sub.example.com/x"),
+        # Spoken scheme prefix — the scheme word is replaced with scheme://,
+        # not duplicated. This was the bug: "https example.com" used to
+        # become "https://https example.com".
+        ("https example.com", "https://example.com"),
+        ("http example.com", "http://example.com"),
+        ("HTTPS example.com", "https://example.com"),
+        ("Http example.com/path", "http://example.com/path"),
+        # Extra whitespace around the scheme word is fine.
+        ("  https   example.com  ", "https://example.com"),
+    ],
+)
+def test_normalize_open_url(raw: str, expected: str) -> None:
+    assert _normalize_open_url(raw) == expected
+
+
+def test_open_verb_handles_spoken_https_prefix() -> None:
+    """End-to-end: 'open https example.com' fires open_url with the
+    expected URL instead of the previously mangled 'https://https example.com'."""
+    act = InMemoryActuator()
+    out, meta = tt.apply_transcript_triggers(
+        "zwingli open https example.com",
+        commands=_commands_for("open", "open"),
+        actuator=act,
+    )
+    assert out == ""
+    assert meta["meta"]["handler_meta"]["ok"] is True
+    assert act.open_url_calls == ["https://example.com"]
+
+
+def test_open_verb_handles_spoken_http_prefix() -> None:
+    """The spoken scheme is honored, not silently upgraded to https."""
+    act = InMemoryActuator()
+    out, meta = tt.apply_transcript_triggers(
+        "zwingli open http example.com",
+        commands=_commands_for("open", "open"),
+        actuator=act,
+    )
+    assert out == ""
+    assert meta["meta"]["handler_meta"]["ok"] is True
+    assert act.open_url_calls == ["http://example.com"]
 
 
 # ---------------------------------------------------------------------------

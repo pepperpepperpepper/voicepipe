@@ -52,6 +52,7 @@ from voicepipe.transcript_triggers._actuator import (
     CAP_AUDIO_FEEDBACK,
     CAP_CLIPBOARD,
     CAP_DIAL,
+    CAP_NAVIGATE,
     CAP_OPEN_URL,
     CAP_SET_ALARM,
     CAP_SET_TIMER,
@@ -77,6 +78,7 @@ _ALL_CAPS: frozenset[str] = frozenset(
         CAP_SET_ALARM,
         CAP_SET_TIMER,
         CAP_DIAL,
+        CAP_NAVIGATE,
     }
 )
 
@@ -170,6 +172,15 @@ class ServerActuator:
         if CAP_DIAL not in self._caps or not number.strip():
             return False
         self.client_actions.append({"type": "dial", "number": number})
+        return True
+
+    def navigate(self, destination: str, mode: str | None = None) -> bool:
+        if CAP_NAVIGATE not in self._caps or not destination.strip():
+            return False
+        entry: dict[str, Any] = {"type": "navigate", "destination": destination}
+        if mode:
+            entry["mode"] = mode
+        self.client_actions.append(entry)
         return True
 
 

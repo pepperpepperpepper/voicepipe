@@ -32,6 +32,7 @@ from voicepipe.config import (
 
 from ._actuator import (
     CAP_DIAL,
+    CAP_NAVIGATE,
     CAP_OPEN_URL,
     CAP_SET_ALARM,
     CAP_SET_TIMER,
@@ -149,6 +150,7 @@ _UNSUPPORTED = {
     "alarm": "Setting alarms is not supported on this device.",
     "timer": "Setting timers is not supported on this device.",
     "dial": "Dialing is not supported on this device.",
+    "navigate": "Navigation is not supported on this device.",
 }
 
 
@@ -342,3 +344,88 @@ def _action_dial(
     if not act.dial(number):
         return _unsupported("dial")
     return "", {"ok": True, "intent": "dial", "number": number}
+
+
+# Spoken travel-mode tokens → canonical mode strings. The canonical values
+# match the Maps URI scheme on the executor side ("driving" → mode=d, etc.)
+# but we keep them spelled out here so the metadata is readable in logs
+# and tests don't depend on URI-encoding details.
+_NAVIGATE_MODE_ALIASES: dict[str, str] = {
+    "driving": "driving",
+    "drive": "driving",
+    "car": "driving",
+    "walking": "walking",
+    "walk": "walking",
+    "biking": "bicycling",
+    "bicycling": "bicycling",
+    "cycling": "bicycling",
+    "bike": "bicycling",
+    "transit": "transit",
+    "bus": "transit",
+    "train": "transit",
+    "subway": "transit",
+    "metro": "transit",
+}
+
+
+def parse_navigate_args(args: str) -> tuple[str, str | None] | None:
+    """Parse a spoken navigate spec into ``(destination, mode_or_None)``.
+
+    Recognized shapes (case-insensitive):
+
+    * ``paris`` → ``("paris", None)``
+    * ``to paris`` → ``("paris", None)`` — strips a leading ``to``
+    * ``driving paris`` → ``("paris", "driving")``
+    * ``walking to the library`` → ``("the library", "walking")``
+    * ``bike to alameda`` → ``("alameda", "bicycling")``
+
+    Returns ``None`` for empty input or when the mode word consumes the
+    whole tail (no destination left).
+    """
+    text = (args or "").strip()
+    if not text:
+        return None
+    tokens = text.split()
+    mode: str | None = None
+    if tokens:
+        first = tokens[0].lower()
+        if first in _NAVIGATE_MODE_ALIASES:
+            mode = _NAVIGATE_MODE_ALIASES[first]
+            tokens = tokens[1:]
+    # Drop a leading "to" once — works for "navigate to X" and
+    # "navigate driving to X" alike.
+    if tokens and tokens[0].lower() == "to":
+        tokens = tokens[1:]
+    destination = " ".join(tokens).strip()
+    if not destination:
+        return None
+    return destination, mode
+
+
+def _action_navigate(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
+) -> tuple[str, dict[str, Any]]:
+    del verb_cfg, profiles, captures, commands
+    parsed = parse_navigate_args(prompt or "")
+    if parsed is None:
+        return _bad_args("navigate", "expected e.g. 'paris' or 'walking to library'")
+    destination, mode = parsed
+    act = resolve_actuator(actuator)
+    if CAP_NAVIGATE not in act.capabilities():
+        return _unsupported("navigate")
+    if not act.navigate(destination, mode):
+        return _unsupported("navigate")
+    meta: dict[str, Any] = {
+        "ok": True,
+        "intent": "navigate",
+        "destination": destination,
+    }
+    if mode:
+        meta["mode"] = mode
+    return "", meta

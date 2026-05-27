@@ -21,6 +21,10 @@ sealed class ClientAction {
         val message: String?,
     ) : ClientAction()
     data class Dial(val number: String) : ClientAction()
+    data class Navigate(
+        val destination: String,
+        val mode: String?,
+    ) : ClientAction()
     data class Unknown(val type: String, val raw: JsonObject) : ClientAction()
 }
 
@@ -34,6 +38,7 @@ object ClientActions {
         "set_alarm",
         "set_timer",
         "dial",
+        "navigate",
     )
 
     fun parseAll(actions: List<JsonElement>): List<ClientAction> =
@@ -58,6 +63,7 @@ object ClientActions {
             "dial" -> obj.stringField("number")
                 ?.takeIf { it.isNotBlank() }
                 ?.let(ClientAction::Dial)
+            "navigate" -> parseNavigate(obj)
             else -> ClientAction.Unknown(type, obj)
         }
     }
@@ -76,6 +82,16 @@ object ClientActions {
         val message = obj.stringField("message")?.takeIf { it.isNotBlank() }
         return ClientAction.SetTimer(seconds, message)
     }
+
+    private fun parseNavigate(obj: JsonObject): ClientAction.Navigate? {
+        val destination = obj.stringField("destination")
+            ?.takeIf { it.isNotBlank() } ?: return null
+        val mode = obj.stringField("mode")
+            ?.takeIf { it in NAVIGATE_MODES }
+        return ClientAction.Navigate(destination, mode)
+    }
+
+    private val NAVIGATE_MODES = setOf("driving", "walking", "bicycling", "transit")
 
     private const val MAX_TIMER_SECONDS = 86_400
 

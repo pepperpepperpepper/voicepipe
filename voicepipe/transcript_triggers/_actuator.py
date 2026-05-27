@@ -34,6 +34,7 @@ CAP_OPEN_URL = "open_url"
 CAP_SET_ALARM = "set_alarm"
 CAP_SET_TIMER = "set_timer"
 CAP_DIAL = "dial"
+CAP_NAVIGATE = "navigate"
 
 
 class ActuatorCapabilityError(RuntimeError):
@@ -110,6 +111,9 @@ class Actuator(Protocol):
         ...
 
     def dial(self, number: str) -> bool:
+        ...
+
+    def navigate(self, destination: str, mode: str | None = None) -> bool:
         ...
 
 
@@ -256,6 +260,10 @@ class DesktopActuator:
         # No standard desktop equivalent; not in capabilities().
         return False
 
+    def navigate(self, destination: str, mode: str | None = None) -> bool:
+        # No standard desktop equivalent; not in capabilities().
+        return False
+
 
 @dataclass
 class InMemoryActuator:
@@ -280,6 +288,7 @@ class InMemoryActuator:
                 CAP_SET_ALARM,
                 CAP_SET_TIMER,
                 CAP_DIAL,
+                CAP_NAVIGATE,
             }
         )
     )
@@ -291,6 +300,7 @@ class InMemoryActuator:
     set_alarm_calls: list[dict[str, Any]] = field(default_factory=list)
     set_timer_calls: list[dict[str, Any]] = field(default_factory=list)
     dial_calls: list[str] = field(default_factory=list)
+    navigate_calls: list[dict[str, Any]] = field(default_factory=list)
     subprocess_result: SubprocessResult = field(
         default_factory=lambda: SubprocessResult(returncode=0, stdout="", stderr="")
     )
@@ -358,6 +368,12 @@ class InMemoryActuator:
         if CAP_DIAL not in self.caps:
             return False
         self.dial_calls.append(number)
+        return True
+
+    def navigate(self, destination: str, mode: str | None = None) -> bool:
+        if CAP_NAVIGATE not in self.caps:
+            return False
+        self.navigate_calls.append({"destination": destination, "mode": mode})
         return True
 
 

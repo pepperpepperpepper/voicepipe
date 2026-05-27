@@ -20,6 +20,7 @@ from ._help import _action_help
 from ._intents import (
     _action_alarm,
     _action_dial,
+    _action_navigate,
     _action_open,
     _action_search,
     _action_timer,
@@ -50,6 +51,7 @@ _ACTIONS: dict[str, ActionHandler] = {
     "alarm": _action_alarm,
     "timer": _action_timer,
     "dial": _action_dial,
+    "navigate": _action_navigate,
 }
 
 # Keys returned by handlers in their inner_meta that the dispatcher should

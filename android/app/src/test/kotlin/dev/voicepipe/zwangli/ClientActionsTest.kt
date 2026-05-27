@@ -19,6 +19,7 @@ class ClientActionsTest {
             "set_alarm",
             "set_timer",
             "dial",
+            "navigate",
         )
         assertEquals(expected, ClientActions.CAPABILITIES)
     }
@@ -178,6 +179,54 @@ class ClientActionsTest {
     fun `dial rejects blank or missing number`() {
         assertNull(ClientActions.parse(parse("""{"type":"dial","number":""}""")))
         assertNull(ClientActions.parse(parse("""{"type":"dial"}""")))
+    }
+
+    @Test
+    fun `parses navigate action with destination only`() {
+        val a = ClientActions.parse(parse("""{"type":"navigate","destination":"paris"}"""))
+        assertEquals(ClientAction.Navigate("paris", null), a)
+    }
+
+    @Test
+    fun `parses navigate action with destination and mode`() {
+        val a = ClientActions.parse(
+            parse("""{"type":"navigate","destination":"the library","mode":"walking"}"""),
+        )
+        assertEquals(ClientAction.Navigate("the library", "walking"), a)
+    }
+
+    @Test
+    fun `navigate rejects blank or missing destination`() {
+        assertNull(ClientActions.parse(parse("""{"type":"navigate","destination":""}""")))
+        assertNull(ClientActions.parse(parse("""{"type":"navigate"}""")))
+        assertNull(
+            ClientActions.parse(parse("""{"type":"navigate","destination":"  "}""")),
+        )
+    }
+
+    @Test
+    fun `navigate normalizes unknown mode to null`() {
+        // Server validates mode strings but if anything weird slips through
+        // (e.g. spelling drift) we drop it rather than rejecting the action
+        // entirely — destination still opens in Maps without auto-routing.
+        val a = ClientActions.parse(
+            parse("""{"type":"navigate","destination":"paris","mode":"flying"}"""),
+        )
+        assertEquals(ClientAction.Navigate("paris", null), a)
+    }
+
+    @Test
+    fun `navigate accepts all four canonical modes`() {
+        for (mode in listOf("driving", "walking", "bicycling", "transit")) {
+            val a = ClientActions.parse(
+                parse("""{"type":"navigate","destination":"x","mode":"$mode"}"""),
+            )
+            assertEquals(
+                "mode '$mode' should round-trip",
+                ClientAction.Navigate("x", mode),
+                a,
+            )
+        }
     }
 
     private fun parse(raw: String): JsonElement = Json.parseToJsonElement(raw)

@@ -27,6 +27,7 @@ from voicepipe.transcript_triggers._actuator import (
 from voicepipe.transcript_triggers._intents import (
     _normalize_open_url,
     parse_alarm_args,
+    parse_navigate_args,
     parse_timer_args,
 )
 
@@ -544,3 +545,187 @@ def test_open_verb_via_server_actuator_queues_open_url_action() -> None:
     assert _intent_actions(act.client_actions) == [
         {"type": "open_url", "url": "https://duckduckgo.com"}
     ]
+
+
+# ---------------------------------------------------------------------------
+# parse_navigate_args
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        # Bare destination — no mode word.
+        ("paris", ("paris", None)),
+        ("the white house", ("the white house", None)),
+        # Leading "to " gets stripped.
+        ("to paris", ("paris", None)),
+        ("TO Paris", ("Paris", None)),
+        # Mode tokens at the start.
+        ("driving paris", ("paris", "driving")),
+        ("drive paris", ("paris", "driving")),
+        ("car paris", ("paris", "driving")),
+        ("walking the library", ("the library", "walking")),
+        ("walk to the library", ("the library", "walking")),
+        ("bike alameda", ("alameda", "bicycling")),
+        ("biking to alameda", ("alameda", "bicycling")),
+        ("cycling alameda", ("alameda", "bicycling")),
+        ("bicycling alameda", ("alameda", "bicycling")),
+        ("transit airport", ("airport", "transit")),
+        ("bus airport", ("airport", "transit")),
+        ("train downtown", ("downtown", "transit")),
+        ("subway downtown", ("downtown", "transit")),
+        ("metro to downtown", ("downtown", "transit")),
+        # Mode + leading "to" together.
+        ("driving to paris", ("paris", "driving")),
+        # Case-insensitive mode words.
+        ("WALKING the park", ("the park", "walking")),
+        # Extra whitespace.
+        ("  driving   to   paris  ", ("paris", "driving")),
+    ],
+)
+def test_parse_navigate_args_accepts(text: str, expected: tuple[str, str | None]) -> None:
+    assert parse_navigate_args(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "   ",
+        # Mode word alone (no destination left after stripping it).
+        "driving",
+        "walk",
+        "transit",
+        # Mode word + bare "to" with nothing after.
+        "driving to",
+        "walking to ",
+    ],
+)
+def test_parse_navigate_args_rejects(text: str) -> None:
+    assert parse_navigate_args(text) is None
+
+
+# ---------------------------------------------------------------------------
+# Dispatcher integration — navigate verb
+# ---------------------------------------------------------------------------
+
+
+def test_navigate_verb_routes_through_actuator_with_mode() -> None:
+    act = InMemoryActuator()
+    out, meta = tt.apply_transcript_triggers(
+        "zwingli navigate driving to paris",
+        commands=_commands_for("navigate", "navigate"),
+        actuator=act,
+    )
+    assert out == ""
+    handler_meta = meta["meta"]["handler_meta"]
+    assert handler_meta["ok"] is True
+    assert handler_meta["intent"] == "navigate"
+    assert handler_meta["destination"] == "paris"
+    assert handler_meta["mode"] == "driving"
+    assert act.navigate_calls == [{"destination": "paris", "mode": "driving"}]
+
+
+def test_navigate_verb_without_mode() -> None:
+    act = InMemoryActuator()
+    out, meta = tt.apply_transcript_triggers(
+        "zwingli navigate to the white house",
+        commands=_commands_for("navigate", "navigate"),
+        actuator=act,
+    )
+    assert out == ""
+    handler_meta = meta["meta"]["handler_meta"]
+    assert handler_meta["ok"] is True
+    assert handler_meta["destination"] == "the white house"
+    assert "mode" not in handler_meta
+    assert act.navigate_calls == [
+        {"destination": "the white house", "mode": None}
+    ]
+
+
+def test_navigate_verb_empty_args_returns_warning() -> None:
+    act = InMemoryActuator()
+    out, meta = tt.apply_transcript_triggers(
+        "zwingli navigate",
+        commands=_commands_for("navigate", "navigate"),
+        actuator=act,
+    )
+    assert out.startswith("⚠ zwingli:")
+    assert meta["meta"]["handler_meta"]["ok"] is False
+    assert act.navigate_calls == []
+
+
+def test_navigate_verb_mode_word_alone_returns_warning() -> None:
+    """`zwingli navigate driving` consumes the mode token but leaves no
+    destination — same shape as the empty-args case."""
+    act = InMemoryActuator()
+    out, meta = tt.apply_transcript_triggers(
+        "zwingli navigate driving",
+        commands=_commands_for("navigate", "navigate"),
+        actuator=act,
+    )
+    assert out.startswith("⚠ zwingli:")
+    assert meta["meta"]["handler_meta"]["ok"] is False
+    assert act.navigate_calls == []
+
+
+def test_navigate_graceful_skip_when_capability_missing() -> None:
+    bare = frozenset({CAP_OPEN_URL})  # no navigate
+    act = InMemoryActuator(caps=bare)
+    out, meta = tt.apply_transcript_triggers(
+        "zwingli navigate paris",
+        commands=_commands_for("navigate", "navigate"),
+        actuator=act,
+    )
+    assert out.startswith("⚠ zwingli:")
+    assert "not supported on this device" in out
+    assert meta["meta"]["handler_meta"]["ok"] is False
+    assert act.navigate_calls == []
+
+
+def test_navigate_verb_via_server_actuator_queues_navigate_action_with_mode() -> None:
+    from voicepipe.dispatch_server import ServerActuator
+
+    act = ServerActuator()
+    tt.apply_transcript_triggers(
+        "zwingli navigate walking to the library",
+        commands=_commands_for("navigate", "navigate"),
+        actuator=act,
+    )
+    assert _intent_actions(act.client_actions) == [
+        {"type": "navigate", "destination": "the library", "mode": "walking"}
+    ]
+
+
+def test_navigate_verb_via_server_actuator_omits_mode_key_when_absent() -> None:
+    """A modeless navigate should NOT include a "mode": null in the
+    payload — keeps the queued shape minimal for the Android side."""
+    from voicepipe.dispatch_server import ServerActuator
+
+    act = ServerActuator()
+    tt.apply_transcript_triggers(
+        "zwingli navigate paris",
+        commands=_commands_for("navigate", "navigate"),
+        actuator=act,
+    )
+    assert _intent_actions(act.client_actions) == [
+        {"type": "navigate", "destination": "paris"}
+    ]
+
+
+def test_navigate_via_server_actuator_respects_missing_capability() -> None:
+    """When the Zwangli client advertises a cap list that omits 'navigate',
+    the ServerActuator should refuse the call so the dispatcher's
+    graceful-skip path runs."""
+    from voicepipe.dispatch_server import ServerActuator
+
+    act = ServerActuator(capabilities={"open_url"})  # no navigate
+    out, meta = tt.apply_transcript_triggers(
+        "zwingli navigate paris",
+        commands=_commands_for("navigate", "navigate"),
+        actuator=act,
+    )
+    assert out.startswith("⚠ zwingli:")
+    assert meta["meta"]["handler_meta"]["ok"] is False
+    assert _intent_actions(act.client_actions) == []

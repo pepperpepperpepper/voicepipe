@@ -54,6 +54,9 @@ class ClientActionExecutor(
                 is ClientAction.Dial -> {
                     if (fireDial(action.number)) intentsFired++
                 }
+                is ClientAction.Navigate -> {
+                    if (fireNavigate(action.destination, action.mode)) intentsFired++
+                }
                 is ClientAction.Unknown -> {
                     unknownCount++
                     Log.i(TAG, "Skipping unknown client_action type=${action.type}")
@@ -169,6 +172,30 @@ class ClientActionExecutor(
             return false
         }
         return fireIntent(Intent(Intent.ACTION_DIAL, uri), "dial")
+    }
+
+    private fun fireNavigate(destination: String, mode: String?): Boolean {
+        // Prefer google.navigation: — Google Maps takes this and starts
+        // turn-by-turn immediately. Fall back to geo:0,0?q=… which any
+        // maps app (incl. OsmAnd, Organic Maps) can handle but just opens
+        // the destination without auto-routing.
+        val encoded = Uri.encode(destination)
+        val modeChar = when (mode) {
+            "driving" -> "d"
+            "walking" -> "w"
+            "bicycling" -> "b"
+            "transit" -> "r"
+            else -> null
+        }
+        val navUri = buildString {
+            append("google.navigation:q=")
+            append(encoded)
+            if (modeChar != null) append("&mode=").append(modeChar)
+        }
+        val navIntent = Intent(Intent.ACTION_VIEW, Uri.parse(navUri))
+        if (fireIntent(navIntent, "navigate")) return true
+        val geoIntent = Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=$encoded"))
+        return fireIntent(geoIntent, "navigate")
     }
 
     private fun fireIntent(intent: Intent, label: String): Boolean {

@@ -1,45 +1,53 @@
-"""Round 5 — advanced Zwingli verbs end-to-end on a real Android device.
+"""Round 5 — Android Zwangli end-to-end on a real device.
+
+**Naming:** ``zwingli`` (with *i*) is the lexical, structured trigger
+word every voicepipe client speaks to invoke verb dispatch on the
+server. The Android client is named **Zwangli** (with *a*); it speaks
+its own trigger word ``zwangli`` (configured in
+``triggers.default.json`` as ``action: llm_route``) so the LLM router
+handles natural-language phrasing instead of requiring the rigid
+``VERB ARGS`` lexical grammar.
 
 Each case follows this shape:
 
   1. Synthesize a spoken phrase via ElevenLabs (committed cache; first
      run regenerates with ``python -m tests.regen_synth tests/test_synth_zwingli_android_round5.py``).
-  2. Transcribe the MP3 with OpenAI gpt-4o-transcribe (same backend the
-     ``test_synth_zwingli_audio.py`` round uses).
+  2. Transcribe the MP3 with OpenAI gpt-4o-transcribe.
   3. Fire the resulting transcript at the on-device debug
      ``INJECT_TRANSCRIPT`` receiver via ``adb shell am broadcast``,
      pointing ``server_url`` at a dispatch instance the device can
      reach (``adb reverse`` from ``localhost:8766`` works on Genymotion
      SaaS — verified 2026-05-27 on ``nsk-android14``).
   4. Tail logcat for the ``INJECT_RESULT`` line the debug receiver
-     emits and assert on the counter shape the executor returned
-     (``intents``, ``global_actions``, ``clipboard``, ``feedback``,
-     ``unknown``).
+     emits and assert on the counter shape the executor returned.
 
-This exercises the full Android-side path: ``DispatchPipeline`` ->
+gpt-4o-transcribe mangles ``Zwangli`` into multiple forms depending on
+phrasing — observed: ``zwanglee``, ``zwangly``, ``zwongly`` — all of
+which are registered in ``triggers.default.json`` as ``llm_route``
+triggers. ``_ZWANGLI_PREFIXES`` below mirrors that registry so the
+"trigger survived STT" sanity assertion accepts any of the variants.
+
+This exercises the full Android path: ``DispatchPipeline`` ->
 ``DispatchClient`` HTTP -> server ``apply_transcript_triggers`` ->
-``ClientActionExecutor`` -> real Android intents (``ACTION_SET_ALARM``,
-``ACTION_DIAL``, ``google.navigation:``, …) and real
-``AccessibilityService.performGlobalAction`` calls.
+LLM router -> ``ClientActionExecutor`` -> real Android intents
+(``ACTION_SET_ALARM``, ``ACTION_DIAL``, ``google.navigation:``, …)
+and real ``AccessibilityService.performGlobalAction`` calls.
 
-Coverage choices:
-  * Lexical dispatch for every intent-firing verb (alarm, timer, dial,
-    navigate) and for the home / back / notifications
-    accessibility-global verbs.
-  * One multi-step lexical chain ("timer … then home") to prove the
-    planner's chain-aggregation reaches the executor.
-  * Four ``llm_route`` cases via the "hey" trigger that prove the
-    server's LLM router picks the right verb from natural-language
-    phrases:
-    - alarm and navigate (existing intent verbs through a different
-      planner)
-    - quick_settings — notable because "quick settings" doesn't parse
-      as a single lexical verb, so it can only arrive via the router
-    - recents — gpt-4o-transcribe mis-hears "Zwingli recents" as
-      "Zwingli reasons", which the LLM router recovers from given a
-      phrase like "show me my recent apps"
+**Dispatch server rate limit.** Every test fires one LLM call (the
+router), and the suite runs ~11 in <15s — that punches through the
+dispatcher's default 10/min Zwingli rate limit. Start the dispatch
+server with ``VOICEPIPE_ZWINGLI_RATE_LIMIT_PER_MIN=0`` for the
+duration of the test run, or run with ``-x`` to bail on first
+rate-limit hit. A rate-limited dispatch returns
+``feedback=error`` and an empty client_actions list, which surfaces as
+``assert outcome.global_actions == 1`` / ``intents == 1`` failing.
 
 What's NOT tested here:
+  * Lexical dispatch (``zwingli`` trigger) — covered by
+    ``test_synth_zwingli_audio.py``. Android *could* still speak
+    ``zwingli VERB ARGS`` and get the same outcome (the server accepts
+    both triggers), but the natural Android path is ``zwangli`` +
+    natural language.
   * On-device Android ``SpeechRecognizer`` — the app uses it in the
     real mic flow, but Genymotion SaaS has no real microphone and we
     don't own the recognizer anyway. The ``INJECT_TRANSCRIPT`` path
@@ -71,6 +79,17 @@ from tests._synth import synthesize
 
 
 pytestmark = [pytest.mark.synth, pytest.mark.live, pytest.mark.android]
+
+
+# Observed STT renderings of "Zwangli" via gpt-4o-transcribe (2026-05-27,
+# ElevenLabs Rachel voice). Each form is registered in
+# triggers.default.json so the dispatch server accepts whichever STT
+# happened to produce. The trailing space anchors to the trigger as a
+# leading token; matching is done after _norm() collapses punctuation.
+_ZWANGLI_PREFIXES = (
+    "zwangli ", "zwangly ", "zwanglee ", "zwongly ", "zhuangli ",
+    "swangli ", "swangly ",
+)
 
 
 # ----- skip-gates ---------------------------------------------------
@@ -152,7 +171,7 @@ def _skip_if_no_accessibility() -> None:
 def _skip_if_no_groq() -> None:
     if not (os.environ.get("GROQ_API_KEY") or "").strip():
         pytest.skip(
-            "GROQ_API_KEY not set; llm_route cases route through Groq.",
+            "GROQ_API_KEY not set; zwangli + hey both route through Groq.",
         )
 
 
@@ -203,6 +222,10 @@ def _starts_with(transcript: str, *prefixes: str) -> bool:
     return any(norm.startswith(p) for p in prefixes)
 
 
+def _starts_with_zwangli(transcript: str) -> bool:
+    return _starts_with(transcript, *_ZWANGLI_PREFIXES)
+
+
 def _inject(transcript: str) -> InjectOutcome:
     return inject_transcript(
         transcript,
@@ -211,14 +234,15 @@ def _inject(transcript: str) -> InjectOutcome:
     )
 
 
-# ----- Tests: lexical-dispatch intent verbs -------------------------
+# ----- Tests: zwangli → llm_route, intent verbs ---------------------
 
 
 def test_alarm_fires_set_alarm_intent() -> None:
     _stt_skip_if_no_key()
-    audio = synthesize("Zwingli alarm 7:30 AM, wake up.")
+    _skip_if_no_groq()
+    audio = synthesize("Zwangli alarm 7:30 AM, wake up.")
     text = _transcribe(audio)
-    assert _starts_with(text, "zwingli ", "zwingly "), text
+    assert _starts_with_zwangli(text), text
     assert "alarm" in _norm(text), text
 
     outcome = _inject(text)
@@ -230,14 +254,17 @@ def test_alarm_fires_set_alarm_intent() -> None:
 
 
 def test_timer_fires_set_timer_intent() -> None:
-    # Picked '90 seconds' because gpt-4o-transcribe stubbornly converts
-    # 'N minutes' to 'N minute' or 'set to N minutes' (verified
-    # 2026-05-27); '90 seconds' survives the round-trip verbatim and the
-    # _DURATION_TOKEN_RE handles it identically to a minute-form arg.
+    # '90 seconds' rather than '5 minutes' to dodge the gpt-4o-transcribe
+    # word-form-numbers regression tracked in
+    # https://github.com/pepperpepperpepper/voicepipe/issues/11 — under
+    # zwangli → llm_route the LLM normalizes word numbers anyway, but
+    # keeping the digit form lets this also run via lexical zwingli for
+    # cross-trigger comparison.
     _stt_skip_if_no_key()
-    audio = synthesize("Zwingli timer 90 seconds.")
+    _skip_if_no_groq()
+    audio = synthesize("Zwangli timer 90 seconds.")
     text = _transcribe(audio)
-    assert _starts_with(text, "zwingli ", "zwingly "), text
+    assert _starts_with_zwangli(text), text
     assert "timer" in _norm(text), text
 
     outcome = _inject(text)
@@ -248,11 +275,15 @@ def test_timer_fires_set_timer_intent() -> None:
 
 def test_dial_fires_dial_intent() -> None:
     _stt_skip_if_no_key()
-    # STT typically renders the digits as "555-1234" or "5551234"; the
-    # dial-verb argparser keeps digits and strips punctuation.
-    audio = synthesize("Zwingli dial 555 1234.")
+    _skip_if_no_groq()
+    # STT typically renders the digits as "555-1234" or sometimes
+    # mangles them ("555-0034" seen 2026-05-27); the LLM router strips
+    # punctuation and keeps whatever digits arrived. The test asserts
+    # an intent fired, not which number — the digit fidelity is an STT
+    # concern not a routing one.
+    audio = synthesize("Zwangli dial 555 1234.")
     text = _transcribe(audio)
-    assert _starts_with(text, "zwingli ", "zwingly "), text
+    assert _starts_with_zwangli(text), text
     assert "dial" in _norm(text), text
 
     outcome = _inject(text)
@@ -263,10 +294,11 @@ def test_dial_fires_dial_intent() -> None:
 
 def test_navigate_fires_navigate_intent() -> None:
     _stt_skip_if_no_key()
+    _skip_if_no_groq()
     _skip_if_no_maps_app()
-    audio = synthesize("Zwingli navigate to Seattle.")
+    audio = synthesize("Zwangli navigate to Seattle.")
     text = _transcribe(audio)
-    assert _starts_with(text, "zwingli ", "zwingly "), text
+    assert _starts_with_zwangli(text), text
     assert "navigate" in _norm(text), text
 
     outcome = _inject(text)
@@ -275,15 +307,16 @@ def test_navigate_fires_navigate_intent() -> None:
     assert outcome.unknown == 0, outcome
 
 
-# ----- Tests: accessibility-global verbs ----------------------------
+# ----- Tests: zwangli → llm_route, accessibility-global verbs -------
 
 
 def test_home_fires_accessibility_global_home() -> None:
     _stt_skip_if_no_key()
+    _skip_if_no_groq()
     _skip_if_no_accessibility()
-    audio = synthesize("Zwingli home.")
+    audio = synthesize("Zwangli home.")
     text = _transcribe(audio)
-    assert _starts_with(text, "zwingli ", "zwingly "), text
+    assert _starts_with_zwangli(text), text
 
     outcome = _inject(text)
     assert outcome.ok, outcome
@@ -293,29 +326,35 @@ def test_home_fires_accessibility_global_home() -> None:
 
 
 def test_back_fires_accessibility_global_back() -> None:
+    # "Zwangli back." in isolation got mis-heard as '"Longley back'
+    # (Z dropped, leading quote inserted) — adding a trailing word
+    # gives STT enough surrounding context to land on one of the
+    # registered ``zw*``/``zh*``-prefix variants. 2026-05-27.
     _stt_skip_if_no_key()
+    _skip_if_no_groq()
     _skip_if_no_accessibility()
-    audio = synthesize("Zwingli back.")
+    audio = synthesize("Zwangli back please.")
     text = _transcribe(audio)
-    assert _starts_with(text, "zwingli ", "zwingly "), text
+    assert _starts_with_zwangli(text), text
 
     outcome = _inject(text)
     assert outcome.ok, outcome
     assert outcome.global_actions == 1, outcome
 
 
-def test_recents_via_llm_route_fires_accessibility_global_recents() -> None:
-    """gpt-4o-transcribe hears 'Zwingli recents' as 'Zwingli reasons'
-    (verified 2026-05-27), so the lexical-dispatch path can't reach the
-    recents verb from synthesized speech. The LLM router can recover —
-    'show me my recent apps' is unambiguous to a planner that knows the
-    verb registry."""
+def test_recents_fires_accessibility_global_recents() -> None:
+    """Recents survives via ``zwangli`` + natural language even though
+    ``Zwingli recents`` gets mis-heard as ``Zwingli reasons`` by
+    gpt-4o-transcribe (tracked in
+    https://github.com/pepperpepperpepper/voicepipe/issues/12) — the
+    LLM router doesn't care about the exact verb name in the
+    transcript, just the intent."""
     _stt_skip_if_no_key()
-    _skip_if_no_accessibility()
     _skip_if_no_groq()
-    audio = synthesize("Hey, show me my recent apps.")
+    _skip_if_no_accessibility()
+    audio = synthesize("Zwangli show me my recent apps.")
     text = _transcribe(audio)
-    assert _norm(text).startswith("hey "), text
+    assert _starts_with_zwangli(text), text
 
     outcome = _inject(text)
     assert outcome.ok, outcome
@@ -324,32 +363,50 @@ def test_recents_via_llm_route_fires_accessibility_global_recents() -> None:
 
 def test_notifications_fires_accessibility_global_notifications() -> None:
     _stt_skip_if_no_key()
+    _skip_if_no_groq()
     _skip_if_no_accessibility()
-    audio = synthesize("Zwingli notifications.")
+    audio = synthesize("Zwangli notifications.")
     text = _transcribe(audio)
-    assert _starts_with(text, "zwingli ", "zwingly "), text
+    assert _starts_with_zwangli(text), text
 
     outcome = _inject(text)
     assert outcome.ok, outcome
     assert outcome.global_actions == 1, outcome
 
 
-# ----- Tests: multi-step lexical chain ------------------------------
+def test_quick_settings_fires_accessibility_global_quick_settings() -> None:
+    """``quick settings`` isn't a single lexical verb, so this could
+    only ever ride in via an LLM router. Under ``zwangli`` →
+    ``llm_route`` the natural phrasing just works."""
+    _stt_skip_if_no_key()
+    _skip_if_no_groq()
+    _skip_if_no_accessibility()
+    audio = synthesize("Zwangli open the quick settings panel.")
+    text = _transcribe(audio)
+    assert _starts_with_zwangli(text), text
+
+    outcome = _inject(text)
+    assert outcome.ok, outcome
+    assert outcome.global_actions == 1, outcome
+    assert outcome.unknown == 0, outcome
+
+
+# ----- Tests: multi-step plan ---------------------------------------
 
 
 def test_chain_timer_then_home_fires_both_actions() -> None:
-    """The planner's chain-aggregation is the only path that produces
-    *both* an intent and a global action from one transcript via the
-    lexical (non-LLM) planner. If this passes but a single-verb test
-    fails, the regression is verb-specific; the planner itself is OK."""
-    # See test_timer_fires_set_timer_intent for why '90 seconds' instead
-    # of '1 minute'.
+    """The LLM router emits a 2-step plan for "X then Y" phrasing —
+    distinct from the lexical planner's ``" then "``-string split but
+    converges on the same ``execute_plan`` path. Verified
+    2026-05-27 that the planner emits
+    ``[{timer,"1m 30s"},{home,""}]`` for this transcript."""
     _stt_skip_if_no_key()
+    _skip_if_no_groq()
     _skip_if_no_accessibility()
-    audio = synthesize("Zwingli timer 90 seconds then home.")
+    audio = synthesize("Zwangli timer 90 seconds then home.")
     text = _transcribe(audio)
-    assert _starts_with(text, "zwingli ", "zwingly "), text
-    assert " then " in _norm(text) or " then" in _norm(text), text
+    assert _starts_with_zwangli(text), text
+    assert " then" in _norm(text), text
 
     outcome = _inject(text)
     assert outcome.ok, outcome
@@ -358,16 +415,19 @@ def test_chain_timer_then_home_fires_both_actions() -> None:
     assert outcome.unknown == 0, outcome
 
 
-# ----- Tests: LLM-routed (hey) verbs --------------------------------
+# ----- Tests: cross-trigger sanity via the "hey" trigger ------------
+#
+# ``hey`` is also wired to llm_route — these tests confirm the
+# zwangli-family triggers and the hey trigger converge on the same
+# routing path. Useful regression coverage if zwangli ever gets a
+# distinct profile down the line.
 
 
-def test_llm_route_alarm_via_hey() -> None:
+def test_hey_alarm_routes_same_as_zwangli() -> None:
     _stt_skip_if_no_key()
     _skip_if_no_groq()
     audio = synthesize("Hey, set an alarm for 7 AM.")
     text = _transcribe(audio)
-    # STT may render "Hey" with or without the comma; just confirm it's
-    # the leading token so the trigger fires.
     assert _norm(text).startswith("hey "), text
 
     outcome = _inject(text)
@@ -376,27 +436,7 @@ def test_llm_route_alarm_via_hey() -> None:
     assert outcome.unknown == 0, outcome
 
 
-def test_llm_route_navigate_via_hey() -> None:
-    _stt_skip_if_no_key()
-    _skip_if_no_groq()
-    _skip_if_no_maps_app()
-    audio = synthesize("Hey, navigate to Seattle.")
-    text = _transcribe(audio)
-    assert _norm(text).startswith("hey "), text
-
-    outcome = _inject(text)
-    assert outcome.ok, outcome
-    assert outcome.intents == 1, outcome
-    assert outcome.unknown == 0, outcome
-
-
-def test_llm_route_quick_settings_via_hey() -> None:
-    """``quick settings`` isn't a single lexical verb (the lexical
-    parser would tokenize it as verb=``quick`` args=``settings`` and
-    fall back to ``strip``), so this only succeeds if the LLM router
-    correctly maps the natural-language phrase to the ``quick_settings``
-    verb. Doubles as a regression test for the verb-registry block in
-    ``_llm_route._DEFAULT_SYSTEM_PROMPT``."""
+def test_hey_quick_settings_routes_same_as_zwangli() -> None:
     _stt_skip_if_no_key()
     _skip_if_no_groq()
     _skip_if_no_accessibility()

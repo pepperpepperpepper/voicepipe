@@ -2,7 +2,14 @@
   "version": 1,
   "triggers": {
     "zwingli": { "action": "dispatch" },
-    "zwingly": { "action": "dispatch" }
+    "zwingly": { "action": "dispatch" },
+    "zwangli":  { "action": "llm_route" },
+    "zwangly":  { "action": "llm_route" },
+    "zwanglee": { "action": "llm_route" },
+    "zwongly":  { "action": "llm_route" },
+    "zhuangli": { "action": "llm_route" },
+    "swangli":  { "action": "llm_route" },
+    "swangly":  { "action": "llm_route" }
   },
   "dispatch": { "unknown_verb": "strip" },
   "verbs": {

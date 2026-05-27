@@ -480,3 +480,287 @@ def test_run_allows_loopback_bind_without_token(monkeypatch) -> None:
     monkeypatch.setattr("uvicorn.run", _fake_uvicorn_run)
     run(host="127.0.0.1", port=12345)
     assert called == {"host": "127.0.0.1", "port": 12345}
+
+
+# ---------------------------------------------------------------------------
+# PATCH /triggers — mutate activation phrases over HTTP
+# ---------------------------------------------------------------------------
+
+
+import json as _json
+from pathlib import Path as _Path
+
+
+def _write_triggers_file(path: _Path, triggers: dict[str, dict[str, str]]) -> _Path:
+    payload = {
+        "version": 1,
+        "triggers": triggers,
+        "verbs": {"strip": {"type": "builtin"}},
+    }
+    path.write_text(_json.dumps(payload, indent=2), encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def triggers_file_client(tmp_path: _Path, monkeypatch) -> tuple[TestClient, _Path]:
+    """Spin a client whose `triggers_json_path()` points at a temp file.
+
+    Unlike ``patch_commands`` (which mocks the in-memory loader), this
+    fixture lets the PATCH handler actually read and write disk — that
+    is the whole point of the endpoint.
+    """
+    cfg = _write_triggers_file(
+        tmp_path / "triggers.json",
+        {"zwingli": {"action": "dispatch"}, "zwingly": {"action": "dispatch"}},
+    )
+    monkeypatch.setattr(
+        "voicepipe.dispatch_server.triggers_json_path", lambda: cfg
+    )
+    return TestClient(create_app()), cfg
+
+
+@pytest.fixture
+def triggers_file_client_with_token(
+    tmp_path: _Path, monkeypatch
+) -> tuple[TestClient, _Path, str]:
+    cfg = _write_triggers_file(
+        tmp_path / "triggers.json",
+        {"zwingli": {"action": "dispatch"}},
+    )
+    monkeypatch.setattr(
+        "voicepipe.dispatch_server.triggers_json_path", lambda: cfg
+    )
+    token = "patch-test-token"
+    return TestClient(create_app(token=token)), cfg, token
+
+
+def test_patch_triggers_adds_a_phrase(triggers_file_client) -> None:
+    client, cfg = triggers_file_client
+    r = client.patch("/triggers", json={"add": ["computer"]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True
+    assert body["triggers"] == ["computer", "zwingli", "zwingly"]
+    # File reflects the mutation.
+    written = _json.loads(cfg.read_text())
+    assert written["triggers"]["computer"] == {"action": "dispatch"}
+
+
+def test_patch_triggers_removes_a_phrase(triggers_file_client) -> None:
+    client, cfg = triggers_file_client
+    r = client.patch("/triggers", json={"remove": ["zwingly"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["triggers"] == ["zwingli"]
+    written = _json.loads(cfg.read_text())
+    assert "zwingly" not in written["triggers"]
+    assert "zwingli" in written["triggers"]
+
+
+def test_patch_triggers_combined_add_and_remove(triggers_file_client) -> None:
+    client, cfg = triggers_file_client
+    r = client.patch(
+        "/triggers", json={"add": ["computer", "hey there"], "remove": ["zwingly"]}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["triggers"] == ["computer", "hey there", "zwingli"]
+
+
+def test_patch_triggers_normalizes_case_and_whitespace(triggers_file_client) -> None:
+    client, cfg = triggers_file_client
+    r = client.patch("/triggers", json={"add": ["  Hey  Computer  "]})
+    assert r.status_code == 200, r.text
+    assert "hey computer" in r.json()["triggers"]
+
+
+def test_patch_triggers_add_existing_is_idempotent(triggers_file_client) -> None:
+    client, cfg = triggers_file_client
+    r = client.patch("/triggers", json={"add": ["zwingli", "ZWINGLY"]})
+    assert r.status_code == 200, r.text
+    # Triggers count unchanged.
+    assert r.json()["triggers"] == ["zwingli", "zwingly"]
+
+
+def test_patch_triggers_remove_absent_is_idempotent(triggers_file_client) -> None:
+    client, cfg = triggers_file_client
+    r = client.patch("/triggers", json={"remove": ["never_added"]})
+    # Non-existent phrase isn't a validation failure — silent no-op.
+    # ('never_added' has underscore so it would fail validate_phrase if it
+    # were going through 'add', but for 'remove' we only require non-empty.)
+    assert r.status_code == 200, r.text
+    assert r.json()["triggers"] == ["zwingli", "zwingly"]
+
+
+def test_patch_triggers_rejects_invalid_phrase(triggers_file_client) -> None:
+    client, cfg = triggers_file_client
+    r = client.patch("/triggers", json={"add": ["bad-phrase", "ok"]})
+    assert r.status_code == 400
+    body = r.json()
+    assert body["detail"]["error"] == "invalid_phrase"
+    failures = {f["phrase"]: f["reason"] for f in body["detail"]["failures"]}
+    assert "bad-phrase" in failures
+    # The whole patch is rejected — no partial write.
+    written = _json.loads(cfg.read_text())
+    assert list(written["triggers"]) == ["zwingli", "zwingly"]
+
+
+def test_patch_triggers_rejects_too_short(triggers_file_client) -> None:
+    client, _ = triggers_file_client
+    r = client.patch("/triggers", json={"add": ["x"]})
+    assert r.status_code == 400
+    assert "too short" in r.json()["detail"]["failures"][0]["reason"]
+
+
+def test_patch_triggers_rejects_conflict_between_add_and_remove(
+    triggers_file_client,
+) -> None:
+    client, cfg = triggers_file_client
+    r = client.patch(
+        "/triggers", json={"add": ["computer"], "remove": ["Computer"]}
+    )
+    assert r.status_code == 400
+    body = r.json()
+    assert body["detail"]["error"] == "conflict"
+    assert body["detail"]["overlapping"] == ["computer"]
+    # No write.
+    written = _json.loads(cfg.read_text())
+    assert "computer" not in written["triggers"]
+
+
+def test_patch_triggers_refuses_to_remove_last(tmp_path: _Path, monkeypatch) -> None:
+    cfg = _write_triggers_file(
+        tmp_path / "triggers.json", {"zwingli": {"action": "dispatch"}}
+    )
+    monkeypatch.setattr(
+        "voicepipe.dispatch_server.triggers_json_path", lambda: cfg
+    )
+    client = TestClient(create_app())
+    r = client.patch("/triggers", json={"remove": ["zwingli"]})
+    assert r.status_code == 409
+    assert r.json()["detail"]["error"] == "would_remove_all_triggers"
+    # File untouched.
+    written = _json.loads(cfg.read_text())
+    assert list(written["triggers"]) == ["zwingli"]
+
+
+def test_patch_triggers_returns_500_when_file_missing(
+    tmp_path: _Path, monkeypatch
+) -> None:
+    missing = tmp_path / "no-such.json"
+    monkeypatch.setattr(
+        "voicepipe.dispatch_server.triggers_json_path", lambda: missing
+    )
+    client = TestClient(create_app())
+    r = client.patch("/triggers", json={"add": ["computer"]})
+    assert r.status_code == 500
+    assert r.json()["detail"]["error"] == "triggers_json_missing"
+
+
+def test_patch_triggers_returns_500_when_file_malformed(
+    tmp_path: _Path, monkeypatch
+) -> None:
+    cfg = tmp_path / "triggers.json"
+    cfg.write_text("{this is not json", encoding="utf-8")
+    monkeypatch.setattr(
+        "voicepipe.dispatch_server.triggers_json_path", lambda: cfg
+    )
+    client = TestClient(create_app())
+    r = client.patch("/triggers", json={"add": ["computer"]})
+    assert r.status_code == 500
+    assert r.json()["detail"]["error"] == "triggers_json_unreadable"
+
+
+def test_patch_triggers_requires_auth_when_token_set(
+    triggers_file_client_with_token,
+) -> None:
+    client, _, _ = triggers_file_client_with_token
+    r = client.patch("/triggers", json={"add": ["computer"]})
+    assert r.status_code == 401
+
+
+def test_patch_triggers_accepts_correct_bearer(
+    triggers_file_client_with_token,
+) -> None:
+    client, cfg, token = triggers_file_client_with_token
+    r = client.patch(
+        "/triggers",
+        json={"add": ["computer"]},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200, r.text
+    written = _json.loads(cfg.read_text())
+    assert "computer" in written["triggers"]
+
+
+def test_patch_triggers_rejects_wrong_bearer(
+    triggers_file_client_with_token,
+) -> None:
+    client, _, _ = triggers_file_client_with_token
+    r = client.patch(
+        "/triggers",
+        json={"add": ["computer"]},
+        headers={"Authorization": "Bearer wrong-token"},
+    )
+    assert r.status_code == 401
+
+
+def test_patch_triggers_preserves_other_top_level_keys(
+    tmp_path: _Path, monkeypatch
+) -> None:
+    cfg = tmp_path / "triggers.json"
+    cfg.write_text(
+        _json.dumps(
+            {
+                "version": 1,
+                "triggers": {"zwingli": {"action": "dispatch"}},
+                "verbs": {"strip": {"type": "builtin"}, "custom": {"type": "shell"}},
+                "llm_profiles": {"foo": {"temperature": 0.7}},
+                "dispatch": {"unknown_verb": "strip"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "voicepipe.dispatch_server.triggers_json_path", lambda: cfg
+    )
+    client = TestClient(create_app())
+    r = client.patch("/triggers", json={"add": ["computer"]})
+    assert r.status_code == 200, r.text
+    written = _json.loads(cfg.read_text())
+    assert written["verbs"]["custom"] == {"type": "shell"}
+    assert written["llm_profiles"] == {"foo": {"temperature": 0.7}}
+    assert written["dispatch"] == {"unknown_verb": "strip"}
+
+
+def test_patch_triggers_get_reflects_mutation_after_cache_invalidates(
+    tmp_path: _Path, monkeypatch
+) -> None:
+    """The GET /triggers cache is mtime-invalidated, so PATCH should be
+    visible on the very next GET without a server restart."""
+    # Reset both caches so they have nothing stale from earlier tests.
+    import voicepipe.config as cfgmod
+
+    cfgmod._TRANSCRIPT_COMMANDS_JSON_CACHE = None
+    cfgmod._TRIGGERS_JSON_CACHE = None
+    cfg = _write_triggers_file(
+        tmp_path / "triggers.json", {"zwingli": {"action": "dispatch"}}
+    )
+    monkeypatch.setattr(
+        "voicepipe.dispatch_server.triggers_json_path", lambda: cfg
+    )
+    monkeypatch.setattr("voicepipe.config.triggers_json_path", lambda: cfg)
+    client = TestClient(create_app())
+    r = client.patch("/triggers", json={"add": ["computer"]})
+    assert r.status_code == 200, r.text
+    g = client.get("/triggers")
+    assert g.status_code == 200
+    assert "computer" in g.json()["triggers"]
+    assert "zwingli" in g.json()["triggers"]
+
+
+def test_patch_triggers_with_no_changes_is_ok(triggers_file_client) -> None:
+    """Empty add+remove is a no-op — useful as a 'commit zero changes' ping
+    to confirm the endpoint is reachable and the token is good."""
+    client, _ = triggers_file_client
+    r = client.patch("/triggers", json={})
+    assert r.status_code == 200, r.text
+    assert r.json()["triggers"] == ["zwingli", "zwingly"]

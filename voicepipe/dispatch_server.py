@@ -8,10 +8,11 @@ brain without embedding Python.
 Endpoints
 ---------
 
-- ``POST /dispatch``  — run a transcript through the dispatcher.
-- ``GET  /triggers``  — resolved ``triggers.json`` (for client-side hints).
-- ``GET  /log/tail?n=N`` — recent JSON-line debug events.
-- ``GET  /health``    — liveness.
+- ``POST  /dispatch``  — run a transcript through the dispatcher.
+- ``GET   /triggers``  — resolved ``triggers.json`` (for client-side hints).
+- ``PATCH /triggers``  — add/remove activation phrases (mutates ``triggers.json``).
+- ``GET   /log/tail?n=N`` — recent JSON-line debug events.
+- ``GET   /health``    — liveness.
 
 Auth
 ----
@@ -39,13 +40,14 @@ from __future__ import annotations
 
 import dataclasses
 import hmac
+import json
 import os
 from pathlib import Path
 from typing import Any
 
 import voicepipe.transcript_triggers as tt
 from voicepipe.commands.triggers import _read_debug_log_tail
-from voicepipe.config import get_transcript_commands_config
+from voicepipe.config import get_transcript_commands_config, triggers_json_path
 from voicepipe.transcript_triggers._actuator import (
     CAP_AUDIO_FEEDBACK,
     CAP_CLIPBOARD,
@@ -57,6 +59,10 @@ from voicepipe.transcript_triggers._actuator import (
     CAP_WEB_SEARCH,
     DesktopActuator,
     SubprocessResult,
+)
+from voicepipe.transcript_triggers._phrase import (
+    normalize_phrase as _normalize_phrase,
+    validate_phrase as _validate_phrase,
 )
 from voicepipe.transcript_triggers._debug_log import _zwingli_debug_log_path
 
@@ -196,6 +202,10 @@ if _PydanticBaseModel is not None:
         payload: dict[str, Any] | None = None
         client_actions: list[dict[str, Any]] = []
 
+    class TriggersPatchRequest(_PydanticBaseModel):  # type: ignore[misc,valid-type]
+        add: list[str] = []
+        remove: list[str] = []
+
 
 def _resolve_token(token: str | None) -> str | None:
     if token is not None:
@@ -279,6 +289,131 @@ def create_app(*, token: str | None = None):
         if not path.exists():
             return {"events": [], "path": str(path)}
         return {"events": _read_debug_log_tail(path, n), "path": str(path)}
+
+    @app.patch("/triggers", dependencies=[Depends(_check_auth)])
+    def patch_triggers(req: TriggersPatchRequest) -> dict[str, Any]:
+        """Add and/or remove activation phrases atomically.
+
+        Body shape::
+
+            { "add":    ["computer", "hey assistant"],
+              "remove": ["zwingly"] }
+
+        Both keys are optional and default to ``[]``. The two lists may
+        not overlap (after normalization). Phrases are normalized
+        (lowercased, whitespace-collapsed) before any other check. The
+        whole patch is rejected on the first validation failure — no
+        partial application.
+
+        Status codes:
+
+        * ``200`` — success; body is ``{"ok": true, "triggers":
+          [sorted phrase list]}``.
+        * ``400 invalid_phrase`` — one or more ``add`` phrases failed
+          validation. Body includes the list of failures.
+        * ``400 conflict`` — a phrase appears in both ``add`` and
+          ``remove``.
+        * ``409 would_remove_all_triggers`` — the patch would leave no
+          triggers, which would brick the dispatcher.
+        * ``500`` — the on-disk ``triggers.json`` was missing or
+          malformed.
+        """
+        failures: list[dict[str, str]] = []
+        add_norm: list[str] = []
+        for raw in req.add:
+            phrase = _normalize_phrase(raw)
+            reason = _validate_phrase(phrase)
+            if reason is not None:
+                failures.append({"phrase": raw, "reason": reason})
+            else:
+                add_norm.append(phrase)
+        remove_norm: list[str] = []
+        for raw in req.remove:
+            phrase = _normalize_phrase(raw)
+            if not phrase:
+                failures.append({"phrase": raw, "reason": "phrase is empty"})
+            else:
+                remove_norm.append(phrase)
+        if failures:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "invalid_phrase", "failures": failures},
+            )
+
+        overlap = sorted(set(add_norm) & set(remove_norm))
+        if overlap:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "conflict", "overlapping": overlap},
+            )
+
+        path = triggers_json_path()
+        if not path.exists():
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "triggers_json_missing", "path": str(path)},
+            )
+        try:
+            raw_text = path.read_text(encoding="utf-8-sig")
+            payload = json.loads(raw_text or "{}")
+        except (OSError, json.JSONDecodeError) as e:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "triggers_json_unreadable", "message": str(e)},
+            ) from e
+        if not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "triggers_json_malformed"},
+            )
+
+        section = payload.get("triggers")
+        if not isinstance(section, dict):
+            section = {}
+
+        # Normalized-key index so we can detect "already present" / "not
+        # present" case-insensitively while still being able to delete
+        # the original key from the file.
+        current_index: dict[str, str] = {}
+        for key in list(section.keys()):
+            if isinstance(key, str):
+                current_index[_normalize_phrase(key)] = key
+
+        new_section = dict(section)
+        for phrase in remove_norm:
+            original_key = current_index.get(phrase)
+            if original_key is not None and original_key in new_section:
+                del new_section[original_key]
+                del current_index[phrase]
+        for phrase in add_norm:
+            if phrase not in current_index:
+                new_section[phrase] = {"action": "dispatch"}
+                current_index[phrase] = phrase
+
+        if not new_section:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "would_remove_all_triggers",
+                    "message": (
+                        "Refusing to remove the last trigger; the "
+                        "dispatcher would no longer match any voice "
+                        "commands."
+                    ),
+                },
+            )
+
+        payload["triggers"] = new_section
+        rendered = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+        try:
+            path.write_text(rendered, encoding="utf-8")
+        except OSError as e:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": "triggers_json_write_failed", "message": str(e)},
+            ) from e
+
+        return {"ok": True, "triggers": sorted(new_section.keys())}
 
     return app
 

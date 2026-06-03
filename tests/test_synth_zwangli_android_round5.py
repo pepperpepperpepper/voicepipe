@@ -33,14 +33,12 @@ LLM router -> ``ClientActionExecutor`` -> real Android intents
 (``ACTION_SET_ALARM``, ``ACTION_DIAL``, ``google.navigation:``, …)
 and real ``AccessibilityService.performGlobalAction`` calls.
 
-**Dispatch server rate limit.** Every test fires one LLM call (the
-router), and the suite runs ~11 in <15s — that punches through the
-dispatcher's default 10/min Zwingli rate limit. Start the dispatch
-server with ``VOICEPIPE_ZWINGLI_RATE_LIMIT_PER_MIN=0`` for the
-duration of the test run, or run with ``-x`` to bail on first
-rate-limit hit. A rate-limited dispatch returns
-``feedback=error`` and an empty client_actions list, which surfaces as
-``assert outcome.global_actions == 1`` / ``intents == 1`` failing.
+**Dispatch server rate limit.** The suite fires ~11 LLM calls in
+<15s — well within the dispatcher's 60/min Zwingli rate limit. If
+you've narrowed the cap locally via
+``VOICEPIPE_ZWINGLI_RATE_LIMIT_PER_MIN`` and tests start failing with
+``feedback=error`` + empty client_actions, that's the cause; raise it
+or set ``0`` to disable.
 
 What's NOT tested here:
   * Lexical dispatch (``zwingli`` trigger) — covered by

@@ -49,8 +49,8 @@ def test_rate_limit_disabled_when_zero(monkeypatch) -> None:
 
 def test_rate_limit_invalid_env_falls_back_to_default(monkeypatch) -> None:
     monkeypatch.setenv("VOICEPIPE_ZWINGLI_RATE_LIMIT_PER_MIN", "not-a-number")
-    # Default cap is 10; eleven calls should trip.
-    for i in range(10):
-        zwingli._check_rate_limit(now=100.0 + i)
+    # Default cap is 60; sixty-one calls should trip.
+    for i in range(60):
+        zwingli._check_rate_limit(now=100.0 + i * 0.5)
     with pytest.raises(zwingli.ZwingliRateLimitError):
-        zwingli._check_rate_limit(now=111.0)
+        zwingli._check_rate_limit(now=131.0)

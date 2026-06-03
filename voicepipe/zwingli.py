@@ -21,7 +21,12 @@ from voicepipe.config import (
 _RATE_LIMIT_LOCK = threading.Lock()
 _RATE_LIMIT_HITS: deque[float] = deque()
 _RATE_LIMIT_WINDOW_SECONDS = 60.0
-_RATE_LIMIT_DEFAULT_PER_MIN = 10
+# 60/min ≈ one call per second average — catches a runaway wake-word
+# loop within seconds (the original concern that motivated this limit)
+# without surprising real burst dictation or LLM-routed Android usage
+# where every utterance is one LLM call. Override with
+# VOICEPIPE_ZWINGLI_RATE_LIMIT_PER_MIN (0 disables entirely).
+_RATE_LIMIT_DEFAULT_PER_MIN = 60
 
 
 class ZwingliRateLimitError(RuntimeError):

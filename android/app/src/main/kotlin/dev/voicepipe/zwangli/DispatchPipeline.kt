@@ -31,4 +31,16 @@ class DispatchPipeline(
         val summary = executor.execute(response.clientActions)
         return Outcome(response = response, summary = summary)
     }
+
+    /** Audio path: upload a recorded clip; the server transcribes + dispatches. */
+    fun runAudio(serverUrl: String, token: String, audio: ByteArray): Outcome {
+        val url = Settings.normalizeUrl(serverUrl)
+        val response = try {
+            client.transcribeDispatch(url, token, audio, ClientActions.CAPABILITIES)
+        } catch (e: Throwable) {
+            return Outcome(error = e)
+        }
+        val summary = executor.execute(response.clientActions)
+        return Outcome(response = response, summary = summary)
+    }
 }

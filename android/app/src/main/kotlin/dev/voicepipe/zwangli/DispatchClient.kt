@@ -23,6 +23,33 @@ class DispatchClient(
             .build()
         val body = json.encodeToString(DispatchRequest.serializer(), request)
             .toRequestBody(JSON_MEDIA_TYPE)
+        return execute(url, token, body)
+    }
+
+    /**
+     * Upload a recorded audio clip to `/transcribe-dispatch`: the server runs
+     * STT (Groq Whisper) then the same dispatcher as [dispatch], returning the
+     * transcript plus client_actions. Metadata rides as query params since the
+     * body is the raw audio.
+     */
+    fun transcribeDispatch(
+        baseUrl: String,
+        token: String?,
+        audio: ByteArray,
+        capabilities: List<String>? = null,
+        filename: String = "clip.wav",
+    ): DispatchResponse {
+        val urlBuilder = baseUrl.trimEnd('/').toHttpUrl().newBuilder()
+            .addPathSegment("transcribe-dispatch")
+            .addQueryParameter("filename", filename)
+        if (!capabilities.isNullOrEmpty()) {
+            urlBuilder.addQueryParameter("capabilities", capabilities.joinToString(","))
+        }
+        val body = audio.toRequestBody(OCTET_STREAM_MEDIA_TYPE)
+        return execute(urlBuilder.build(), token, body)
+    }
+
+    private fun execute(url: okhttp3.HttpUrl, token: String?, body: okhttp3.RequestBody): DispatchResponse {
         val builder = Request.Builder().url(url).post(body)
         if (!token.isNullOrBlank()) {
             builder.header("Authorization", "Bearer $token")
@@ -40,6 +67,7 @@ class DispatchClient(
 
     companion object {
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+        private val OCTET_STREAM_MEDIA_TYPE = "application/octet-stream".toMediaType()
         private val defaultJson = Json {
             ignoreUnknownKeys = true
             explicitNulls = false
@@ -47,7 +75,9 @@ class DispatchClient(
 
         fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
+            // STT + LLM round trip (plus a possible Lambda cold start) can run
+            // several seconds; keep generous headroom over the warm ~1s case.
+            .readTimeout(60, TimeUnit.SECONDS)
             .build()
     }
 }

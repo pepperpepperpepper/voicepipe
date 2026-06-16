@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.speech.SpeechRecognizer
 import android.view.Menu
 import android.view.MenuItem
 import android.view.View
@@ -24,9 +23,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Operational test bench: mic → transcript → /dispatch → response. All
- *  setup state (server URL, token, permissions, foreground service) lives
- *  in [ConfiguratorActivity], reached via the overflow menu.
+/** Operational test bench: mic → record audio → /transcribe-dispatch (server
+ *  STT + routing) → response. The editable transcript field + Send button keep
+ *  the text-in /dispatch path for replay/editing. All setup state (server URL,
+ *  token, permissions, foreground service) lives in [ConfiguratorActivity],
+ *  reached via the overflow menu.
  */
 class MainActivity : AppCompatActivity() {
     private val client = DispatchClient()
@@ -41,12 +42,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var historyChips: ChipGroup
     private lateinit var historyClear: Button
 
-    private var speech: SpeechRecognitionController? = null
+    private val recorder = AudioRecorder()
     private var pendingAutoListen: Boolean = false
 
     private val requestMicPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            if (granted) startListening()
+            if (granted) startRecording()
             else Toast.makeText(this, R.string.mic_permission_denied, Toast.LENGTH_SHORT).show()
         }
 
@@ -89,8 +90,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        speech?.destroy()
-        speech = null
+        recorder.cancel()
         super.onDestroy()
     }
 
@@ -108,58 +108,83 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun configureMic() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            mic.isEnabled = false
-            mic.text = getString(R.string.action_mic_unavailable)
-            return
-        }
-        speech = SpeechRecognitionController(this, micCallbacks)
         mic.setOnClickListener { onMicClick() }
     }
 
     private fun onMicClick() {
-        val controller = speech ?: return
-        if (controller.isListening) {
-            controller.stop()
+        if (recorder.isRecording) {
+            stopAndUpload()
             return
         }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
             == PackageManager.PERMISSION_GRANTED
         ) {
-            startListening()
+            startRecording()
         } else {
             requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
-    private fun startListening() {
-        speech?.start()
-    }
-
-    private val micCallbacks = object : SpeechRecognitionController.Callbacks {
-        override fun onListeningStart() {
-            mic.text = getString(R.string.action_mic_listening)
-        }
-
-        override fun onPartial(text: String) {
-            transcript.setText(text)
-        }
-
-        override fun onFinal(text: String) {
-            transcript.setText(text)
-            onSend()
-        }
-
-        override fun onError(message: String, recoverable: Boolean) {
+    private fun startRecording() {
+        if (!recorder.start()) {
             Toast.makeText(
-                this@MainActivity,
-                getString(R.string.mic_error_prefix) + message,
+                this,
+                getString(R.string.mic_error_prefix) + "recorder unavailable",
                 Toast.LENGTH_SHORT,
             ).show()
+            return
         }
+        // Tap again to stop + upload. (No on-device VAD; manual stop for v1.)
+        mic.text = getString(R.string.action_mic_listening)
+    }
 
-        override fun onListeningStop() {
-            mic.text = getString(R.string.action_mic_start)
+    private fun stopAndUpload() {
+        val audio = recorder.stop()
+        mic.text = getString(R.string.action_mic_start)
+        if (audio == null) {
+            Toast.makeText(
+                this,
+                getString(R.string.mic_error_prefix) + "no audio captured",
+                Toast.LENGTH_SHORT,
+            ).show()
+            return
+        }
+        val url = settings.serverUrl
+        val bearer = settings.token
+        if (url.isEmpty()) {
+            response.text = getString(R.string.response_placeholder)
+            return
+        }
+        val normalizedUrl = Settings.normalizeUrl(url)
+        mic.isEnabled = false
+        send.isEnabled = false
+        response.text = "…"
+        lifecycleScope.launch {
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    client.transcribeDispatch(
+                        normalizedUrl,
+                        bearer,
+                        audio,
+                        ClientActions.CAPABILITIES,
+                    )
+                }
+            }
+            val rendered = result.fold(
+                onSuccess = { resp ->
+                    resp.transcript?.let { transcript.setText(it) }
+                    renderSuccess(resp)
+                },
+                onFailure = { "⚠ HTTP error: ${it.message}" },
+            )
+            response.text = rendered
+            mic.isEnabled = true
+            send.isEnabled = true
+            // Record the server-returned transcript so the text path can replay it.
+            val heard = result.getOrNull()?.transcript
+            if (result.isSuccess && !heard.isNullOrEmpty()) {
+                renderHistory(settings.recordTranscript(heard))
+            }
         }
     }
 

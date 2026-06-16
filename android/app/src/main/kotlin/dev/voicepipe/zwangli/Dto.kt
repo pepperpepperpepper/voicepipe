@@ -18,4 +18,7 @@ data class DispatchResponse(
     @SerialName("output_text") val outputText: String,
     val payload: JsonObject? = null,
     @SerialName("client_actions") val clientActions: List<JsonElement> = emptyList(),
+    // Populated by /transcribe-dispatch (server-side STT) so the client can
+    // show what was heard; null on the text-in /dispatch path.
+    val transcript: String? = null,
 )

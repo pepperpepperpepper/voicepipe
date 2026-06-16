@@ -85,8 +85,8 @@ pytestmark = [pytest.mark.synth, pytest.mark.live, pytest.mark.android]
 # happened to produce. The trailing space anchors to the trigger as a
 # leading token; matching is done after _norm() collapses punctuation.
 _ZWANGLI_PREFIXES = (
-    "zwangli ", "zwangly ", "zwanglee ", "zwongly ", "zhuangli ",
-    "swangli ", "swangly ",
+    "zwangli ", "zwangly ", "zwanglee ", "zwang lee ", "zwongly ",
+    "zhuangli ", "swangli ", "swangly ",
 )
 
 

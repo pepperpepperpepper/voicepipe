@@ -40,7 +40,9 @@ DEFAULT_ELEVENLABS_TRANSCRIBE_MODEL = "scribe_v1"
 # (use as `groq:whisper-large-v3-turbo`). Linux desktop stays on OpenAI above.
 DEFAULT_GROQ_TRANSCRIBE_MODEL = "whisper-large-v3-turbo"
 DEFAULT_ZWINGLI_BACKEND = "groq"
-DEFAULT_ZWINGLI_MODEL = "moonshotai/kimi-k2-instruct"
+# Groq's kimi-k2 was decommissioned; llama-3.3-70b-versatile is the current
+# router/rewrite default (confirmed available, used by the live AWS backend).
+DEFAULT_ZWINGLI_MODEL = "llama-3.3-70b-versatile"
 DEFAULT_GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
 # Recording/audio defaults.

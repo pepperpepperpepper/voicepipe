@@ -9,6 +9,8 @@ Endpoints
 ---------
 
 - ``POST  /dispatch``  — run a transcript through the dispatcher.
+- ``POST  /transcribe-dispatch`` — transcribe an uploaded audio clip
+  (Groq Whisper by default) then run the transcript through the dispatcher.
 - ``GET   /triggers``  — resolved ``triggers.json`` (for client-side hints).
 - ``PATCH /triggers``  — add/remove activation phrases (mutates ``triggers.json``).
 - ``GET   /log/tail?n=N`` — recent JSON-line debug events.
@@ -47,7 +49,11 @@ from typing import Any
 
 import voicepipe.transcript_triggers as tt
 from voicepipe.commands.triggers import _read_debug_log_tail
-from voicepipe.config import get_transcript_commands_config, triggers_json_path
+from voicepipe.config import (
+    DEFAULT_GROQ_TRANSCRIBE_MODEL,
+    get_transcript_commands_config,
+    triggers_json_path,
+)
 from voicepipe.transcript_triggers._actuator import (
     ACCESSIBILITY_GLOBAL_ACTIONS,
     CAP_ACCESSIBILITY_GLOBAL,
@@ -225,6 +231,9 @@ if _PydanticBaseModel is not None:
         output_text: str
         payload: dict[str, Any] | None = None
         client_actions: list[dict[str, Any]] = []
+        # Populated by /transcribe-dispatch so the client can show what was
+        # heard; left None by the text-in /dispatch endpoint.
+        transcript: str | None = None
 
     class TriggersPatchRequest(_PydanticBaseModel):  # type: ignore[misc,valid-type]
         add: list[str] = []
@@ -236,6 +245,46 @@ def _resolve_token(token: str | None) -> str | None:
         return token.strip() or None
     env = (os.environ.get("VOICEPIPE_DISPATCH_TOKEN") or "").strip()
     return env or None
+
+
+# Audio upload cap for /transcribe-dispatch. 15 MiB comfortably holds a
+# ~30s clip; override with VOICEPIPE_DISPATCH_MAX_AUDIO_BYTES. (Note: a
+# Lambda Function URL caps the *base64* body at ~6MB ≈ ~4.5MB raw, so keep
+# clips compressed/short when deployed serverless.)
+_DEFAULT_MAX_AUDIO_BYTES = 15 * 1024 * 1024
+
+
+def _max_audio_bytes() -> int:
+    raw = (os.environ.get("VOICEPIPE_DISPATCH_MAX_AUDIO_BYTES") or "").strip()
+    if not raw:
+        return _DEFAULT_MAX_AUDIO_BYTES
+    try:
+        value = int(raw)
+    except ValueError:
+        return _DEFAULT_MAX_AUDIO_BYTES
+    return value if value > 0 else _DEFAULT_MAX_AUDIO_BYTES
+
+
+def _resolve_stt_model(explicit: str | None) -> str:
+    """STT model for /transcribe-dispatch: explicit arg > env >
+    Groq Whisper default. The native Zwangli path stays on fast Groq
+    Whisper; VOICEPIPE_DISPATCH_STT_MODEL can repoint it (e.g. to
+    ``openai:gpt-4o-transcribe``)."""
+    if explicit and explicit.strip():
+        return explicit.strip()
+    env = (os.environ.get("VOICEPIPE_DISPATCH_STT_MODEL") or "").strip()
+    if env:
+        return env
+    return f"groq:{DEFAULT_GROQ_TRANSCRIBE_MODEL}"
+
+
+def _parse_capabilities(raw: str | None) -> set[str] | None:
+    """Parse the comma-separated ``capabilities`` query param into a set.
+    Absent or empty → None (advertise all), matching /dispatch's null."""
+    if raw is None:
+        return None
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    return set(parts) if parts else None
 
 
 def create_app(*, token: str | None = None):
@@ -251,7 +300,7 @@ def create_app(*, token: str | None = None):
     """
     _require_fastapi()
 
-    from fastapi import Depends, FastAPI, Header, HTTPException
+    from fastapi import Body, Depends, FastAPI, Header, HTTPException
 
     resolved_token = _resolve_token(token)
 
@@ -289,6 +338,93 @@ def create_app(*, token: str | None = None):
             output_text=output_text,
             payload=payload,
             client_actions=actuator.client_actions,
+        )
+
+    @app.post(
+        "/transcribe-dispatch",
+        response_model=DispatchResponse,
+        dependencies=[Depends(_check_auth)],
+    )
+    def transcribe_dispatch(
+        audio: bytes = Body(default=b"", media_type="application/octet-stream"),
+        session_id: str | None = None,
+        capabilities: str | None = None,
+        model: str | None = None,
+        language: str | None = None,
+        filename: str = "audio.wav",
+    ) -> DispatchResponse:
+        """Audio-in / actions-out — the native Zwangli entry point.
+
+        The phone records a clip and POSTs the raw bytes
+        (``application/octet-stream``); the server transcribes it (Groq
+        Whisper by default) and runs the transcript through the *same*
+        dispatcher as :func:`dispatch`, returning the ``client_actions``
+        for the phone to execute — STT + routing in one round trip.
+
+        Metadata rides as query params:
+
+        - ``capabilities`` — comma-separated client capability list
+          (e.g. ``set_alarm,dial,accessibility_global``); omitted → all.
+        - ``model`` — STT model override (default
+          ``VOICEPIPE_DISPATCH_STT_MODEL`` or ``groq:whisper-large-v3-turbo``).
+        - ``language`` / ``filename`` — passed through to STT.
+
+        Status codes: ``400`` empty body, ``413`` audio over the size cap,
+        ``502`` the STT provider failed.
+        """
+        if not audio:
+            raise HTTPException(status_code=400, detail="empty audio body")
+        cap = _max_audio_bytes()
+        if len(audio) > cap:
+            raise HTTPException(
+                status_code=413,
+                detail={
+                    "error": "audio_too_large",
+                    "limit_bytes": cap,
+                    "got_bytes": len(audio),
+                },
+            )
+
+        from voicepipe.transcription import (
+            TranscriptionError,
+            transcribe_audio_bytes,
+        )
+
+        stt_model = _resolve_stt_model(model)
+        try:
+            # apply_triggers=False: we want the RAW transcript here and then
+            # run the full dispatcher (with the ServerActuator) below — the
+            # same path /dispatch uses. Letting STT apply triggers too would
+            # double-process the text.
+            transcript = transcribe_audio_bytes(
+                audio,
+                filename=filename or "audio.wav",
+                model=stt_model,
+                language=language,
+                apply_triggers=False,
+            )
+        except TranscriptionError as e:
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": "transcription_failed",
+                    "model": stt_model,
+                    "message": str(e),
+                },
+            ) from e
+
+        caps = _parse_capabilities(capabilities)
+        actuator = ServerActuator(capabilities=caps)
+        commands = get_transcript_commands_config(load_env=False)
+        output_text, payload = tt.apply_transcript_triggers(
+            transcript, commands=commands, actuator=actuator
+        )
+        return DispatchResponse(
+            ok=bool(payload is None or payload.get("ok", True)),
+            output_text=output_text,
+            payload=payload,
+            client_actions=actuator.client_actions,
+            transcript=transcript,
         )
 
     @app.get("/triggers", dependencies=[Depends(_check_auth)])

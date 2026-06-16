@@ -23,6 +23,28 @@ class Settings(private val prefs: SharedPreferences) {
             prefs.edit().putString(KEY_TOKEN, value.trim()).apply()
         }
 
+    /** The Google Sign-In ID token sent as the bearer once Google auth is
+     *  wired. Short-lived (~1h); re-minted via Credential Manager. Excluded
+     *  from cloud backup (a restored copy would be expired and useless). */
+    var googleIdToken: String
+        get() = prefs.getString(KEY_GOOGLE_ID_TOKEN, "") ?: ""
+        set(value) {
+            prefs.edit().putString(KEY_GOOGLE_ID_TOKEN, value.trim()).apply()
+        }
+
+    /** The signed-in Google account email, for display in the configurator.
+     *  Authorization is enforced server-side against the allowlist. */
+    var googleEmail: String
+        get() = prefs.getString(KEY_GOOGLE_EMAIL, "") ?: ""
+        set(value) {
+            prefs.edit().putString(KEY_GOOGLE_EMAIL, value.trim()).apply()
+        }
+
+    /** Clear the cached Google session (token + email). */
+    fun clearGoogleSession() {
+        prefs.edit().remove(KEY_GOOGLE_ID_TOKEN).remove(KEY_GOOGLE_EMAIL).apply()
+    }
+
     var startOnBoot: Boolean
         get() = prefs.getBoolean(KEY_START_ON_BOOT, false)
         set(value) {
@@ -91,6 +113,8 @@ class Settings(private val prefs: SharedPreferences) {
         const val PREFS_NAME = "zwangli"
         const val KEY_SERVER_URL = "server_url"
         const val KEY_TOKEN = "token"
+        const val KEY_GOOGLE_ID_TOKEN = "google_id_token"
+        const val KEY_GOOGLE_EMAIL = "google_email"
         const val KEY_START_ON_BOOT = "start_on_boot"
         const val KEY_SEARCH_URL_TEMPLATE = "search_url_template"
         const val KEY_TRANSCRIPT_HISTORY = "transcript_history"

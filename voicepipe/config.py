@@ -36,6 +36,9 @@ APP_NAME = "voicepipe"
 DEFAULT_TRANSCRIBE_BACKEND = "openai"
 DEFAULT_OPENAI_TRANSCRIBE_MODEL = "gpt-4o-transcribe"
 DEFAULT_ELEVENLABS_TRANSCRIBE_MODEL = "scribe_v1"
+# Groq's OpenAI-compatible Whisper — fast STT for the native Zwangli path
+# (use as `groq:whisper-large-v3-turbo`). Linux desktop stays on OpenAI above.
+DEFAULT_GROQ_TRANSCRIBE_MODEL = "whisper-large-v3-turbo"
 DEFAULT_ZWINGLI_BACKEND = "groq"
 DEFAULT_ZWINGLI_MODEL = "moonshotai/kimi-k2-instruct"
 DEFAULT_GROQ_BASE_URL = "https://api.groq.com/openai/v1"

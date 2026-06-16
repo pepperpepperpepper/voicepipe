@@ -14,7 +14,9 @@ from pathlib import Path
 from typing import Any, BinaryIO, Optional
 
 from voicepipe.config import (
+    DEFAULT_GROQ_BASE_URL,
     get_daemon_mode,
+    get_groq_api_key,
     get_transcribe_backend,
     get_transcribe_prompt,
     get_transcribe_prompt_append_triggers,
@@ -90,15 +92,35 @@ def _resolve_backend_and_model(model: str) -> tuple[str, str, str]:
         maybe_backend, _sep, rest = raw.partition(":")
         backend = _normalize_backend(maybe_backend)
         model_id = rest.strip()
-        if backend in {"openai", "elevenlabs"} and model_id:
+        if backend in {"openai", "groq", "elevenlabs"} and model_id:
             return backend, model_id, raw
 
     backend = _normalize_backend(get_transcribe_backend(load_env=True))
     model_id = raw
     model_for_daemon = raw
-    if backend in {"openai", "elevenlabs"} and model_id:
+    if backend in {"openai", "groq", "elevenlabs"} and model_id:
         model_for_daemon = f"{backend}:{model_id}"
     return backend, model_id, model_for_daemon
+
+
+def _make_openai_compatible_transcriber(backend: str, model: str):
+    """Build a ``WhisperTranscriber`` for an OpenAI-API-compatible backend.
+
+    ``openai`` uses the default OpenAI endpoint + ``OPENAI_API_KEY``.
+    ``groq`` points the same client at Groq's OpenAI-compatible base URL
+    (for ``whisper-large-v3-turbo`` etc.) using ``GROQ_API_KEY`` — this is
+    how the native Zwangli path gets fast Groq Whisper STT while the Linux
+    desktop path stays on OpenAI ``gpt-4o-transcribe``.
+    """
+    from voicepipe.transcriber import WhisperTranscriber
+
+    if backend == "groq":
+        return WhisperTranscriber(
+            api_key=get_groq_api_key(),
+            model=model,
+            base_url=DEFAULT_GROQ_BASE_URL,
+        )
+    return WhisperTranscriber(model=model)
 
 
 def _transcribe_via_daemon(
@@ -346,11 +368,9 @@ def transcribe_audio_file(
                 raise TranscriptionError(str(e)) from e
             pass
 
-    if backend == "openai":
-        from voicepipe.transcriber import WhisperTranscriber
-
+    if backend in ("openai", "groq"):
         try:
-            transcriber = WhisperTranscriber(model=resolved_model)
+            transcriber = _make_openai_compatible_transcriber(backend, resolved_model)
             text = transcriber.transcribe(
                 audio_file,
                 language=language,
@@ -386,8 +406,9 @@ def transcribe_audio_file(
 
     raise TranscriptionError(
         "Unsupported transcription backend.\n\n"
-        "Set VOICEPIPE_TRANSCRIBE_BACKEND to one of: openai, elevenlabs\n"
-        "Or prefix the model like: openai:gpt-4o-mini-transcribe or elevenlabs:scribe_v1\n"
+        "Set VOICEPIPE_TRANSCRIBE_BACKEND to one of: openai, groq, elevenlabs\n"
+        "Or prefix the model like: groq:whisper-large-v3-turbo, "
+        "openai:gpt-4o-mini-transcribe, or elevenlabs:scribe_v1\n"
         f"Got backend={backend!r} model={model!r}"
     )
 
@@ -406,11 +427,9 @@ def transcribe_audio_bytes(
     backend, resolved_model, _model_for_daemon = _resolve_backend_and_model(model)
     effective_prompt = _resolve_effective_prompt(prompt=prompt)
 
-    if backend == "openai":
-        from voicepipe.transcriber import WhisperTranscriber
-
+    if backend in ("openai", "groq"):
         try:
-            transcriber = WhisperTranscriber(model=resolved_model)
+            transcriber = _make_openai_compatible_transcriber(backend, resolved_model)
             text = transcriber.transcribe_bytes(
                 audio_bytes,
                 filename=str(filename or "audio.wav"),
@@ -450,8 +469,9 @@ def transcribe_audio_bytes(
 
     raise TranscriptionError(
         "Unsupported transcription backend.\n\n"
-        "Set VOICEPIPE_TRANSCRIBE_BACKEND to one of: openai, elevenlabs\n"
-        "Or prefix the model like: openai:gpt-4o-mini-transcribe or elevenlabs:scribe_v1\n"
+        "Set VOICEPIPE_TRANSCRIBE_BACKEND to one of: openai, groq, elevenlabs\n"
+        "Or prefix the model like: groq:whisper-large-v3-turbo, "
+        "openai:gpt-4o-mini-transcribe, or elevenlabs:scribe_v1\n"
         f"Got backend={backend!r} model={model!r}"
     )
 
@@ -470,11 +490,9 @@ def transcribe_audio_fileobj(
     backend, resolved_model, _model_for_daemon = _resolve_backend_and_model(model)
     effective_prompt = _resolve_effective_prompt(prompt=prompt)
 
-    if backend == "openai":
-        from voicepipe.transcriber import WhisperTranscriber
-
+    if backend in ("openai", "groq"):
         try:
-            transcriber = WhisperTranscriber(model=resolved_model)
+            transcriber = _make_openai_compatible_transcriber(backend, resolved_model)
             text = transcriber.transcribe_fileobj(
                 fh,
                 filename=str(filename or "audio.wav"),
@@ -515,8 +533,9 @@ def transcribe_audio_fileobj(
 
     raise TranscriptionError(
         "Unsupported transcription backend.\n\n"
-        "Set VOICEPIPE_TRANSCRIBE_BACKEND to one of: openai, elevenlabs\n"
-        "Or prefix the model like: openai:gpt-4o-mini-transcribe or elevenlabs:scribe_v1\n"
+        "Set VOICEPIPE_TRANSCRIBE_BACKEND to one of: openai, groq, elevenlabs\n"
+        "Or prefix the model like: groq:whisper-large-v3-turbo, "
+        "openai:gpt-4o-mini-transcribe, or elevenlabs:scribe_v1\n"
         f"Got backend={backend!r} model={model!r}"
     )
 
@@ -573,11 +592,9 @@ def transcribe_audio_file_result(
 
     trigger_meta: dict[str, Any] | None = None
 
-    if backend == "openai":
-        from voicepipe.transcriber import WhisperTranscriber
-
+    if backend in ("openai", "groq"):
         try:
-            transcriber = WhisperTranscriber(model=resolved_model)
+            transcriber = _make_openai_compatible_transcriber(backend, resolved_model)
             text = transcriber.transcribe(
                 audio_file,
                 language=language,
@@ -631,8 +648,9 @@ def transcribe_audio_file_result(
 
     raise TranscriptionError(
         "Unsupported transcription backend.\n\n"
-        "Set VOICEPIPE_TRANSCRIBE_BACKEND to one of: openai, elevenlabs\n"
-        "Or prefix the model like: openai:gpt-4o-mini-transcribe or elevenlabs:scribe_v1\n"
+        "Set VOICEPIPE_TRANSCRIBE_BACKEND to one of: openai, groq, elevenlabs\n"
+        "Or prefix the model like: groq:whisper-large-v3-turbo, "
+        "openai:gpt-4o-mini-transcribe, or elevenlabs:scribe_v1\n"
         f"Got backend={backend!r} model={model!r}"
     )
 

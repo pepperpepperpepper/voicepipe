@@ -16,7 +16,13 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from voicepipe.config import get_transcribe_backend, get_transcribe_model, load_environment
+from voicepipe.config import (
+    DEFAULT_GROQ_BASE_URL,
+    get_groq_api_key,
+    get_transcribe_backend,
+    get_transcribe_model,
+    load_environment,
+)
 from voicepipe.logging_utils import configure_logging
 from voicepipe.paths import runtime_app_dir, transcriber_socket_path
 from voicepipe.platform import is_windows
@@ -83,7 +89,7 @@ def _resolve_backend_and_model(
         maybe_backend, _sep, rest = raw.partition(":")
         backend = _normalize_backend(maybe_backend)
         model_id = rest.strip()
-        if backend in {"openai", "elevenlabs"} and model_id:
+        if backend in {"openai", "groq", "elevenlabs"} and model_id:
             return backend, model_id
 
     backend = _normalize_backend(default_backend)
@@ -93,11 +99,17 @@ def _resolve_backend_and_model(
 def _build_transcriber(backend: str, model: str):
     if backend == "openai":
         return WhisperTranscriber(model=model)
+    if backend == "groq":
+        return WhisperTranscriber(
+            api_key=get_groq_api_key(),
+            model=model,
+            base_url=DEFAULT_GROQ_BASE_URL,
+        )
     if backend == "elevenlabs":
         return ElevenLabsTranscriber(model_id=model)
     raise RuntimeError(
         "Unsupported transcription backend for daemon. "
-        "Set VOICEPIPE_TRANSCRIBE_BACKEND to openai or elevenlabs."
+        "Set VOICEPIPE_TRANSCRIBE_BACKEND to openai, groq, or elevenlabs."
     )
 
 

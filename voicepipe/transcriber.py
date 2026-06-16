@@ -31,17 +31,32 @@ Example: If speaker says "open quote hello close quote", transcribe as: "hello"
 
 Transcribe spoken words only. Do not annotate non-speech sounds such as breaths, sighs, yawns, coughs, pauses, laughter, sniffs, or background noise. Do not include bracketed or parenthesized annotations like [pause], (sighs), [Music], or [BLANK_AUDIO]."""
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o-transcribe"):
-        """Initialize the transcriber with API key and model."""
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "gpt-4o-transcribe",
+        base_url: Optional[str] = None,
+    ):
+        """Initialize the transcriber with API key and model.
+
+        ``base_url`` points the OpenAI client at an OpenAI-API-compatible
+        transcription endpoint (e.g. Groq's ``/openai/v1`` for
+        ``whisper-large-v3-turbo``). When omitted, the default OpenAI
+        endpoint is used and behavior is unchanged.
+        """
         if OpenAI is None:
             raise RuntimeError(
                 "openai is not installed; install it to use transcription "
                 "(e.g. `pip install openai`)"
             ) from _OPENAI_IMPORT_ERROR
         self.api_key = api_key or get_openai_api_key()
-        
-        self.client = OpenAI(api_key=self.api_key)
+
+        client_kwargs = {"api_key": self.api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        self.client = OpenAI(**client_kwargs)
         self.model = model
+        self.base_url = base_url
 
     def _resolve_prompt(self, *, prompt: Optional[str], effective_model: str) -> Optional[str]:
         builtin: Optional[str] = None

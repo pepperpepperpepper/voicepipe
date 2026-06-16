@@ -95,7 +95,10 @@ class Settings(private val prefs: SharedPreferences) {
         const val KEY_SEARCH_URL_TEMPLATE = "search_url_template"
         const val KEY_TRANSCRIPT_HISTORY = "transcript_history"
         const val TRANSCRIPT_HISTORY_MAX = 20
-        const val DEFAULT_SERVER_URL = "http://localhost:8765"
+        // Bundled default: the live AWS Lambda backend. A fresh install works
+        // out of the box with no URL entry; the configurator field remains an
+        // optional override (e.g. for a local dev server).
+        const val DEFAULT_SERVER_URL = "https://s3ksuw6v2gahe3phqmwdswkiue0ehasy.lambda-url.us-east-1.on.aws"
         const val SEARCH_TEMPLATE_PLACEHOLDER = "{query}"
 
         fun from(context: Context): Settings =

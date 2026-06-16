@@ -45,5 +45,28 @@ except ImportError as e:  # pragma: no cover - exercised only without the extra
 # resolves VOICEPIPE_DISPATCH_TOKEN from the Lambda environment.
 app = create_app()
 
-# Lambda handler reference: ``voicepipe.aws_lambda.handler``.
-handler = Mangum(app)
+_asgi_handler = Mangum(app)
+
+
+def _is_keep_warm(event: object) -> bool:
+    """True for the EventBridge keep-warm ping so we skip the ASGI path.
+
+    The schedule rule sends a constant input of ``{"warmer": true}``; we
+    also tolerate a raw scheduled event (``source == "aws.events"``). These
+    invocations exist only to keep one execution environment hot, so they
+    must NOT be fed to Mangum (no HTTP event to translate) or run STT.
+    """
+    if not isinstance(event, dict):
+        return False
+    return event.get("warmer") is True or event.get("source") == "aws.events"
+
+
+def handler(event, context=None):
+    """Lambda entry point: ``voicepipe.aws_lambda.handler``.
+
+    Routes real Function URL / API Gateway events through Mangum, and
+    short-circuits the keep-warm ping with a trivial response.
+    """
+    if _is_keep_warm(event):
+        return {"warmed": True}
+    return _asgi_handler(event, context)

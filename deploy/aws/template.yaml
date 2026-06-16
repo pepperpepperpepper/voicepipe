@@ -1,0 +1,69 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Zwingli/Zwangli dispatch backend — container-image Lambda behind a Function
+  URL, kept warm by an EventBridge ping. Auth is the app-level bearer token
+  (VOICEPIPE_DISPATCH_TOKEN); the Function URL is AuthType NONE so the
+  Authorization header reaches the app.
+
+Parameters:
+  DispatchToken:
+    Type: String
+    NoEcho: true
+    Description: "Bearer token clients send as: Authorization: Bearer <token>"
+  GroqApiKey:
+    Type: String
+    NoEcho: true
+    Description: Groq API key (Groq Whisper STT + LLM router).
+  OpenAiApiKey:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: OpenAI API key (optional; only if STT/LLM is repointed to OpenAI).
+  SttModel:
+    Type: String
+    Default: "groq:whisper-large-v3-turbo"
+    Description: VOICEPIPE_DISPATCH_STT_MODEL for /transcribe-dispatch.
+  KeepWarmRate:
+    Type: String
+    Default: "rate(5 minutes)"
+    Description: EventBridge schedule expression for the keep-warm ping.
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+
+Resources:
+  DispatchFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      Dockerfile: deploy/aws/Dockerfile
+      DockerContext: ../..
+      DockerTag: zwangli-dispatch
+    Properties:
+      PackageType: Image
+      Architectures:
+        - x86_64
+      Environment:
+        Variables:
+          VOICEPIPE_DISPATCH_TOKEN: !Ref DispatchToken
+          GROQ_API_KEY: !Ref GroqApiKey
+          OPENAI_API_KEY: !Ref OpenAiApiKey
+          VOICEPIPE_DISPATCH_STT_MODEL: !Ref SttModel
+      FunctionUrlConfig:
+        AuthType: NONE
+      Events:
+        KeepWarm:
+          Type: Schedule
+          Properties:
+            Schedule: !Ref KeepWarmRate
+            Input: '{"warmer": true}'
+
+Outputs:
+  FunctionUrl:
+    Description: Public HTTPS endpoint — set this as the Zwangli server URL.
+    Value: !GetAtt DispatchFunctionUrl.FunctionUrl
+  FunctionName:
+    Description: Lambda function name (for logs / manual invoke).
+    Value: !Ref DispatchFunction

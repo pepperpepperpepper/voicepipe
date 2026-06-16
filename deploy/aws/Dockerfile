@@ -15,7 +15,8 @@ RUN pip install --no-cache-dir \
     "openai>=1.0" \
     "pydantic>=2" \
     "python-dotenv>=1.0" \
-    "click>=8.0"
+    "click>=8.0" \
+    "google-auth[requests]>=2.40"
 
 # voicepipe package source onto the Lambda task root (which is on PYTHONPATH).
 COPY voicepipe ${LAMBDA_TASK_ROOT}/voicepipe
@@ -34,7 +35,9 @@ ENV VOICEPIPE_TRIGGERS_JSON=${LAMBDA_TASK_ROOT}/triggers.json
 # Fail the build loudly if the slim set is missing an import the handler
 # needs — cheaper to catch here than at cold start. If this line fails, add
 # the missing package to the pip install above.
-RUN python -c "import voicepipe.aws_lambda; print('lambda import OK')"
+# Also assert google-auth is importable: the dispatch_server import of it is
+# guarded (try/except), so a missing dep would SILENTLY disable Google auth.
+RUN python -c "import voicepipe.aws_lambda, google.oauth2.id_token, google.auth.transport.requests; print('lambda import OK')"
 
 # Mangum-wrapped FastAPI app (warm-ping aware).
 CMD ["voicepipe.aws_lambda.handler"]

@@ -28,6 +28,18 @@ Parameters:
     Type: String
     Default: "llama-3.3-70b-versatile"
     Description: "LLM intent-router model (VOICEPIPE_ZWINGLI_MODEL) for llm_route. The codebase default kimi-k2 is no longer available on Groq."
+  GoogleOauthClientId:
+    Type: String
+    Default: ""
+    Description: "Google OAuth Web client ID (GOOGLE_OAUTH_CLIENT_ID) = the verified ID-token audience. Empty disables Google Sign-In."
+  AllowedEmail:
+    Type: String
+    Default: "peppersclothescult@gmail.com"
+    Description: "Comma-separated allowlist of verified Google emails (ZWANGLI_ALLOWED_EMAIL). Empty rejects all Google identities."
+  AllowStaticToken:
+    Type: String
+    Default: "1"
+    Description: "ZWANGLI_ALLOW_STATIC_TOKEN: 1 keeps the legacy bearer as break-glass during cutover. Set to empty for Google-only once sign-in is verified."
   KeepWarmRate:
     Type: String
     Default: "rate(5 minutes)"
@@ -56,6 +68,9 @@ Resources:
           OPENAI_API_KEY: !Ref OpenAiApiKey
           VOICEPIPE_DISPATCH_STT_MODEL: !Ref SttModel
           VOICEPIPE_ZWINGLI_MODEL: !Ref RouterModel
+          GOOGLE_OAUTH_CLIENT_ID: !Ref GoogleOauthClientId
+          ZWANGLI_ALLOWED_EMAIL: !Ref AllowedEmail
+          ZWANGLI_ALLOW_STATIC_TOKEN: !Ref AllowStaticToken
       FunctionUrlConfig:
         AuthType: NONE
       Events:

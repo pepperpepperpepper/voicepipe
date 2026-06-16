@@ -29,6 +29,7 @@ sam deploy \
   --stack-name "$STACK" \
   --region "$REGION" \
   --resolve-image-repos \
+  --resolve-s3 \
   --capabilities CAPABILITY_IAM \
   --no-confirm-changeset \
   --no-fail-on-empty-changeset \

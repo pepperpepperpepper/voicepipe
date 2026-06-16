@@ -24,6 +24,10 @@ Parameters:
     Type: String
     Default: "groq:whisper-large-v3-turbo"
     Description: VOICEPIPE_DISPATCH_STT_MODEL for /transcribe-dispatch.
+  RouterModel:
+    Type: String
+    Default: "llama-3.3-70b-versatile"
+    Description: "LLM intent-router model (VOICEPIPE_ZWINGLI_MODEL) for llm_route. The codebase default kimi-k2 is no longer available on Groq."
   KeepWarmRate:
     Type: String
     Default: "rate(5 minutes)"
@@ -51,6 +55,7 @@ Resources:
           GROQ_API_KEY: !Ref GroqApiKey
           OPENAI_API_KEY: !Ref OpenAiApiKey
           VOICEPIPE_DISPATCH_STT_MODEL: !Ref SttModel
+          VOICEPIPE_ZWINGLI_MODEL: !Ref RouterModel
       FunctionUrlConfig:
         AuthType: NONE
       Events:

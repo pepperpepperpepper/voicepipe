@@ -20,6 +20,17 @@ RUN pip install --no-cache-dir \
 # voicepipe package source onto the Lambda task root (which is on PYTHONPATH).
 COPY voicepipe ${LAMBDA_TASK_ROOT}/voicepipe
 
+# Bake a complete triggers.json = packaged defaults + the intent verbs that
+# `voicepipe setup` normally enables (alarm/timer/dial/navigate/search/open/
+# back/home/recents/notifications/quick_settings). Two reasons this is needed
+# on Lambda: (1) the read-only filesystem can't materialize the user
+# triggers.json the normal loader writes (it silently falls back to a
+# trigger-less config), and (2) without the intent verbs the llm_route LLM
+# has no intent verb to route "set a timer" to and falls back to `type`.
+# Generating from the asset keeps this in sync with the shipped defaults.
+RUN python -c "import json,os,pathlib as p; r=p.Path(os.environ['LAMBDA_TASK_ROOT']); c=json.loads((r/'voicepipe/assets/triggers.default.json').read_text()); v=c.setdefault('verbs',{}); [v.setdefault(x,{'type':'builtin','enabled':True}) for x in ('search','open','alarm','timer','dial','navigate','back','home','recents','notifications','quick_settings')]; (r/'triggers.json').write_text(json.dumps(c,indent=2)); print('baked triggers.json + intent verbs')"
+ENV VOICEPIPE_TRIGGERS_JSON=${LAMBDA_TASK_ROOT}/triggers.json
+
 # Fail the build loudly if the slim set is missing an import the handler
 # needs — cheaper to catch here than at cold start. If this line fails, add
 # the missing package to the pip install above.

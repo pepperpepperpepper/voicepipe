@@ -6,4 +6,8 @@
         android:id="@+id/menu_configurator"
         android:title="@string/menu_configurator"
         app:showAsAction="ifRoom" />
+    <item
+        android:id="@+id/menu_self_test"
+        android:title="@string/menu_self_test"
+        app:showAsAction="never" />
 </menu>

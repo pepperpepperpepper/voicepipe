@@ -104,6 +104,10 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, ConfiguratorActivity::class.java))
             true
         }
+        R.id.menu_self_test -> {
+            startActivity(Intent(this, TestActivity::class.java))
+            true
+        }
         else -> super.onOptionsItemSelected(item)
     }
 

@@ -98,4 +98,11 @@
     <string name="triggers_remove_confirm_message">Remove \"%1$s\"? Voice commands starting with that word will no longer be dispatched.</string>
     <string name="triggers_remove_confirm_positive">Remove</string>
     <string name="triggers_remove_confirm_negative">Cancel</string>
+    <string name="menu_self_test">Audio self-test</string>
+    <string name="test_title">Audio self-test</string>
+    <string name="test_subtitle">Runs hosted sample clips through the real transcribe-dispatch pipeline and checks each routes to the expected action. Sign in first.</string>
+    <string name="action_run_tests">Run audio self-test</string>
+    <string name="test_log_placeholder">Tap “Run audio self-test” to start.</string>
+    <string name="test_manifest_error">Couldn\'t load test manifest: %1$s</string>
+    <string name="test_not_signed_in">Not signed in — sign in with Google (or set a token) in the Configurator first.</string>
 </resources>

@@ -49,6 +49,17 @@ class DispatchClient(
         return execute(urlBuilder.build(), token, body)
     }
 
+    /** GET raw bytes from a URL (e.g. a hosted audio test sample). */
+    fun fetchBytes(url: String): ByteArray {
+        val request = Request.Builder().url(url).get().build()
+        httpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw IOException("HTTP ${response.code} fetching $url")
+            }
+            return response.body?.bytes() ?: throw IOException("empty body fetching $url")
+        }
+    }
+
     private fun execute(url: okhttp3.HttpUrl, token: String?, body: okhttp3.RequestBody): DispatchResponse {
         val builder = Request.Builder().url(url).post(body)
         if (!token.isNullOrBlank()) {

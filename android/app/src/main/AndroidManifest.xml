@@ -56,6 +56,11 @@
             android:exported="false"
             android:label="@string/configurator_title"
             android:parentActivityName=".MainActivity" />
+        <activity
+            android:name=".TestActivity"
+            android:exported="false"
+            android:label="@string/test_title"
+            android:parentActivityName=".MainActivity" />
 
         <service
             android:name=".ZwangliAccessibilityService"

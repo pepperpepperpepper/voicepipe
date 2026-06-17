@@ -1,0 +1,31 @@
+{
+  "samples": [
+    {
+      "label": "Set alarm 7:30am",
+      "url": "https://tmp.uh-oh.wtf/2026/06/17/a0243479-39aeb8b2fafae75e-zwangli-alarm-7-30-am-wake-up.mp3",
+      "expect_type": "set_alarm"
+    },
+    {
+      "label": "Timer 90 seconds",
+      "url": "https://tmp.uh-oh.wtf/2026/06/17/d0b02b4b-45799e0ff03cae32-zwangli-timer-90-seconds.mp3",
+      "expect_type": "set_timer"
+    },
+    {
+      "label": "Create calendar event",
+      "url": "https://tmp.uh-oh.wtf/2026/06/17/34b7bd1c-b417bac8d3ea7070-zwangli-create-a-calendar-event-dentist.mp3",
+      "expect_type": "calendar_event"
+    },
+    {
+      "label": "Home",
+      "url": "https://tmp.uh-oh.wtf/2026/06/17/bb356f36-59effe9f0c245b77-zwangli-home.mp3",
+      "expect_type": "accessibility_global",
+      "expect_action": "home"
+    },
+    {
+      "label": "Notifications",
+      "url": "https://tmp.uh-oh.wtf/2026/06/17/e542be6c-5e4a810e9abf9ac6-zwangli-notifications.mp3",
+      "expect_type": "accessibility_global",
+      "expect_action": "notifications"
+    }
+  ]
+}

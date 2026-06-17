@@ -27,6 +27,11 @@ sealed class ClientAction {
     ) : ClientAction()
     data class AccessibilityGlobal(val action: String) : ClientAction()
     data class CalendarEvent(val title: String) : ClientAction()
+    data class Email(
+        val to: String?,
+        val subject: String?,
+        val body: String?,
+    ) : ClientAction()
     data class Unknown(val type: String, val raw: JsonObject) : ClientAction()
 }
 
@@ -43,6 +48,7 @@ object ClientActions {
         "navigate",
         "accessibility_global",
         "calendar",
+        "email",
     )
 
     val ACCESSIBILITY_GLOBAL_ACTIONS: Set<String> = setOf(
@@ -80,6 +86,11 @@ object ClientActions {
             "calendar_event" -> obj.stringField("title")
                 ?.takeIf { it.isNotBlank() }
                 ?.let(ClientAction::CalendarEvent)
+            "email" -> ClientAction.Email(
+                to = obj.stringField("to")?.takeIf { it.isNotBlank() },
+                subject = obj.stringField("subject")?.takeIf { it.isNotBlank() },
+                body = obj.stringField("body")?.takeIf { it.isNotBlank() },
+            )
             else -> ClientAction.Unknown(type, obj)
         }
     }

@@ -16,6 +16,11 @@
       "expect_type": "calendar_event"
     },
     {
+      "label": "Write an email",
+      "url": "https://tmp.uh-oh.wtf/2026/06/17/090595ae-2eee274f0a8c4a54-zwangli-write-an-email-to-bob-about-lunc.mp3",
+      "expect_type": "email"
+    },
+    {
       "label": "Home",
       "url": "https://tmp.uh-oh.wtf/2026/06/17/bb356f36-59effe9f0c245b77-zwangli-home.mp3",
       "expect_type": "accessibility_global",

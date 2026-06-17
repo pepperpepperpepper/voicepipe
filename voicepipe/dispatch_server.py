@@ -59,6 +59,7 @@ from voicepipe.transcript_triggers._actuator import (
     CAP_ACCESSIBILITY_GLOBAL,
     CAP_AUDIO_FEEDBACK,
     CAP_CALENDAR,
+    CAP_EMAIL,
     CAP_CLIPBOARD,
     CAP_DIAL,
     CAP_NAVIGATE,
@@ -90,6 +91,7 @@ _ALL_CAPS: frozenset[str] = frozenset(
         CAP_NAVIGATE,
         CAP_ACCESSIBILITY_GLOBAL,
         CAP_CALENDAR,
+        CAP_EMAIL,
     }
 )
 
@@ -208,6 +210,19 @@ class ServerActuator:
         if CAP_CALENDAR not in self._caps:
             return False
         self.client_actions.append({"type": "calendar_event", "title": title})
+        return True
+
+    def compose_email(self, to: str, subject: str, body: str) -> bool:
+        if CAP_EMAIL not in self._caps:
+            return False
+        entry: dict[str, Any] = {"type": "email"}
+        if to:
+            entry["to"] = to
+        if subject:
+            entry["subject"] = subject
+        if body:
+            entry["body"] = body
+        self.client_actions.append(entry)
         return True
 
 

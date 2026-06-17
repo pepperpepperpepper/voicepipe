@@ -37,6 +37,7 @@ CAP_DIAL = "dial"
 CAP_NAVIGATE = "navigate"
 CAP_ACCESSIBILITY_GLOBAL = "accessibility_global"
 CAP_CALENDAR = "calendar"
+CAP_EMAIL = "email"
 
 
 # Whitelist of global accessibility actions the dispatcher will dispatch.
@@ -132,6 +133,9 @@ class Actuator(Protocol):
         ...
 
     def set_calendar_event(self, title: str) -> bool:
+        ...
+
+    def compose_email(self, to: str, subject: str, body: str) -> bool:
         ...
 
 
@@ -290,6 +294,10 @@ class DesktopActuator:
         # No standard desktop equivalent; not in capabilities().
         return False
 
+    def compose_email(self, to: str, subject: str, body: str) -> bool:
+        # No standard desktop equivalent; not in capabilities().
+        return False
+
 
 @dataclass
 class InMemoryActuator:
@@ -317,6 +325,7 @@ class InMemoryActuator:
                 CAP_NAVIGATE,
                 CAP_ACCESSIBILITY_GLOBAL,
                 CAP_CALENDAR,
+                CAP_EMAIL,
             }
         )
     )
@@ -331,6 +340,7 @@ class InMemoryActuator:
     navigate_calls: list[dict[str, Any]] = field(default_factory=list)
     accessibility_global_calls: list[str] = field(default_factory=list)
     calendar_event_calls: list[str] = field(default_factory=list)
+    email_calls: list[dict[str, str]] = field(default_factory=list)
     subprocess_result: SubprocessResult = field(
         default_factory=lambda: SubprocessResult(returncode=0, stdout="", stderr="")
     )
@@ -418,6 +428,12 @@ class InMemoryActuator:
         if CAP_CALENDAR not in self.caps:
             return False
         self.calendar_event_calls.append(title)
+        return True
+
+    def compose_email(self, to: str, subject: str, body: str) -> bool:
+        if CAP_EMAIL not in self.caps:
+            return False
+        self.email_calls.append({"to": to, "subject": subject, "body": body})
         return True
 
 

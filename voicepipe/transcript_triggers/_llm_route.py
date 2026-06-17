@@ -64,6 +64,7 @@ _VERB_DESCRIPTIONS: dict[str, str] = {
     "open": 'open a URL. args: "<url or host>" e.g. "https://example.com"',
     "navigate": 'maps directions. args: "[<mode>] [to] <destination>" mode ∈ {driving, walking, bicycling, transit}',
     "calendar": 'create a calendar event. args: "<event title>" — just the title; omit date/time words (the user sets the time on-device). e.g. "dentist appointment", "team standup"',
+    "email": 'compose an email (opens the mail composer; user picks account + sends). args: "to=<recipient or name>; subject=<subject>; body=<message>" — any field may be empty, e.g. "to=bob; subject=lunch; body=are you free at noon"',
     "back": "system Back. no args.",
     "home": "system Home. no args.",
     "recents": "open Recent apps. no args.",

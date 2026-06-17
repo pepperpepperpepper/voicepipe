@@ -35,6 +35,7 @@ from ._actuator import (
     CAP_ACCESSIBILITY_GLOBAL,
     CAP_CALENDAR,
     CAP_DIAL,
+    CAP_EMAIL,
     CAP_NAVIGATE,
     CAP_OPEN_URL,
     CAP_SET_ALARM,
@@ -156,6 +157,7 @@ _UNSUPPORTED = {
     "navigate": "Navigation is not supported on this device.",
     "accessibility_global": "System navigation is not supported on this device.",
     "calendar": "Creating calendar events is not supported on this device.",
+    "email": "Composing email is not supported on this device.",
 }
 
 
@@ -330,6 +332,59 @@ def _action_calendar(
     if not act.set_calendar_event(title):
         return _unsupported("calendar")
     return "", {"ok": True, "intent": "calendar_event", "title": title}
+
+
+def parse_email_args(args: str) -> tuple[str, str, str]:
+    """Parse the router's ``to=…; subject=…; body=…`` email args. Any field may
+    be absent; if no ``key=value`` pairs are present, the whole string is the
+    body. Returns ``(to, subject, body)``."""
+    to = subject = body = ""
+    found = False
+    for part in (args or "").split(";"):
+        key, sep, val = part.partition("=")
+        if not sep:
+            continue
+        k, v = key.strip().lower(), val.strip()
+        if k == "to":
+            to, found = v, True
+        elif k == "subject":
+            subject, found = v, True
+        elif k == "body":
+            body, found = v, True
+    if not found:
+        body = (args or "").strip()
+    return to, subject, body
+
+
+def _action_email(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Compose an email: open the client's mail composer pre-filled with
+    to/subject/body. The user picks the From account and confirms the
+    recipient (the mail app autocompletes contacts), then sends."""
+    del verb_cfg, profiles, captures, commands
+    to, subject, body = parse_email_args(prompt or "")
+    if not (to or subject or body):
+        return _bad_args("email", "expected e.g. 'to=bob; subject=lunch; body=…'")
+    act = resolve_actuator(actuator)
+    if CAP_EMAIL not in act.capabilities():
+        return _unsupported("email")
+    if not act.compose_email(to, subject, body):
+        return _unsupported("email")
+    meta: dict[str, Any] = {"ok": True, "intent": "email"}
+    if to:
+        meta["to"] = to
+    if subject:
+        meta["subject"] = subject
+    if body:
+        meta["body"] = body
+    return "", meta
 
 
 _DIAL_KEEP_RE = re.compile(r"[+0-9*#,;]")

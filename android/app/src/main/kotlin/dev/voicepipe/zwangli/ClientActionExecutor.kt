@@ -66,6 +66,9 @@ class ClientActionExecutor(
                 is ClientAction.CalendarEvent -> {
                     if (fireCalendarEvent(action.title)) intentsFired++
                 }
+                is ClientAction.Email -> {
+                    if (fireEmail(action.to, action.subject, action.body)) intentsFired++
+                }
                 is ClientAction.Unknown -> {
                     unknownCount++
                     Log.i(TAG, "Skipping unknown client_action type=${action.type}")
@@ -189,6 +192,18 @@ class ClientActionExecutor(
             .setData(CalendarContract.Events.CONTENT_URI)
             .putExtra(CalendarContract.Events.TITLE, title)
         return fireIntent(intent, "calendar_event")
+    }
+
+    private fun fireEmail(to: String?, subject: String?, body: String?): Boolean {
+        // ACTION_SENDTO + mailto: targets email apps only and opens the
+        // composer pre-filled. The user picks the From account + recipient
+        // (the mail app autocompletes contacts) and sends. No permissions.
+        val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:")).apply {
+            if (!to.isNullOrBlank()) putExtra(Intent.EXTRA_EMAIL, arrayOf(to))
+            if (!subject.isNullOrBlank()) putExtra(Intent.EXTRA_SUBJECT, subject)
+            if (!body.isNullOrBlank()) putExtra(Intent.EXTRA_TEXT, body)
+        }
+        return fireIntent(intent, "email")
     }
 
     private fun fireDial(number: String): Boolean {

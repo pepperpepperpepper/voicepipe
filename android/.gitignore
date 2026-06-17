@@ -5,3 +5,6 @@ local.properties
 .idea/
 captures/
 .cxx/
+
+# Kotlin 2.0 build cache / daemon logs
+.kotlin/

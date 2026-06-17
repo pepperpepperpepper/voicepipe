@@ -1,0 +1,4 @@
+Native backend is live: the app now records audio and sends it to the hosted
+Zwangli service (AWS Lambda) for Groq Whisper transcription + LLM routing, and
+adds "Sign in with Google" (scoped to one account) replacing the manual token.
+The server URL is bundled, so there's nothing to configure beyond signing in.

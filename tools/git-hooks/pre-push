@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Pre-push hook: if any commit being pushed changed android/app/, build the
+# release APK and publish it to the F-Droid repo (blocking — the push aborts
+# if the publish fails). Models ~/wtf-notifier/tools/git-hooks/pre-push.
+#
+# Activate once per clone:
+#   git config core.hooksPath tools/git-hooks
+#
+# Bypass for a push you don't want published (e.g. WIP android tweak):
+#   VOICEPIPE_SKIP_RELEASE=1 git push
+#
+# Remember: each android/app push that should publish must BUMP versionCode in
+# android/app/build.gradle.kts, or release-android.sh aborts on the dup check.
+
+repo_root="$(git rev-parse --show-toplevel)"
+remote="${1:-origin}"
+zero="0000000000000000000000000000000000000000"
+ranges=()
+
+# Build the union of commit ranges about to be pushed (stdin: <lref> <loid> <rref> <roid>).
+while read -r local_ref local_oid remote_ref remote_oid; do
+  [[ -z "$local_oid" || "$local_oid" == "$zero" ]] && continue   # ref deletion
+  if [[ -z "$remote_oid" || "$remote_oid" == "$zero" ]]; then
+    base="$(git -C "$repo_root" merge-base "$local_oid" "${remote}/HEAD" 2>/dev/null || true)"
+    [[ -n "$base" ]] && ranges+=("${base}..${local_oid}") || ranges+=("${local_oid}")
+  else
+    ranges+=("${remote_oid}..${local_oid}")
+  fi
+done
+
+[[ "${#ranges[@]}" -eq 0 ]] && exit 0
+
+android_changed=0
+for range in "${ranges[@]}"; do
+  changed="$(git -C "$repo_root" diff --name-only "$range" 2>/dev/null || true)"
+  if [[ -n "$changed" ]] && echo "$changed" | grep -q '^android/app/'; then
+    android_changed=1
+    break
+  fi
+done
+
+if [[ "$android_changed" -eq 1 ]]; then
+  if [[ -n "${VOICEPIPE_SKIP_RELEASE:-}" ]]; then
+    echo "==> pre-push: android/app/ changed; F-Droid publish skipped (VOICEPIPE_SKIP_RELEASE=1)"
+  else
+    echo "==> pre-push: android/app/ changed; building + publishing release APK to F-Droid"
+    echo "    (set VOICEPIPE_SKIP_RELEASE=1 to bypass)"
+    "$repo_root/tools/release-android.sh"
+  fi
+fi
+
+exit 0

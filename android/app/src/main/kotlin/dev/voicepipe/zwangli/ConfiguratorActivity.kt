@@ -58,6 +58,10 @@ class ConfiguratorActivity : AppCompatActivity() {
     private lateinit var editToken: EditText
     private lateinit var buttonTest: Button
     private lateinit var textTestResult: TextView
+    private lateinit var buttonSignIn: Button
+    private lateinit var buttonSignOut: Button
+    private lateinit var textAccountStatus: TextView
+    private val googleSignIn by lazy { GoogleSignInClient(this) }
     private lateinit var editSearchTemplate: EditText
     private lateinit var layoutSearchTemplate: TextInputLayout
     private lateinit var buttonTrySearch: Button
@@ -89,6 +93,7 @@ class ConfiguratorActivity : AppCompatActivity() {
         wireListeners()
         editServerUrl.setText(settings.serverUrl)
         editToken.setText(settings.token)
+        updateAccountStatus()
         editSearchTemplate.setText(settings.searchUrlTemplate)
         switchStartOnBoot.isChecked = settings.startOnBoot
         validateSearchTemplate(settings.searchUrlTemplate)
@@ -125,6 +130,9 @@ class ConfiguratorActivity : AppCompatActivity() {
         editToken = findViewById(R.id.edit_token)
         buttonTest = findViewById(R.id.button_test)
         textTestResult = findViewById(R.id.text_test_result)
+        buttonSignIn = findViewById(R.id.button_sign_in)
+        buttonSignOut = findViewById(R.id.button_sign_out)
+        textAccountStatus = findViewById(R.id.text_account_status)
         editSearchTemplate = findViewById(R.id.edit_search_template)
         layoutSearchTemplate = findViewById(R.id.layout_search_template)
         buttonTrySearch = findViewById(R.id.button_try_search)
@@ -169,6 +177,8 @@ class ConfiguratorActivity : AppCompatActivity() {
             },
         )
         buttonTest.setOnClickListener { runConnectionTest() }
+        buttonSignIn.setOnClickListener { signInWithGoogle() }
+        buttonSignOut.setOnClickListener { signOutOfGoogle() }
         buttonTrySearch.setOnClickListener { runSearchProbe() }
         editTriggerNew.addTextChangedListener(
             savingTextWatcher { validateNewTriggerPhrase(it) },
@@ -283,9 +293,50 @@ class ConfiguratorActivity : AppCompatActivity() {
         )
     }
 
+    /** Bearer for server calls: the Google ID token if signed in, else the
+     *  manual break-glass token field. */
+    private fun authBearer(): String =
+        settings.googleIdToken.ifBlank { editToken.text?.toString().orEmpty() }
+
+    private fun updateAccountStatus() {
+        val email = settings.googleEmail
+        if (email.isNotBlank()) {
+            textAccountStatus.text = getString(R.string.account_signed_in, email)
+            buttonSignIn.setText(R.string.action_switch_account)
+            buttonSignOut.visibility = View.VISIBLE
+        } else {
+            textAccountStatus.setText(R.string.account_not_signed_in)
+            buttonSignIn.setText(R.string.action_sign_in_google)
+            buttonSignOut.visibility = View.GONE
+        }
+    }
+
+    private fun signInWithGoogle() {
+        lifecycleScope.launch {
+            try {
+                val account = googleSignIn.signIn(this@ConfiguratorActivity)
+                settings.googleIdToken = account.idToken
+                settings.googleEmail = account.email ?: ""
+                updateAccountStatus()
+                runConnectionTest()
+            } catch (e: GoogleSignInClient.SignInError) {
+                textAccountStatus.text =
+                    getString(R.string.account_sign_in_failed, e.message ?: "")
+            }
+        }
+    }
+
+    private fun signOutOfGoogle() {
+        lifecycleScope.launch {
+            googleSignIn.signOut()
+            settings.clearGoogleSession()
+            updateAccountStatus()
+        }
+    }
+
     private fun runConnectionTest() {
         val url = editServerUrl.text.toString().trim()
-        val token = editToken.text.toString()
+        val token = authBearer()
         buttonTest.isEnabled = false
         textTestResult.text = getString(R.string.test_result_running)
         lifecycleScope.launch {
@@ -325,7 +376,7 @@ class ConfiguratorActivity : AppCompatActivity() {
             return
         }
         textTriggersStatus.setText(R.string.triggers_status_loading)
-        val token = editToken.text?.toString().orEmpty()
+        val token = authBearer()
         lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) { triggersClient.list(url, token) }
             renderTriggersResult(result)
@@ -401,7 +452,7 @@ class ConfiguratorActivity : AppCompatActivity() {
             Toast.makeText(this, R.string.triggers_status_unreachable, Toast.LENGTH_LONG).show()
             return
         }
-        val token = editToken.text?.toString().orEmpty()
+        val token = authBearer()
         buttonTriggerAdd.isEnabled = false
         lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) {

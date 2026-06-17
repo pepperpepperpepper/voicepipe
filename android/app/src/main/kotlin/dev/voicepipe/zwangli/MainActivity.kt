@@ -150,7 +150,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val url = settings.serverUrl
-        val bearer = settings.token
+        val bearer = settings.googleIdToken.ifBlank { settings.token }
         if (url.isEmpty()) {
             response.text = getString(R.string.response_placeholder)
             return
@@ -191,7 +191,7 @@ class MainActivity : AppCompatActivity() {
     private fun onSend() {
         val text = transcript.text.toString()
         val url = settings.serverUrl
-        val bearer = settings.token
+        val bearer = settings.googleIdToken.ifBlank { settings.token }
         if (url.isEmpty() || text.isEmpty()) {
             response.text = getString(R.string.response_placeholder)
             return

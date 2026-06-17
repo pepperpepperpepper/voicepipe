@@ -23,7 +23,7 @@ android {
         buildConfigField(
             "String",
             "GOOGLE_WEB_CLIENT_ID",
-            "\"REPLACE_WITH_WEB_CLIENT_ID.apps.googleusercontent.com\"",
+            "\"647211119464-52i8qgat3llgcnupgp0sl467k3sc5eea.apps.googleusercontent.com\"",
         )
     }
 

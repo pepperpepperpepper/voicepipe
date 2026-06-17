@@ -20,6 +20,7 @@ from ._help import _action_help
 from ._intents import (
     _action_alarm,
     _action_back,
+    _action_calendar,
     _action_dial,
     _action_home,
     _action_navigate,
@@ -57,6 +58,7 @@ _ACTIONS: dict[str, ActionHandler] = {
     "timer": _action_timer,
     "dial": _action_dial,
     "navigate": _action_navigate,
+    "calendar": _action_calendar,
     "back": _action_back,
     "home": _action_home,
     "recents": _action_recents,

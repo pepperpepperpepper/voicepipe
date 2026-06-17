@@ -36,6 +36,7 @@ CAP_SET_TIMER = "set_timer"
 CAP_DIAL = "dial"
 CAP_NAVIGATE = "navigate"
 CAP_ACCESSIBILITY_GLOBAL = "accessibility_global"
+CAP_CALENDAR = "calendar"
 
 
 # Whitelist of global accessibility actions the dispatcher will dispatch.
@@ -128,6 +129,9 @@ class Actuator(Protocol):
         ...
 
     def accessibility_global(self, action: str) -> bool:
+        ...
+
+    def set_calendar_event(self, title: str) -> bool:
         ...
 
 
@@ -282,6 +286,10 @@ class DesktopActuator:
         # No standard desktop equivalent; not in capabilities().
         return False
 
+    def set_calendar_event(self, title: str) -> bool:
+        # No standard desktop equivalent; not in capabilities().
+        return False
+
 
 @dataclass
 class InMemoryActuator:
@@ -308,6 +316,7 @@ class InMemoryActuator:
                 CAP_DIAL,
                 CAP_NAVIGATE,
                 CAP_ACCESSIBILITY_GLOBAL,
+                CAP_CALENDAR,
             }
         )
     )
@@ -321,6 +330,7 @@ class InMemoryActuator:
     dial_calls: list[str] = field(default_factory=list)
     navigate_calls: list[dict[str, Any]] = field(default_factory=list)
     accessibility_global_calls: list[str] = field(default_factory=list)
+    calendar_event_calls: list[str] = field(default_factory=list)
     subprocess_result: SubprocessResult = field(
         default_factory=lambda: SubprocessResult(returncode=0, stdout="", stderr="")
     )
@@ -402,6 +412,12 @@ class InMemoryActuator:
         if action not in ACCESSIBILITY_GLOBAL_ACTIONS:
             return False
         self.accessibility_global_calls.append(action)
+        return True
+
+    def set_calendar_event(self, title: str) -> bool:
+        if CAP_CALENDAR not in self.caps:
+            return False
+        self.calendar_event_calls.append(title)
         return True
 
 

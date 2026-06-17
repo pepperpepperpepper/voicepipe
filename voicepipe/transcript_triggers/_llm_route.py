@@ -63,6 +63,7 @@ _VERB_DESCRIPTIONS: dict[str, str] = {
     "search": 'web search. args: "<query>"',
     "open": 'open a URL. args: "<url or host>" e.g. "https://example.com"',
     "navigate": 'maps directions. args: "[<mode>] [to] <destination>" mode ∈ {driving, walking, bicycling, transit}',
+    "calendar": 'create a calendar event. args: "<event title>" — just the title; omit date/time words (the user sets the time on-device). e.g. "dentist appointment", "team standup"',
     "back": "system Back. no args.",
     "home": "system Home. no args.",
     "recents": "open Recent apps. no args.",

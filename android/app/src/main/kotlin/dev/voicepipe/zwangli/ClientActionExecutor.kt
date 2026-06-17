@@ -10,6 +10,7 @@ import android.content.Intent
 import android.media.MediaPlayer
 import android.net.Uri
 import android.provider.AlarmClock
+import android.provider.CalendarContract
 import android.util.Log
 import kotlinx.serialization.json.JsonElement
 
@@ -61,6 +62,9 @@ class ClientActionExecutor(
                 }
                 is ClientAction.AccessibilityGlobal -> {
                     if (fireAccessibilityGlobal(action.action)) globalActionsFired++
+                }
+                is ClientAction.CalendarEvent -> {
+                    if (fireCalendarEvent(action.title)) intentsFired++
                 }
                 is ClientAction.Unknown -> {
                     unknownCount++
@@ -175,6 +179,16 @@ class ClientActionExecutor(
             if (!message.isNullOrBlank()) putExtra(AlarmClock.EXTRA_MESSAGE, message)
         }
         return fireIntent(intent, "set_timer")
+    }
+
+    private fun fireCalendarEvent(title: String): Boolean {
+        // ACTION_INSERT opens the calendar app's new-event screen pre-filled
+        // with the title (Google Calendar on a GMS device); the user picks the
+        // time. No WRITE_CALENDAR permission needed.
+        val intent = Intent(Intent.ACTION_INSERT)
+            .setData(CalendarContract.Events.CONTENT_URI)
+            .putExtra(CalendarContract.Events.TITLE, title)
+        return fireIntent(intent, "calendar_event")
     }
 
     private fun fireDial(number: String): Boolean {

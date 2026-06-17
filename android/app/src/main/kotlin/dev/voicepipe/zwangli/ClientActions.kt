@@ -26,6 +26,7 @@ sealed class ClientAction {
         val mode: String?,
     ) : ClientAction()
     data class AccessibilityGlobal(val action: String) : ClientAction()
+    data class CalendarEvent(val title: String) : ClientAction()
     data class Unknown(val type: String, val raw: JsonObject) : ClientAction()
 }
 
@@ -41,6 +42,7 @@ object ClientActions {
         "dial",
         "navigate",
         "accessibility_global",
+        "calendar",
     )
 
     val ACCESSIBILITY_GLOBAL_ACTIONS: Set<String> = setOf(
@@ -75,6 +77,9 @@ object ClientActions {
                 ?.let(ClientAction::Dial)
             "navigate" -> parseNavigate(obj)
             "accessibility_global" -> parseAccessibilityGlobal(obj)
+            "calendar_event" -> obj.stringField("title")
+                ?.takeIf { it.isNotBlank() }
+                ?.let(ClientAction::CalendarEvent)
             else -> ClientAction.Unknown(type, obj)
         }
     }

@@ -58,6 +58,7 @@ from voicepipe.transcript_triggers._actuator import (
     ACCESSIBILITY_GLOBAL_ACTIONS,
     CAP_ACCESSIBILITY_GLOBAL,
     CAP_AUDIO_FEEDBACK,
+    CAP_CALENDAR,
     CAP_CLIPBOARD,
     CAP_DIAL,
     CAP_NAVIGATE,
@@ -88,6 +89,7 @@ _ALL_CAPS: frozenset[str] = frozenset(
         CAP_DIAL,
         CAP_NAVIGATE,
         CAP_ACCESSIBILITY_GLOBAL,
+        CAP_CALENDAR,
     }
 )
 
@@ -200,6 +202,12 @@ class ServerActuator:
         self.client_actions.append(
             {"type": "accessibility_global", "action": action}
         )
+        return True
+
+    def set_calendar_event(self, title: str) -> bool:
+        if CAP_CALENDAR not in self._caps:
+            return False
+        self.client_actions.append({"type": "calendar_event", "title": title})
         return True
 
 

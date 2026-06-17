@@ -33,6 +33,7 @@ from voicepipe.config import (
 from ._actuator import (
     ACCESSIBILITY_GLOBAL_ACTIONS,
     CAP_ACCESSIBILITY_GLOBAL,
+    CAP_CALENDAR,
     CAP_DIAL,
     CAP_NAVIGATE,
     CAP_OPEN_URL,
@@ -154,6 +155,7 @@ _UNSUPPORTED = {
     "dial": "Dialing is not supported on this device.",
     "navigate": "Navigation is not supported on this device.",
     "accessibility_global": "System navigation is not supported on this device.",
+    "calendar": "Creating calendar events is not supported on this device.",
 }
 
 
@@ -304,6 +306,30 @@ def _action_timer(
     if message:
         meta["message"] = message
     return "", meta
+
+
+def _action_calendar(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Create a calendar event. v1 is title-only: the client opens its
+    calendar app pre-filled with the title and the user picks the time
+    (date/time parsing belongs on-device, which knows the timezone)."""
+    del verb_cfg, profiles, captures, commands
+    title = (prompt or "").strip()
+    if not title:
+        return _bad_args("calendar", "empty event title")
+    act = resolve_actuator(actuator)
+    if CAP_CALENDAR not in act.capabilities():
+        return _unsupported("calendar")
+    if not act.set_calendar_event(title):
+        return _unsupported("calendar")
+    return "", {"ok": True, "intent": "calendar_event", "title": title}
 
 
 _DIAL_KEEP_RE = re.compile(r"[+0-9*#,;]")

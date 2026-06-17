@@ -71,6 +71,7 @@ _DEFAULT_INTENT_VERBS: tuple[str, ...] = (
     "timer",
     "dial",
     "navigate",
+    "calendar",
     "back",
     "home",
     "recents",

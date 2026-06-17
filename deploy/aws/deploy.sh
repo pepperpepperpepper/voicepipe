@@ -22,7 +22,7 @@ STACK="${ZWANGLI_STACK_NAME:-zwangli-dispatch}"
 # GOOGLE_OAUTH_CLIENT_ID to enable; ZWANGLI_ALLOW_STATIC_TOKEN=1 keeps the
 # legacy bearer as break-glass during cutover (set empty for Google-only).
 GOOGLE_OAUTH_CLIENT_ID="${GOOGLE_OAUTH_CLIENT_ID:-}"
-ALLOWED_EMAIL="${ZWANGLI_ALLOWED_EMAIL:-peppersclothescult@gmail.com}"
+ALLOWED_EMAIL="${ZWANGLI_ALLOWED_EMAIL:-peppersclothescult@gmail.com,ron@blonderon.com,fenlonorama@gmail.com}"
 ALLOW_STATIC_TOKEN="${ZWANGLI_ALLOW_STATIC_TOKEN:-1}"
 
 cd "$(dirname "$0")"

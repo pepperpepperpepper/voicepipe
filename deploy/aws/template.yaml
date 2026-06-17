@@ -34,7 +34,7 @@ Parameters:
     Description: "Google OAuth Web client ID (GOOGLE_OAUTH_CLIENT_ID) = the verified ID-token audience. Empty disables Google Sign-In."
   AllowedEmail:
     Type: String
-    Default: "peppersclothescult@gmail.com"
+    Default: "peppersclothescult@gmail.com,ron@blonderon.com,fenlonorama@gmail.com"
     Description: "Comma-separated allowlist of verified Google emails (ZWANGLI_ALLOWED_EMAIL). Empty rejects all Google identities."
   AllowStaticToken:
     Type: String

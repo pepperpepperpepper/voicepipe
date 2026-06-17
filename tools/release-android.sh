@@ -41,18 +41,18 @@ if [[ -n "$upstream_ref" ]] && ! git -C "$repo_root" merge-base --is-ancestor "@
   echo "warning: HEAD not pushed to $upstream_ref; remote will be behind the published APK" >&2
 fi
 
+# versionCode mirrors build.gradle.kts (git commit count); versionName is the
+# literal in build.gradle.kts.
 version_name="$(awk -F\" '/versionName = /{print $2; exit}' "$android_dir/app/build.gradle.kts")"
-version_code="$(awk '/versionCode = /{print $3; exit}' "$android_dir/app/build.gradle.kts")"
-[[ -n "$version_name" && -n "$version_code" ]] || { echo "error: failed to parse version from build.gradle.kts" >&2; exit 1; }
+version_code="$(git -C "$repo_root" rev-list --count HEAD)"
+[[ -n "$version_name" && -n "$version_code" ]] || { echo "error: failed to resolve version" >&2; exit 1; }
 
-# Refuse to re-publish an existing versionCode (Android refuses downgrades and
-# F-Droid keys index entries by versionCode) — catches the "forgot to bump".
+# If this versionCode is already published, there are no new commits to ship —
+# skip gracefully (don't fail the push). New commits => higher count => publish.
 published_apk="$fdroid_dir/repo/${APP_ID}_${version_code}.apk"
 if [[ -f "$published_apk" ]]; then
-  echo "error: ${APP_ID}_${version_code}.apk is already published in $fdroid_dir/repo/" >&2
-  echo "       bump versionCode + versionName in $android_dir/app/build.gradle.kts" >&2
-  echo "       (and add android/fastlane/metadata/android/en-US/changelogs/<code>.txt)" >&2
-  exit 1
+  echo "==> ${APP_ID}_${version_code}.apk already published (no new commits); skipping."
+  exit 0
 fi
 
 # Clear any stale unsigned APK for this versionCode from an aborted run.

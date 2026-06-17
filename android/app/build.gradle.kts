@@ -4,6 +4,13 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+// versionCode = git commit count, so every commit yields a unique,
+// monotonically increasing versionCode for F-Droid with no manual bumps.
+// Falls back to 1 outside a git checkout.
+val gitVersionCode: Int =
+    providers.exec { commandLine("git", "rev-list", "--count", "HEAD") }
+        .standardOutput.asText.get().trim().toIntOrNull() ?: 1
+
 android {
     namespace = "dev.voicepipe.zwangli"
     compileSdk = 34
@@ -12,7 +19,7 @@ android {
         applicationId = "dev.voicepipe.zwangli"
         minSdk = 24
         targetSdk = 34
-        versionCode = 2
+        versionCode = gitVersionCode
         versionName = "0.1.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

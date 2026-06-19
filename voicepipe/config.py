@@ -608,6 +608,24 @@ def _load_default_triggers_json_template() -> str:
     return _DEFAULT_TRIGGERS_JSON_TEMPLATE_FALLBACK
 
 
+def _default_triggers_from_asset() -> dict[str, str]:
+    """Trigger->action mapping shipped in triggers.default.json.
+
+    Used as the last-resort default when no env override and no user
+    triggers.json exist, so out-of-the-box behavior matches the asset
+    that ``setup`` installs (e.g. ``zwingli`` -> ``dispatch``) rather
+    than a divergent inline literal.
+    """
+    try:
+        payload = json.loads(_load_default_triggers_json_template())
+        parsed = _parse_transcript_triggers_json_obj(payload)
+        if parsed:
+            return parsed
+    except Exception:
+        pass
+    return {"zwingli": "strip", "zwingly": "strip"}
+
+
 def ensure_triggers_json(
     *,
     path: Optional[Path] = None,
@@ -849,7 +867,7 @@ def get_transcript_triggers(
             from_file = {}
         if from_file is not None:
             return from_file
-        return dict(default or {"zwingli": "strip", "zwingly": "strip"})
+        return dict(default or _default_triggers_from_asset())
 
     out: dict[str, str] = {}
     for entry in raw.split(","):

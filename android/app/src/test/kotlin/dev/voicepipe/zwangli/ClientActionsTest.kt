@@ -21,6 +21,8 @@ class ClientActionsTest {
             "dial",
             "navigate",
             "accessibility_global",
+            "calendar",
+            "email",
         )
         assertEquals(expected, ClientActions.CAPABILITIES)
     }

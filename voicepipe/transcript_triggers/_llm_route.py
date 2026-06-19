@@ -57,8 +57,8 @@ ROUTER_PROFILE_NAME = "router"
 # unfamiliar verbs would only confuse the model. Extend this map when
 # adding new intent verbs.
 _VERB_DESCRIPTIONS: dict[str, str] = {
-    "alarm": 'set an alarm at an ABSOLUTE clock time. args: "<time> [<message>]" e.g. "7:30am wake up", "19:30". Use ONLY for wall-clock times ("at 7am", "6:30", "noon"). A relative duration like "in/for two minutes" is NOT an alarm — use `timer`.',
-    "timer": 'start a countdown timer for a RELATIVE duration. args: "<duration> [<message>]" e.g. "5 minutes pasta", "1h 30m big bake", "2 minutes". Use this whenever the user gives a length of time ("in/for N seconds/minutes/hours"), EVEN IF they said the word "alarm" (e.g. "set an alarm for two minutes" → timer "2 minutes").',
+    "alarm": 'set an alarm — use whenever the user says "alarm". args: "<time> [<message>]" accepting EITHER an absolute clock time ("7:30am wake up", "19:30") OR a relative offset ("in 5 minutes", "two minutes from now" → "2 minutes from now"). Pass the time/offset through; the device resolves a relative offset to the actual wall-clock time.',
+    "timer": 'start a countdown timer — use when the user says "timer". args: "<duration> [<message>]" e.g. "5 minutes pasta", "1h 30m big bake", "90 seconds".',
     "dial": 'place a phone call. args: "<phone number>" — keep `+` and digits, strip words',
     "search": 'web search. args: "<query>"',
     "open": 'open a URL. args: "<url or host>" e.g. "https://example.com"',

@@ -334,7 +334,9 @@ def test_llm_route_multi_step(monkeypatch) -> None:
     )
     assert payload is not None
     assert payload["ok"] is True
-    assert act.set_alarm_calls == [{"hour": 7, "minutes": 0, "message": "wake up"}]
+    assert act.set_alarm_calls == [
+        {"hour": 7, "minutes": 0, "message": "wake up", "in_seconds": None}
+    ]
     assert act.set_timer_calls == [{"seconds": 300, "message": "pasta"}]
     # Multi-step: prior step(s) live in `chain`; the last step's meta is
     # promoted to the top level.

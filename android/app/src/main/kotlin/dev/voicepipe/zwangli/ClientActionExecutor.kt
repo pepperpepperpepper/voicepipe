@@ -12,6 +12,7 @@ import android.net.Uri
 import android.provider.AlarmClock
 import android.provider.CalendarContract
 import android.util.Log
+import java.util.Calendar
 import kotlinx.serialization.json.JsonElement
 
 class ClientActionExecutor(
@@ -47,7 +48,7 @@ class ClientActionExecutor(
                     if (fireOpenUrl(action.url)) intentsFired++
                 }
                 is ClientAction.SetAlarm -> {
-                    if (fireSetAlarm(action.hour, action.minutes, action.message)) {
+                    if (fireSetAlarm(action)) {
                         intentsFired++
                     }
                 }
@@ -167,11 +168,24 @@ class ClientActionExecutor(
         return fireIntent(Intent(Intent.ACTION_VIEW, uri), "open_url")
     }
 
-    private fun fireSetAlarm(hour: Int, minutes: Int, message: String?): Boolean {
+    private fun fireSetAlarm(action: ClientAction.SetAlarm): Boolean {
+        // Resolve a relative offset ("in 2 minutes") to a local wall-clock
+        // time here on the device, where the timezone is known. Absolute
+        // alarms use the hour/minutes the server already computed.
+        val (hour, minutes) = if (action.inSeconds != null) {
+            val target = Calendar.getInstance().apply {
+                add(Calendar.SECOND, action.inSeconds)
+            }
+            target.get(Calendar.HOUR_OF_DAY) to target.get(Calendar.MINUTE)
+        } else {
+            (action.hour ?: return false) to (action.minutes ?: return false)
+        }
         val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
             putExtra(AlarmClock.EXTRA_HOUR, hour)
             putExtra(AlarmClock.EXTRA_MINUTES, minutes)
-            if (!message.isNullOrBlank()) putExtra(AlarmClock.EXTRA_MESSAGE, message)
+            if (!action.message.isNullOrBlank()) {
+                putExtra(AlarmClock.EXTRA_MESSAGE, action.message)
+            }
         }
         return fireIntent(intent, "set_alarm")
     }

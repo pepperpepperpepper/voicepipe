@@ -130,6 +130,22 @@ class ClientActionsTest {
     }
 
     @Test
+    fun `parses relative set_alarm with in_seconds`() {
+        val a = ClientActions.parse(
+            parse("""{"type":"set_alarm","in_seconds":120,"message":"standup"}"""),
+        )
+        assertEquals(ClientAction.SetAlarm(null, null, "standup", 120), a)
+    }
+
+    @Test
+    fun `relative set_alarm rejects out-of-range in_seconds`() {
+        assertNull(ClientActions.parse(parse("""{"type":"set_alarm","in_seconds":0}""")))
+        assertNull(
+            ClientActions.parse(parse("""{"type":"set_alarm","in_seconds":86401}""")),
+        )
+    }
+
+    @Test
     fun `set_alarm rejects out-of-range hour or minutes`() {
         assertNull(ClientActions.parse(parse("""{"type":"set_alarm","hour":24,"minutes":0}""")))
         assertNull(ClientActions.parse(parse("""{"type":"set_alarm","hour":-1,"minutes":0}""")))

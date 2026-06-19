@@ -27,6 +27,7 @@ from voicepipe.transcript_triggers._actuator import (
 from voicepipe.transcript_triggers._intents import (
     _normalize_open_url,
     parse_alarm_args,
+    parse_alarm_offset_args,
     parse_navigate_args,
     parse_timer_args,
 )
@@ -82,6 +83,40 @@ def test_parse_alarm_args_accepts(text: str, expected: tuple[int, int, str | Non
 )
 def test_parse_alarm_args_rejects(text: str) -> None:
     assert parse_alarm_args(text) is None
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("2 minutes", (120, None)),
+        ("in 2 minutes", (120, None)),
+        ("2 minutes from now", (120, None)),
+        ("in 90 seconds", (90, None)),
+        ("1h 30m bread", (5400, "bread")),
+        ("in 5 minutes pasta", (300, "pasta")),
+    ],
+)
+def test_parse_alarm_offset_args_accepts(
+    text: str, expected: tuple[int, str | None]
+) -> None:
+    assert parse_alarm_offset_args(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "   ",
+        "7am",        # absolute clock time — no duration unit
+        "7:30",       # absolute clock time
+        "19:30",      # absolute clock time
+        "noon",
+    ],
+)
+def test_parse_alarm_offset_args_rejects_absolute_times(text: str) -> None:
+    # Absolute times have no duration unit and must fall through to
+    # parse_alarm_args, not be treated as a relative offset.
+    assert parse_alarm_offset_args(text) is None
 
 
 # ---------------------------------------------------------------------------
@@ -199,7 +234,7 @@ def test_alarm_verb_routes_through_actuator_with_message() -> None:
     assert out == ""
     assert meta["meta"]["handler_meta"]["ok"] is True
     assert act.set_alarm_calls == [
-        {"hour": 7, "minutes": 0, "message": "wake up"}
+        {"hour": 7, "minutes": 0, "message": "wake up", "in_seconds": None}
     ]
 
 
@@ -212,7 +247,24 @@ def test_alarm_verb_without_message() -> None:
     )
     assert out == ""
     assert meta["meta"]["handler_meta"]["ok"] is True
-    assert act.set_alarm_calls == [{"hour": 19, "minutes": 30, "message": None}]
+    assert act.set_alarm_calls == [
+        {"hour": 19, "minutes": 30, "message": None, "in_seconds": None}
+    ]
+
+
+def test_alarm_verb_relative_offset_sets_in_seconds() -> None:
+    act = InMemoryActuator()
+    out, meta = tt.apply_transcript_triggers(
+        "zwingli alarm 2 minutes from now",
+        commands=_commands_for("alarm", "alarm"),
+        actuator=act,
+    )
+    assert out == ""
+    assert meta["meta"]["handler_meta"]["ok"] is True
+    assert meta["meta"]["handler_meta"]["in_seconds"] == 120
+    assert act.set_alarm_calls == [
+        {"hour": None, "minutes": None, "message": None, "in_seconds": 120}
+    ]
 
 
 def test_timer_verb_routes_through_actuator() -> None:

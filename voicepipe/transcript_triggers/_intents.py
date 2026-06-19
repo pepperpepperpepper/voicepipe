@@ -143,6 +143,33 @@ def parse_timer_args(args: str) -> tuple[int, str | None] | None:
     return total, message
 
 
+# Relative-offset markers for alarms phrased as a duration rather than a
+# wall-clock time: "in 2 minutes", "2 minutes from now". We strip these
+# markers and reuse the timer duration parser to get the offset seconds.
+_ALARM_OFFSET_PREFIX_RE = re.compile(r"^in\s+", re.IGNORECASE)
+_ALARM_OFFSET_SUFFIX_RE = re.compile(r"\s*\bfrom now\b\s*$", re.IGNORECASE)
+
+
+def parse_alarm_offset_args(args: str) -> tuple[int, str | None] | None:
+    """Parse an alarm spec expressed as a *relative* offset.
+
+    Accepts ``2 minutes``, ``in 5 minutes``, ``2 minutes from now``,
+    ``1h 30m wake up`` — i.e. a duration (optionally wrapped in
+    ``in …`` / ``… from now``) rather than an absolute clock time.
+    Returns ``(seconds_from_now, message)`` or ``None`` if the string is
+    not a duration (e.g. ``7:30am``, which has no time unit and is left
+    for :func:`parse_alarm_args`).
+    """
+    text = (args or "").strip()
+    if not text:
+        return None
+    stripped = _ALARM_OFFSET_PREFIX_RE.sub("", text)
+    stripped = _ALARM_OFFSET_SUFFIX_RE.sub("", stripped).strip()
+    if not stripped:
+        return None
+    return parse_timer_args(stripped)
+
+
 # ---------------------------------------------------------------------------
 # Capability-unsupported messages (mirrors ⚠ zwingli style used elsewhere)
 # ---------------------------------------------------------------------------
@@ -261,16 +288,40 @@ def _action_alarm(
     actuator: Actuator | None = None,
 ) -> tuple[str, dict[str, Any]]:
     del verb_cfg, profiles, captures, commands
+    # A relative offset ("in 2 minutes", "2 minutes from now") sets an alarm
+    # at now+offset; the wall-clock time is resolved on-device (which knows
+    # the local timezone). An absolute clock time ("7:30am") takes the
+    # hour/minutes path. Try the offset first since "7:30" has no time unit
+    # and won't match the duration parser.
+    offset = parse_alarm_offset_args(prompt or "")
+    if offset is not None:
+        seconds, message = offset
+        act = resolve_actuator(actuator)
+        if CAP_SET_ALARM not in act.capabilities():
+            return _unsupported("alarm")
+        if not act.set_alarm(None, None, message, in_seconds=seconds):
+            return _unsupported("alarm")
+        meta: dict[str, Any] = {
+            "ok": True,
+            "intent": "set_alarm",
+            "in_seconds": seconds,
+        }
+        if message:
+            meta["message"] = message
+        return "", meta
+
     parsed = parse_alarm_args(prompt or "")
     if parsed is None:
-        return _bad_args("alarm", "expected e.g. '7am wake up' or '07:30'")
+        return _bad_args(
+            "alarm", "expected e.g. '7am wake up', '07:30', or 'in 5 minutes'"
+        )
     hour, minutes, message = parsed
     act = resolve_actuator(actuator)
     if CAP_SET_ALARM not in act.capabilities():
         return _unsupported("alarm")
     if not act.set_alarm(hour, minutes, message):
         return _unsupported("alarm")
-    meta: dict[str, Any] = {
+    meta = {
         "ok": True,
         "intent": "set_alarm",
         "hour": hour,

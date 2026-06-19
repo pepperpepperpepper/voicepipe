@@ -157,8 +157,8 @@ def test_in_memory_actuator_captures_set_alarm_with_and_without_message() -> Non
     assert act.set_alarm(7, 30, "wake up") is True
     assert act.set_alarm(6, 0) is True
     assert act.set_alarm_calls == [
-        {"hour": 7, "minutes": 30, "message": "wake up"},
-        {"hour": 6, "minutes": 0, "message": None},
+        {"hour": 7, "minutes": 30, "message": "wake up", "in_seconds": None},
+        {"hour": 6, "minutes": 0, "message": None, "in_seconds": None},
     ]
 
 

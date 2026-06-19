@@ -154,17 +154,29 @@ class ServerActuator:
         return True
 
     def set_alarm(
-        self, hour: int, minutes: int, message: str | None = None
+        self,
+        hour: int | None,
+        minutes: int | None,
+        message: str | None = None,
+        *,
+        in_seconds: int | None = None,
     ) -> bool:
         if CAP_SET_ALARM not in self._caps:
             return False
-        if not (0 <= hour <= 23 and 0 <= minutes <= 59):
-            return False
-        entry: dict[str, Any] = {
-            "type": "set_alarm",
-            "hour": hour,
-            "minutes": minutes,
-        }
+        entry: dict[str, Any] = {"type": "set_alarm"}
+        if in_seconds is not None:
+            # Relative alarm: the device resolves now+in_seconds to a
+            # wall-clock time (it knows the local timezone).
+            if not (1 <= in_seconds <= 86_400):
+                return False
+            entry["in_seconds"] = in_seconds
+        else:
+            if hour is None or minutes is None:
+                return False
+            if not (0 <= hour <= 23 and 0 <= minutes <= 59):
+                return False
+            entry["hour"] = hour
+            entry["minutes"] = minutes
         if message:
             entry["message"] = message
         self.client_actions.append(entry)

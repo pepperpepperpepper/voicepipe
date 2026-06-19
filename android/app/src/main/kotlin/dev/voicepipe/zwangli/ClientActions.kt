@@ -12,9 +12,13 @@ sealed class ClientAction {
     data class WebSearch(val query: String) : ClientAction()
     data class OpenUrl(val url: String) : ClientAction()
     data class SetAlarm(
-        val hour: Int,
-        val minutes: Int,
+        // Absolute wall-clock time. Null when [inSeconds] is set (relative).
+        val hour: Int?,
+        val minutes: Int?,
         val message: String?,
+        // Relative offset: set an alarm this many seconds from now. The
+        // device resolves it to a local wall-clock time at fire time.
+        val inSeconds: Int? = null,
     ) : ClientAction()
     data class SetTimer(
         val seconds: Int,
@@ -96,10 +100,16 @@ object ClientActions {
     }
 
     private fun parseSetAlarm(obj: JsonObject): ClientAction.SetAlarm? {
+        val message = obj.stringField("message")?.takeIf { it.isNotBlank() }
+        val inSeconds = obj.intField("in_seconds")
+        if (inSeconds != null) {
+            // Relative alarm: resolved to a wall-clock time on-device.
+            if (inSeconds !in 1..MAX_TIMER_SECONDS) return null
+            return ClientAction.SetAlarm(null, null, message, inSeconds)
+        }
         val hour = obj.intField("hour") ?: return null
         val minutes = obj.intField("minutes") ?: return null
         if (hour !in 0..23 || minutes !in 0..59) return null
-        val message = obj.stringField("message")?.takeIf { it.isNotBlank() }
         return ClientAction.SetAlarm(hour, minutes, message)
     }
 

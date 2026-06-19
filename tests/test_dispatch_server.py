@@ -166,6 +166,23 @@ def test_server_actuator_set_alarm_rejects_out_of_range() -> None:
     assert act.client_actions == []
 
 
+def test_server_actuator_set_alarm_relative_queues_in_seconds() -> None:
+    act = ServerActuator()
+    assert act.set_alarm(None, None, "standup", in_seconds=120) is True
+    assert act.set_alarm(None, None, in_seconds=90) is True
+    assert act.client_actions == [
+        {"type": "set_alarm", "in_seconds": 120, "message": "standup"},
+        {"type": "set_alarm", "in_seconds": 90},
+    ]
+
+
+def test_server_actuator_set_alarm_relative_rejects_out_of_range() -> None:
+    act = ServerActuator()
+    assert act.set_alarm(None, None, in_seconds=0) is False
+    assert act.set_alarm(None, None, in_seconds=86_401) is False
+    assert act.client_actions == []
+
+
 def test_server_actuator_set_timer_queues_with_optional_message() -> None:
     act = ServerActuator()
     assert act.set_timer(300, "pasta") is True

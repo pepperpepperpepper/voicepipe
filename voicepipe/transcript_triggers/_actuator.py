@@ -116,7 +116,12 @@ class Actuator(Protocol):
         ...
 
     def set_alarm(
-        self, hour: int, minutes: int, message: str | None = None
+        self,
+        hour: int | None,
+        minutes: int | None,
+        message: str | None = None,
+        *,
+        in_seconds: int | None = None,
     ) -> bool:
         ...
 
@@ -269,7 +274,12 @@ class DesktopActuator:
             return False
 
     def set_alarm(
-        self, hour: int, minutes: int, message: str | None = None
+        self,
+        hour: int | None,
+        minutes: int | None,
+        message: str | None = None,
+        *,
+        in_seconds: int | None = None,
     ) -> bool:
         # No standard desktop equivalent; not in capabilities().
         return False
@@ -389,12 +399,22 @@ class InMemoryActuator:
         return True
 
     def set_alarm(
-        self, hour: int, minutes: int, message: str | None = None
+        self,
+        hour: int | None,
+        minutes: int | None,
+        message: str | None = None,
+        *,
+        in_seconds: int | None = None,
     ) -> bool:
         if CAP_SET_ALARM not in self.caps:
             return False
         self.set_alarm_calls.append(
-            {"hour": hour, "minutes": minutes, "message": message}
+            {
+                "hour": hour,
+                "minutes": minutes,
+                "message": message,
+                "in_seconds": in_seconds,
+            }
         )
         return True
 

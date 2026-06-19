@@ -275,50 +275,11 @@ if _PydanticBaseModel is not None:
         remove: list[str] = []
 
 
-try:
-    from google.oauth2 import id_token as _google_id_token
-    from google.auth.transport import requests as _google_auth_requests
-    from google.auth.exceptions import GoogleAuthError as _GoogleAuthError
-except ImportError:  # pragma: no cover - google-auth optional until Google auth is used
-    _google_id_token = None  # type: ignore[assignment]
-    _google_auth_requests = None  # type: ignore[assignment]
-    _GoogleAuthError = Exception  # type: ignore[assignment,misc]
-
-
 def _resolve_token(token: str | None) -> str | None:
     if token is not None:
         return token.strip() or None
     env = (os.environ.get("VOICEPIPE_DISPATCH_TOKEN") or "").strip()
     return env or None
-
-
-def _resolve_google_client_id() -> str | None:
-    """The OAuth Web client ID used as the verified ``aud`` for Google ID
-    tokens. When unset, the Google Sign-In path is disabled entirely."""
-    return (os.environ.get("GOOGLE_OAUTH_CLIENT_ID") or "").strip() or None
-
-
-def _resolve_allowed_emails() -> frozenset[str]:
-    """Comma-separated allowlist of verified Google emails (lowercased).
-    Empty → every Google identity is rejected (fail-closed)."""
-    raw = os.environ.get("ZWANGLI_ALLOWED_EMAIL") or ""
-    return frozenset(e.strip().lower() for e in raw.split(",") if e.strip())
-
-
-def _static_token_allowed(*, google_enabled: bool) -> bool:
-    """Whether the legacy VOICEPIPE_DISPATCH_TOKEN bearer is honored.
-
-    Explicit ``ZWANGLI_ALLOW_STATIC_TOKEN=1`` forces it on (break-glass).
-    With the env unset, the static token is honored ONLY when Google auth
-    isn't configured — so a pre-Google deploy keeps working, but enabling
-    GOOGLE_OAUTH_CLIENT_ID flips to Google-only unless you opt back in. A
-    static shared secret on a public Function URL is a standing backdoor, so
-    it should be off in steady state.
-    """
-    raw = (os.environ.get("ZWANGLI_ALLOW_STATIC_TOKEN") or "").strip()
-    if raw:
-        return raw == "1"
-    return not google_enabled
 
 
 # Audio upload cap for /transcribe-dispatch. 15 MiB comfortably holds a
@@ -377,63 +338,30 @@ def create_app(*, token: str | None = None):
     from fastapi import Body, Depends, FastAPI, Header, HTTPException
 
     resolved_token = _resolve_token(token)
-    resolved_client_id = _resolve_google_client_id()
-    allowed_emails = _resolve_allowed_emails()
-    google_enabled = resolved_client_id is not None and _google_id_token is not None
-    static_enabled = resolved_token is not None and _static_token_allowed(
-        google_enabled=google_enabled
-    )
-    # Reused HTTP transport (caches Google's signing certs across requests).
-    google_request = _google_auth_requests.Request() if google_enabled else None
+    static_enabled = resolved_token is not None
 
     app = FastAPI(title="Zwingli dispatch", version="1")
 
     def _check_auth(authorization: str | None = Header(default=None)) -> None:
-        # Nothing configured (loopback/dev) — open. run() still refuses a
-        # non-loopback bind without a token, so this can't be public+open.
-        if not google_enabled and not static_enabled:
+        # Auth is a single long-lived shared secret (VOICEPIPE_DISPATCH_TOKEN),
+        # sent as `Authorization: Bearer <token>`. When no token is configured
+        # (loopback/dev) the endpoint is open — run() refuses a non-loopback
+        # bind without a token, so this can't be public+open.
+        if not static_enabled:
             return
 
-        bearer = None
-        if authorization and authorization.startswith("Bearer "):
-            bearer = authorization[len("Bearer ") :].strip()
-        if not bearer:
+        if authorization is None:
             raise HTTPException(status_code=401, detail="missing bearer token")
-
-        # 1) Google Sign-In ID token. verify_oauth2_token checks the signature,
-        #    aud (== our client ID), exp, and iss; we then enforce
-        #    email_verified + the single-email allowlist ourselves.
-        if google_enabled:
-            try:
-                claims = _google_id_token.verify_oauth2_token(
-                    bearer, google_request, resolved_client_id
-                )
-            except (ValueError, _GoogleAuthError):
-                claims = None
-            if claims is not None:
-                if not claims.get("email_verified"):
-                    raise HTTPException(status_code=403, detail="email not verified")
-                email = str(claims.get("email") or "").lower()
-                if allowed_emails and email in allowed_emails:
-                    return
-                raise HTTPException(status_code=403, detail="account not allowed")
-
-        # 2) Legacy static bearer — break-glass; off by default once Google is on.
-        if static_enabled and authorization is not None:
-            expected = f"Bearer {resolved_token}"
-            if hmac.compare_digest(authorization, expected):
-                return
-
-        raise HTTPException(
-            status_code=401, detail="invalid or missing bearer token"
-        )
+        expected = f"Bearer {resolved_token}"
+        if hmac.compare_digest(authorization, expected):
+            return
+        raise HTTPException(status_code=401, detail="invalid or missing bearer token")
 
     @app.get("/health")
     def health() -> dict[str, Any]:
         return {
             "ok": True,
-            "auth_required": google_enabled or static_enabled,
-            "google_auth": google_enabled,
+            "auth_required": static_enabled,
         }
 
     @app.post(

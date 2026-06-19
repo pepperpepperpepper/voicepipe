@@ -3,13 +3,8 @@
     <string name="app_name">Zwangli</string>
     <string name="main_subtitle">Speak a transcript, or type one and tap Send to drive the dispatch pipeline end-to-end. Server URL and permissions live in the Configurator (overflow menu).</string>
     <string name="hint_server_url">Server URL</string>
-    <string name="hint_token">Bearer token (break-glass / advanced)</string>
-    <string name="action_sign_in_google">Sign in with Google</string>
-    <string name="action_switch_account">Switch Google account</string>
-    <string name="action_sign_out">Sign out</string>
-    <string name="account_signed_in">Signed in as %1$s</string>
-    <string name="account_not_signed_in">Not signed in — tap to sign in with Google</string>
-    <string name="account_sign_in_failed">Sign-in failed: %1$s</string>
+    <string name="hint_token">Access token</string>
+    <string name="token_help">Paste your personal access token (the dispatch server\'s VOICEPIPE_DISPATCH_TOKEN). It is stored on this device and sent as the bearer on every request — set it once.</string>
     <string name="hint_transcript">Transcript</string>
     <string name="action_send">Send</string>
     <string name="default_server_url">http://localhost:8765</string>
@@ -104,5 +99,5 @@
     <string name="action_run_tests">Run audio self-test</string>
     <string name="test_log_placeholder">Tap “Run audio self-test” to start.</string>
     <string name="test_manifest_error">Couldn\'t load test manifest: %1$s</string>
-    <string name="test_not_signed_in">Not signed in — sign in with Google (or set a token) in the Configurator first.</string>
+    <string name="test_no_token">No access token set — paste it in the Configurator first.</string>
 </resources>

@@ -18,12 +18,6 @@ OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 STT_MODEL="${VOICEPIPE_DISPATCH_STT_MODEL:-groq:whisper-large-v3-turbo}"
 REGION="${AWS_REGION:-us-east-1}"          # near OpenAI/Groq endpoints
 STACK="${ZWANGLI_STACK_NAME:-zwangli-dispatch}"
-# Google Sign-In (optional until the OAuth Web client ID exists). Set
-# GOOGLE_OAUTH_CLIENT_ID to enable; ZWANGLI_ALLOW_STATIC_TOKEN=1 keeps the
-# legacy bearer as break-glass during cutover (set empty for Google-only).
-GOOGLE_OAUTH_CLIENT_ID="${GOOGLE_OAUTH_CLIENT_ID:-}"
-ALLOWED_EMAIL="${ZWANGLI_ALLOWED_EMAIL:-peppersclothescult@gmail.com,ron@blonderon.com,fenlonorama@gmail.com}"
-ALLOW_STATIC_TOKEN="${ZWANGLI_ALLOW_STATIC_TOKEN:-1}"
 
 cd "$(dirname "$0")"
 
@@ -43,10 +37,7 @@ sam deploy \
     "DispatchToken=${VOICEPIPE_DISPATCH_TOKEN}" \
     "GroqApiKey=${GROQ_API_KEY}" \
     "OpenAiApiKey=${OPENAI_API_KEY}" \
-    "SttModel=${STT_MODEL}" \
-    "GoogleOauthClientId=${GOOGLE_OAUTH_CLIENT_ID}" \
-    "AllowedEmail=${ALLOWED_EMAIL}" \
-    "AllowStaticToken=${ALLOW_STATIC_TOKEN}"
+    "SttModel=${STT_MODEL}"
 
 echo ">> Function URL:"
 aws cloudformation describe-stacks \

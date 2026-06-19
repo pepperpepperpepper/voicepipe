@@ -52,9 +52,9 @@ class TestActivity : AppCompatActivity() {
             return
         }
         val url = Settings.normalizeUrl(settings.serverUrl)
-        val bearer = settings.googleIdToken.ifBlank { settings.token }
+        val bearer = settings.token
         if (bearer.isBlank()) {
-            log.text = getString(R.string.test_not_signed_in)
+            log.text = getString(R.string.test_no_token)
             return
         }
         runButton.isEnabled = false

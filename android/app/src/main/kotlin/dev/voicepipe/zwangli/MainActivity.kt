@@ -45,25 +45,6 @@ class MainActivity : AppCompatActivity() {
 
     private val recorder = AudioRecorder()
     private var pendingAutoListen: Boolean = false
-    private val googleSignIn by lazy { GoogleSignInClient(this) }
-
-    /** Fresh bearer for an authenticated call: silently re-mint the Google ID
-     *  token if signed in (they expire ~1h), else fall back to the stored
-     *  token / manual break-glass token. Best-effort — never throws. */
-    private suspend fun freshBearer(): String {
-        if (settings.googleEmail.isNotBlank()) {
-            try {
-                val account = googleSignIn.silentSignIn(this)
-                if (account != null) {
-                    settings.googleIdToken = account.idToken
-                    if (!account.email.isNullOrBlank()) settings.googleEmail = account.email
-                }
-            } catch (_: Exception) {
-                // Keep the existing token; a 401 will tell the user to re-sign-in.
-            }
-        }
-        return settings.googleIdToken.ifBlank { settings.token }
-    }
 
     private val requestMicPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -184,7 +165,7 @@ class MainActivity : AppCompatActivity() {
         send.isEnabled = false
         response.text = "…"
         lifecycleScope.launch {
-            val bearer = freshBearer()
+            val bearer = settings.token
             val result = runCatching {
                 withContext(Dispatchers.IO) {
                     client.transcribeDispatch(
@@ -224,7 +205,7 @@ class MainActivity : AppCompatActivity() {
         send.isEnabled = false
         response.text = "…"
         lifecycleScope.launch {
-            val bearer = freshBearer()
+            val bearer = settings.token
             val result = runCatching {
                 withContext(Dispatchers.IO) {
                     client.dispatch(

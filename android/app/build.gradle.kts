@@ -22,16 +22,6 @@ android {
         versionCode = gitVersionCode
         versionName = "0.1.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-
-        // OAuth Web client ID for "Sign in with Google" (Credential Manager
-        // serverClientId). PLACEHOLDER — replace with the real client ID from
-        // Google Cloud Console, then rebuild. The backend verifies the same id
-        // as the token audience (GOOGLE_OAUTH_CLIENT_ID).
-        buildConfigField(
-            "String",
-            "GOOGLE_WEB_CLIENT_ID",
-            "\"647211119464-52i8qgat3llgcnupgp0sl467k3sc5eea.apps.googleusercontent.com\"",
-        )
     }
 
     buildFeatures {
@@ -117,11 +107,6 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.okhttp)
-    // Sign in with Google (Credential Manager). play-services-auth + googleid
-    // are proprietary (Google Play Services) — Option A single GMS build.
-    implementation(libs.androidx.credentials)
-    implementation(libs.androidx.credentials.play.services.auth)
-    implementation(libs.googleid)
 
     testImplementation(libs.junit)
     testImplementation(libs.okhttp.mockwebserver)

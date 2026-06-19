@@ -78,6 +78,9 @@ curl -s -X POST "${URL%/}/transcribe-dispatch" \
   read-only on config and Lambda-safe.
 - **Apple Silicon:** the template targets `x86_64`. Building on arm64 needs
   `--platform linux/amd64` (emulation) or switch `Architectures` to `arm64`.
-- **Auth v1:** static bearer token. Google Sign-In (ID-token verification at the
-  existing `_check_auth` seam) is the planned next step.
+- **Auth:** a single long-lived shared secret (`VOICEPIPE_DISPATCH_TOKEN`) sent
+  as `Authorization: Bearer <token>`. It's a personal API key for a single-user
+  backend — paste it once into the app's Configurator. Rotate by redeploying
+  with a new token. Per-account actions (email/calendar From-account) are chosen
+  on-device in Gmail/Calendar, independent of this auth.
 ```

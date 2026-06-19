@@ -106,7 +106,31 @@ class ConfiguratorActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        refreshAll()
+        // Google ID tokens expire (~1h). If signed in, silently re-mint a
+        // fresh token before the (auth-gated) /triggers fetch in refreshAll,
+        // so a stale token doesn't surface as a spurious 401.
+        if (settings.googleEmail.isBlank()) {
+            refreshAll()
+            return
+        }
+        lifecycleScope.launch {
+            refreshGoogleToken()
+            updateAccountStatus()
+            refreshAll()
+        }
+    }
+
+    /** Best-effort silent token refresh; no-op if it can't re-mint without UI. */
+    private suspend fun refreshGoogleToken() {
+        try {
+            val account = googleSignIn.silentSignIn(this@ConfiguratorActivity)
+            if (account != null) {
+                settings.googleIdToken = account.idToken
+                if (!account.email.isNullOrBlank()) settings.googleEmail = account.email
+            }
+        } catch (_: Exception) {
+            // Leave the existing token in place; the user can re-sign-in.
+        }
     }
 
     override fun onSupportNavigateUp(): Boolean {

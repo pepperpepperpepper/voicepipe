@@ -169,14 +169,11 @@ class ClientActionExecutor(
     }
 
     private fun fireSetAlarm(action: ClientAction.SetAlarm): Boolean {
-        // Resolve a relative offset ("in 2 minutes") to a local wall-clock
+        // Resolve a relative offset ("in 30 seconds") to a local wall-clock
         // time here on the device, where the timezone is known. Absolute
         // alarms use the hour/minutes the server already computed.
         val (hour, minutes) = if (action.inSeconds != null) {
-            val target = Calendar.getInstance().apply {
-                add(Calendar.SECOND, action.inSeconds)
-            }
-            target.get(Calendar.HOUR_OF_DAY) to target.get(Calendar.MINUTE)
+            relativeAlarmHourMinute(Calendar.getInstance(), action.inSeconds)
         } else {
             (action.hour ?: return false) to (action.minutes ?: return false)
         }
@@ -300,5 +297,25 @@ class ClientActionExecutor(
 
     companion object {
         private const val TAG = "ClientActionExecutor"
+
+        /**
+         * Wall-clock (hour, minute) for a relative alarm offset.
+         *
+         * ACTION_SET_ALARM is minute-granular and fires at hh:mm:00, so if we
+         * naively truncated `now + inSeconds` to its minute, any sub-minute
+         * remainder would put that minute boundary in the *past* and the clock
+         * app would schedule the alarm for TOMORROW (the "30 seconds from now →
+         * tomorrow" bug). Round UP to the next whole minute whenever there's a
+         * remainder, so a relative alarm always fires in the near future.
+         */
+        internal fun relativeAlarmHourMinute(now: Calendar, inSeconds: Int): Pair<Int, Int> {
+            val target = (now.clone() as Calendar).apply { add(Calendar.SECOND, inSeconds) }
+            if (target.get(Calendar.SECOND) > 0 || target.get(Calendar.MILLISECOND) > 0) {
+                target.add(Calendar.MINUTE, 1)
+                target.set(Calendar.SECOND, 0)
+                target.set(Calendar.MILLISECOND, 0)
+            }
+            return target.get(Calendar.HOUR_OF_DAY) to target.get(Calendar.MINUTE)
+        }
     }
 }

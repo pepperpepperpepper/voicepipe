@@ -279,10 +279,12 @@ class ClientActionExecutor(
 
     private fun fireIntent(intent: Intent, label: String): Boolean {
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        if (intent.resolveActivity(context.packageManager) == null) {
-            Log.w(TAG, "No activity to handle $label (action=${intent.action})")
-            return false
-        }
+        // NB: do NOT pre-check intent.resolveActivity() here. On Android 11+
+        // (API 30) package visibility makes resolveActivity()/queryIntentActivities()
+        // return null for implicit intents (mailto:, ACTION_VIEW, …) unless the
+        // app declares matching <queries> — even when a handler is installed.
+        // startActivity() itself is NOT restricted, so we just launch and let
+        // ActivityNotFoundException report the genuine "no app installed" case.
         return try {
             context.startActivity(intent)
             true

@@ -289,12 +289,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderSuccess(resp: DispatchResponse): String {
-        val typingResult = tryTypeOutput(resp.outputText)
+        // Only attempt to type when there's actually text to type. Action-only
+        // verbs (email/alarm/calendar/…) return empty output_text, and typing
+        // "" would otherwise surface a misleading "no editable field" warning.
+        val typingResult =
+            if (resp.outputText.isEmpty()) null else tryTypeOutput(resp.outputText)
         val summary = executor.execute(resp.clientActions)
         return buildString {
             append("ok=").append(resp.ok).append('\n')
             append("output_text=").append(resp.outputText).append('\n')
-            append(typingResult).append('\n')
+            if (typingResult != null) append(typingResult).append('\n')
             if (resp.clientActions.isNotEmpty()) {
                 append("client_actions=").append(resp.clientActions).append('\n')
                 append("applied: clipboard=").append(summary.clipboardApplied)

@@ -207,10 +207,17 @@ class ClientActionExecutor(
 
     private fun fireEmail(to: String?, subject: String?, body: String?): Boolean {
         // ACTION_SENDTO + mailto: targets email apps only and opens the
-        // composer pre-filled. The user picks the From account + recipient
-        // (the mail app autocompletes contacts) and sends. No permissions.
+        // composer pre-filled. The user picks the From account and sends.
+        // If `to` is a spoken NAME (not an address), resolve it against the
+        // device Contacts so the mail is actually addressed; fall back to the
+        // raw name (Gmail will let the user fix it) if there's no match or no
+        // READ_CONTACTS permission.
+        val recipient = to?.trim()?.takeIf { it.isNotBlank() }?.let { name ->
+            if (ContactResolver.looksLikeEmail(name)) name
+            else ContactResolver.emailForName(context, name) ?: name
+        }
         val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:")).apply {
-            if (!to.isNullOrBlank()) putExtra(Intent.EXTRA_EMAIL, arrayOf(to))
+            if (recipient != null) putExtra(Intent.EXTRA_EMAIL, arrayOf(recipient))
             if (!subject.isNullOrBlank()) putExtra(Intent.EXTRA_SUBJECT, subject)
             if (!body.isNullOrBlank()) putExtra(Intent.EXTRA_TEXT, body)
         }

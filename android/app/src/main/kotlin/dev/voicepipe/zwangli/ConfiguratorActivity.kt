@@ -43,12 +43,14 @@ class ConfiguratorActivity : AppCompatActivity() {
 
     private lateinit var badgeAccessibility: TextView
     private lateinit var badgeMicrophone: TextView
+    private lateinit var badgeContacts: TextView
     private lateinit var badgeNotifications: TextView
     private lateinit var badgeService: TextView
     private lateinit var badgeAlarm: TextView
 
     private lateinit var buttonAccessibility: Button
     private lateinit var buttonMicrophone: Button
+    private lateinit var buttonContacts: Button
     private lateinit var buttonNotifications: Button
     private lateinit var buttonService: Button
     private lateinit var cardNotifications: View
@@ -69,6 +71,10 @@ class ConfiguratorActivity : AppCompatActivity() {
     private lateinit var buttonTriggerAdd: Button
 
     private val requestMicPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+            refreshAll()
+        }
+    private val requestContactsPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
             refreshAll()
         }
@@ -112,11 +118,13 @@ class ConfiguratorActivity : AppCompatActivity() {
     private fun bindViews() {
         badgeAccessibility = findViewById(R.id.badge_accessibility)
         badgeMicrophone = findViewById(R.id.badge_microphone)
+        badgeContacts = findViewById(R.id.badge_contacts)
         badgeNotifications = findViewById(R.id.badge_notifications)
         badgeService = findViewById(R.id.badge_service)
         badgeAlarm = findViewById(R.id.badge_alarm)
         buttonAccessibility = findViewById(R.id.button_accessibility)
         buttonMicrophone = findViewById(R.id.button_microphone)
+        buttonContacts = findViewById(R.id.button_contacts)
         buttonNotifications = findViewById(R.id.button_notifications)
         buttonService = findViewById(R.id.button_service)
         cardNotifications = findViewById(R.id.card_notifications)
@@ -142,6 +150,10 @@ class ConfiguratorActivity : AppCompatActivity() {
         buttonMicrophone.setOnClickListener {
             if (hasMicPermission()) openAppDetails()
             else requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
+        }
+        buttonContacts.setOnClickListener {
+            if (hasContactsPermission()) openAppDetails()
+            else requestContactsPermission.launch(Manifest.permission.READ_CONTACTS)
         }
         buttonNotifications.setOnClickListener {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return@setOnClickListener
@@ -217,6 +229,7 @@ class ConfiguratorActivity : AppCompatActivity() {
     private fun refreshAll() {
         refreshAccessibility()
         refreshMicrophone()
+        refreshContacts()
         refreshNotifications()
         refreshService()
         refreshAlarm()
@@ -233,6 +246,12 @@ class ConfiguratorActivity : AppCompatActivity() {
         val ok = hasMicPermission()
         renderBadge(badgeMicrophone, ok)
         buttonMicrophone.text = getString(if (ok) R.string.action_revisit else R.string.action_grant)
+    }
+
+    private fun refreshContacts() {
+        val ok = hasContactsPermission()
+        renderBadge(badgeContacts, ok)
+        buttonContacts.text = getString(if (ok) R.string.action_revisit else R.string.action_grant)
     }
 
     private fun refreshNotifications() {
@@ -267,6 +286,10 @@ class ConfiguratorActivity : AppCompatActivity() {
 
     private fun hasMicPermission(): Boolean = ContextCompat.checkSelfPermission(
         this, Manifest.permission.RECORD_AUDIO,
+    ) == PackageManager.PERMISSION_GRANTED
+
+    private fun hasContactsPermission(): Boolean = ContextCompat.checkSelfPermission(
+        this, Manifest.permission.READ_CONTACTS,
     ) == PackageManager.PERMISSION_GRANTED
 
     private fun hasNotificationsPermission(): Boolean =

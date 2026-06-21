@@ -60,6 +60,8 @@
     <string name="perm_accessibility_desc">Types dispatch responses into whichever app is focused. Required for the dictate-anywhere flow.</string>
     <string name="perm_microphone_title">Microphone</string>
     <string name="perm_microphone_desc">Captures speech for the on-device recognizer.</string>
+    <string name="perm_contacts_title">Contacts</string>
+    <string name="perm_contacts_desc">Looks up a spoken recipient name (\"email Ran Blake\") to address email to the right contact.</string>
     <string name="perm_notifications_title">Notifications</string>
     <string name="perm_notifications_desc">Shows the persistent dictation notification with the Dictate / Stop actions.</string>
     <string name="perm_service_title">Persistent dictation</string>

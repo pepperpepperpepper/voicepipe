@@ -73,18 +73,25 @@ class MainActivity : AppCompatActivity() {
         send.setOnClickListener { onSend() }
         configureMic()
         renderHistory(settings.transcriptHistory)
-        pendingAutoListen = intent?.getBooleanExtra(
-            ZwangliForegroundService.EXTRA_AUTO_LISTEN,
-            false,
-        ) == true
+        pendingAutoListen = shouldAutoListen(intent)
     }
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (intent?.getBooleanExtra(ZwangliForegroundService.EXTRA_AUTO_LISTEN, false) == true) {
+        if (shouldAutoListen(intent)) {
             pendingAutoListen = true
         }
+    }
+
+    /** True when we were launched to immediately start listening: the
+     *  foreground-service tap, or the assist gesture / "Hold for Assistant"
+     *  side button (ACTION_ASSIST / VOICE_COMMAND). */
+    private fun shouldAutoListen(intent: Intent?): Boolean {
+        if (intent == null) return false
+        if (intent.getBooleanExtra(ZwangliForegroundService.EXTRA_AUTO_LISTEN, false)) return true
+        return intent.action == Intent.ACTION_ASSIST ||
+            intent.action == Intent.ACTION_VOICE_COMMAND
     }
 
     override fun onResume() {

@@ -7,6 +7,7 @@
     "zwangly":  { "action": "llm_route" },
     "zwanglee": { "action": "llm_route" },
     "zwang lee": { "action": "llm_route" },
+    "zwang li": { "action": "llm_route" },
     "zwongly":  { "action": "llm_route" },
     "zwongli":  { "action": "llm_route" },
     "zhuangli": { "action": "llm_route" },

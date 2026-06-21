@@ -52,6 +52,14 @@
             android:layout_marginTop="8dp"
             android:text="@string/action_send" />
 
+        <TextView
+            android:id="@+id/status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:textAppearance="?attr/textAppearanceTitleMedium"
+            android:visibility="gone" />
+
         <LinearLayout
             android:id="@+id/history_section"
             android:layout_width="match_parent"

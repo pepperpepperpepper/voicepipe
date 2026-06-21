@@ -38,6 +38,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mic: Button
     private lateinit var transcript: EditText
     private lateinit var send: Button
+    private lateinit var status: TextView
     private lateinit var response: TextView
     private lateinit var historySection: LinearLayout
     private lateinit var historyChips: ChipGroup
@@ -61,6 +62,7 @@ class MainActivity : AppCompatActivity() {
         mic = findViewById(R.id.mic)
         transcript = findViewById(R.id.transcript)
         send = findViewById(R.id.send)
+        status = findViewById(R.id.status)
         response = findViewById(R.id.response)
         historySection = findViewById(R.id.history_section)
         historyChips = findViewById(R.id.history_chips)
@@ -117,6 +119,17 @@ class MainActivity : AppCompatActivity() {
         mic.setOnClickListener { onMicClick() }
     }
 
+    /** Drive the status pane. Pass null to hide it. */
+    private fun setStatus(text: String?) {
+        if (text.isNullOrEmpty()) {
+            status.visibility = View.GONE
+            status.text = ""
+        } else {
+            status.text = text
+            status.visibility = View.VISIBLE
+        }
+    }
+
     private fun onMicClick() {
         if (recorder.isRecording) {
             stopAndUpload()
@@ -142,12 +155,14 @@ class MainActivity : AppCompatActivity() {
         }
         // Tap again to stop + upload. (No on-device VAD; manual stop for v1.)
         mic.text = getString(R.string.action_mic_listening)
+        setStatus(getString(R.string.status_listening))
     }
 
     private fun stopAndUpload() {
         val audio = recorder.stop()
         mic.text = getString(R.string.action_mic_start)
         if (audio == null) {
+            setStatus(null)
             Toast.makeText(
                 this,
                 getString(R.string.mic_error_prefix) + "no audio captured",
@@ -157,14 +172,17 @@ class MainActivity : AppCompatActivity() {
         }
         val url = settings.serverUrl
         if (url.isEmpty()) {
+            setStatus(null)
             response.text = getString(R.string.response_placeholder)
             return
         }
         val normalizedUrl = Settings.normalizeUrl(url)
+        setStatus(getString(R.string.status_uploading))
         mic.isEnabled = false
         send.isEnabled = false
         response.text = "…"
         lifecycleScope.launch {
+            setStatus(getString(R.string.status_working))
             val bearer = settings.token
             val result = runCatching {
                 withContext(Dispatchers.IO) {
@@ -184,6 +202,7 @@ class MainActivity : AppCompatActivity() {
                 onFailure = { "⚠ HTTP error: ${it.message}" },
             )
             response.text = rendered
+            setStatus(statusForResult(result))
             mic.isEnabled = true
             send.isEnabled = true
             // Record the server-returned transcript so the text path can replay it.
@@ -193,6 +212,17 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
+
+    /** Concise status-pane line summarizing a dispatch round-trip outcome. */
+    private fun statusForResult(result: Result<DispatchResponse>): String =
+        result.fold(
+            onSuccess = { resp ->
+                val heard = resp.transcript?.takeIf { it.isNotBlank() }
+                if (heard != null) getString(R.string.status_heard_done, heard)
+                else getString(R.string.status_done)
+            },
+            onFailure = { getString(R.string.status_error, it.message ?: "request failed") },
+        )
 
     private fun onSend() {
         val text = transcript.text.toString()
@@ -204,6 +234,7 @@ class MainActivity : AppCompatActivity() {
         val normalizedUrl = Settings.normalizeUrl(url)
         send.isEnabled = false
         response.text = "…"
+        setStatus(getString(R.string.status_working))
         lifecycleScope.launch {
             val bearer = settings.token
             val result = runCatching {
@@ -223,6 +254,7 @@ class MainActivity : AppCompatActivity() {
                 onFailure = { "⚠ HTTP error: ${it.message}" },
             )
             response.text = rendered
+            setStatus(statusForResult(result))
             send.isEnabled = true
             // Record the transcript on every successful HTTP round-trip,
             // even when the server returned ok=false. The history is the

@@ -25,9 +25,16 @@
     <string name="action_service_enable">Enable persistent dictation notification</string>
     <string name="action_service_disable">Disable persistent dictation notification</string>
     <string name="action_start_on_boot">Auto-start notification on boot</string>
-    <string name="action_mic_start">🎤 Hold to speak</string>
+    <string name="action_mic_start">🎤 Tap to speak</string>
     <string name="action_mic_listening">● Listening… tap to stop</string>
     <string name="action_mic_unavailable">Speech recognition unavailable on this device</string>
+    <!-- Status pane phases -->
+    <string name="status_listening">🎤 Listening…</string>
+    <string name="status_uploading">⬆ Uploading audio…</string>
+    <string name="status_working">⚙ Working…</string>
+    <string name="status_heard_done">✓ \"%1$s\"</string>
+    <string name="status_done">✓ Done</string>
+    <string name="status_error">⚠ %1$s</string>
     <string name="mic_permission_denied">Microphone permission denied — using text input instead</string>
     <string name="mic_error_prefix">Speech: </string>
 

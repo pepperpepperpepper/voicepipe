@@ -19,6 +19,7 @@ class ClientActionsTest {
             "set_alarm",
             "set_timer",
             "dial",
+            "resolve_dial",
             "navigate",
             "accessibility_global",
             "calendar",

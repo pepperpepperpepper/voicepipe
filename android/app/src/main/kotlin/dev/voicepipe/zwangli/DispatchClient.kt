@@ -49,6 +49,31 @@ class DispatchClient(
         return execute(urlBuilder.build(), token, body)
     }
 
+    /**
+     * Resolve a business/place name to a phone number via the server's
+     * `/resolve-call` (which calls Serper). Used by the two-step "call" flow.
+     */
+    fun resolveCall(
+        baseUrl: String,
+        token: String?,
+        query: String,
+    ): ResolveCallResponse {
+        val url = baseUrl.trimEnd('/').toHttpUrl().newBuilder()
+            .addPathSegment("resolve-call")
+            .build()
+        val body = json.encodeToString(ResolveCallRequest.serializer(), ResolveCallRequest(query))
+            .toRequestBody(JSON_MEDIA_TYPE)
+        val builder = Request.Builder().url(url).post(body)
+        if (!token.isNullOrBlank()) builder.header("Authorization", "Bearer $token")
+        httpClient.newCall(builder.build()).execute().use { response ->
+            val responseBody = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw IOException("HTTP ${response.code}: ${response.message}")
+            }
+            return json.decodeFromString(ResolveCallResponse.serializer(), responseBody)
+        }
+    }
+
     /** GET raw bytes from a URL (e.g. a hosted audio test sample). */
     fun fetchBytes(url: String): ByteArray {
         val request = Request.Builder().url(url).get().build()

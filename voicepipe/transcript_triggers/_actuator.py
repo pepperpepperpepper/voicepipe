@@ -34,6 +34,9 @@ CAP_OPEN_URL = "open_url"
 CAP_SET_ALARM = "set_alarm"
 CAP_SET_TIMER = "set_timer"
 CAP_DIAL = "dial"
+# Client can resolve a business name → number itself (via /resolve-call) and
+# show step-by-step status, instead of the server resolving inline.
+CAP_RESOLVE_DIAL = "resolve_dial"
 CAP_NAVIGATE = "navigate"
 CAP_ACCESSIBILITY_GLOBAL = "accessibility_global"
 CAP_CALENDAR = "calendar"

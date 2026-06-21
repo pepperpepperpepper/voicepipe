@@ -183,7 +183,9 @@ def test_server_actuator_set_alarm_relative_rejects_out_of_range() -> None:
     assert act.client_actions == []
 
 
-def test_server_actuator_call_business_resolves_and_queues_dial(monkeypatch) -> None:
+def test_server_actuator_call_business_inline_resolves_when_no_resolve_cap(
+    monkeypatch,
+) -> None:
     import voicepipe.serper_client as serper_client
 
     monkeypatch.setattr(
@@ -195,7 +197,8 @@ def test_server_actuator_call_business_resolves_and_queues_dial(monkeypatch) -> 
             "address": "380 Weihai Rd",
         },
     )
-    act = ServerActuator()
+    # Client supports dial but NOT resolve_dial → server resolves inline.
+    act = ServerActuator(capabilities={"dial"})
     assert act.call_business("Sukhothai Hotel Shanghai") is True
     assert act.client_actions == [
         {
@@ -207,13 +210,23 @@ def test_server_actuator_call_business_resolves_and_queues_dial(monkeypatch) -> 
     ]
 
 
+def test_server_actuator_call_business_defers_to_client_when_resolve_cap() -> None:
+    # Client advertises resolve_dial → server hands back the query for the
+    # client's two-step (status → /resolve-call → dial). No Serper call here.
+    act = ServerActuator(capabilities={"dial", "resolve_dial"})
+    assert act.call_business("Sukhothai Hotel Shanghai") is True
+    assert act.client_actions == [
+        {"type": "resolve_dial", "query": "Sukhothai Hotel Shanghai"}
+    ]
+
+
 def test_server_actuator_call_business_no_phone_returns_false(monkeypatch) -> None:
     import voicepipe.serper_client as serper_client
 
     monkeypatch.setattr(
         serper_client, "lookup_place", lambda q, **k: {"name": "X", "phone": "", "address": ""}
     )
-    act = ServerActuator()
+    act = ServerActuator(capabilities={"dial"})  # inline path
     assert act.call_business("place with no phone") is False
     assert act.client_actions == []
 
@@ -221,6 +234,37 @@ def test_server_actuator_call_business_no_phone_returns_false(monkeypatch) -> No
 def test_server_actuator_call_business_requires_dial_capability(monkeypatch) -> None:
     act = ServerActuator(capabilities=set())  # no dial
     assert act.call_business("anything") is False
+
+
+def test_resolve_call_endpoint_returns_number(client, monkeypatch) -> None:
+    import voicepipe.serper_client as serper_client
+
+    monkeypatch.setattr(
+        serper_client,
+        "lookup_place",
+        lambda q, **k: {
+            "name": "The Sukhothai Shanghai",
+            "phone": "+86 21 5237 8888",
+            "address": "380 Weihai Rd",
+        },
+    )
+    resp = client.post("/resolve-call", json={"query": "Sukhothai Hotel Shanghai"})
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "ok": True,
+        "number": "+86 21 5237 8888",
+        "name": "The Sukhothai Shanghai",
+        "address": "380 Weihai Rd",
+    }
+
+
+def test_resolve_call_endpoint_not_found(client, monkeypatch) -> None:
+    import voicepipe.serper_client as serper_client
+
+    monkeypatch.setattr(serper_client, "lookup_place", lambda q, **k: None)
+    resp = client.post("/resolve-call", json={"query": "nope"})
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": False, "error": "not_found"}
 
 
 def test_server_actuator_set_timer_queues_with_optional_message() -> None:

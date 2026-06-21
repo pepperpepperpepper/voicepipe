@@ -25,6 +25,9 @@ sealed class ClientAction {
         val message: String?,
     ) : ClientAction()
     data class Dial(val number: String) : ClientAction()
+    // Resolve a business/place name → number via /resolve-call, then dial.
+    // Handled by MainActivity (async + status), not the synchronous executor.
+    data class ResolveDial(val query: String) : ClientAction()
     data class Navigate(
         val destination: String,
         val mode: String?,
@@ -49,6 +52,7 @@ object ClientActions {
         "set_alarm",
         "set_timer",
         "dial",
+        "resolve_dial",
         "navigate",
         "accessibility_global",
         "calendar",
@@ -85,6 +89,9 @@ object ClientActions {
             "dial" -> obj.stringField("number")
                 ?.takeIf { it.isNotBlank() }
                 ?.let(ClientAction::Dial)
+            "resolve_dial" -> obj.stringField("query")
+                ?.takeIf { it.isNotBlank() }
+                ?.let(ClientAction::ResolveDial)
             "navigate" -> parseNavigate(obj)
             "accessibility_global" -> parseAccessibilityGlobal(obj)
             "calendar_event" -> obj.stringField("title")

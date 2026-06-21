@@ -58,6 +58,10 @@ class ClientActionExecutor(
                 is ClientAction.Dial -> {
                     if (fireDial(action.number)) intentsFired++
                 }
+                is ClientAction.ResolveDial -> {
+                    // Handled asynchronously by MainActivity (resolve → dial,
+                    // with status). No-op here so it isn't counted as unknown.
+                }
                 is ClientAction.Navigate -> {
                     if (fireNavigate(action.destination, action.mode)) intentsFired++
                 }

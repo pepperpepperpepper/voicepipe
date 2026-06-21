@@ -23,6 +23,8 @@ import com.google.android.material.chip.ChipGroup
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 
 /** Operational test bench: mic → record audio → /transcribe-dispatch (server
  *  STT + routing) → response. The editable transcript field + Send button keep
@@ -202,7 +204,9 @@ class MainActivity : AppCompatActivity() {
                 onFailure = { "⚠ HTTP error: ${it.message}" },
             )
             response.text = rendered
-            setStatus(statusForResult(result))
+            if (!handleResolveDial(result.getOrNull(), normalizedUrl, settings.token)) {
+                setStatus(statusForResult(result))
+            }
             mic.isEnabled = true
             send.isEnabled = true
             // Record the server-returned transcript so the text path can replay it.
@@ -211,6 +215,39 @@ class MainActivity : AppCompatActivity() {
                 renderHistory(settings.recordTranscript(heard))
             }
         }
+    }
+
+    /**
+     * If the response contains a `resolve_dial` action, run the two-step call
+     * flow with live status: 🔎 Searching → resolve via /resolve-call → ✓ Found
+     * → dial. Returns true if it handled one (and set its own status), so the
+     * caller skips the generic status line.
+     */
+    private suspend fun handleResolveDial(
+        resp: DispatchResponse?,
+        url: String,
+        bearer: String,
+    ): Boolean {
+        val query = resp?.clientActions
+            ?.let { ClientActions.parseAll(it) }
+            ?.filterIsInstance<ClientAction.ResolveDial>()
+            ?.firstOrNull()?.query ?: return false
+        setStatus(getString(R.string.status_searching, query))
+        val res = runCatching {
+            withContext(Dispatchers.IO) { client.resolveCall(url, bearer, query) }
+        }.getOrNull()
+        if (res?.ok == true && !res.number.isNullOrBlank()) {
+            val label = res.name?.takeIf { it.isNotBlank() } ?: query
+            setStatus(getString(R.string.status_found, label, res.number))
+            val dial = buildJsonObject {
+                put("type", JsonPrimitive("dial"))
+                put("number", JsonPrimitive(res.number))
+            }
+            executor.execute(listOf(dial))
+        } else {
+            setStatus(getString(R.string.status_no_number, query))
+        }
+        return true
     }
 
     /** Concise status-pane line summarizing a dispatch round-trip outcome. */
@@ -254,7 +291,9 @@ class MainActivity : AppCompatActivity() {
                 onFailure = { "⚠ HTTP error: ${it.message}" },
             )
             response.text = rendered
-            setStatus(statusForResult(result))
+            if (!handleResolveDial(result.getOrNull(), normalizedUrl, settings.token)) {
+                setStatus(statusForResult(result))
+            }
             send.isEnabled = true
             // Record the transcript on every successful HTTP round-trip,
             // even when the server returned ok=false. The history is the

@@ -13,6 +13,20 @@ data class DispatchRequest(
 )
 
 @Serializable
+data class ResolveCallRequest(
+    val query: String,
+)
+
+@Serializable
+data class ResolveCallResponse(
+    val ok: Boolean,
+    val number: String? = null,
+    val name: String? = null,
+    val address: String? = null,
+    val error: String? = null,
+)
+
+@Serializable
 data class DispatchResponse(
     val ok: Boolean,
     @SerialName("output_text") val outputText: String,

@@ -62,6 +62,7 @@ from voicepipe.transcript_triggers._actuator import (
     CAP_EMAIL,
     CAP_CLIPBOARD,
     CAP_DIAL,
+    CAP_RESOLVE_DIAL,
     CAP_NAVIGATE,
     CAP_OPEN_URL,
     CAP_SET_ALARM,
@@ -88,6 +89,7 @@ _ALL_CAPS: frozenset[str] = frozenset(
         CAP_SET_ALARM,
         CAP_SET_TIMER,
         CAP_DIAL,
+        CAP_RESOLVE_DIAL,
         CAP_NAVIGATE,
         CAP_ACCESSIBILITY_GLOBAL,
         CAP_CALENDAR,
@@ -200,11 +202,16 @@ class ServerActuator:
         return True
 
     def call_business(self, query: str) -> bool:
-        # Resolve a business/place NAME to a phone number via Serper, then queue
-        # a standard dial action the client already knows how to execute. The
-        # SERPER_API_KEY is a server secret; this never runs client-side.
+        # Two paths:
+        # - If the client can resolve+show-status itself (CAP_RESOLVE_DIAL),
+        #   hand back a `resolve_dial` action so it can display "🔎 Searching…"
+        #   and call /resolve-call. Keeps the SERPER call server-side there too.
+        # - Otherwise resolve inline now (older clients) and queue a dial.
         if CAP_DIAL not in self._caps or not query.strip():
             return False
+        if CAP_RESOLVE_DIAL in self._caps:
+            self.client_actions.append({"type": "resolve_dial", "query": query.strip()})
+            return True
         from voicepipe.serper_client import SerperError, lookup_place
 
         try:
@@ -300,6 +307,9 @@ if _PydanticBaseModel is not None:
     class TriggersPatchRequest(_PydanticBaseModel):  # type: ignore[misc,valid-type]
         add: list[str] = []
         remove: list[str] = []
+
+    class ResolveCallRequest(_PydanticBaseModel):  # type: ignore[misc,valid-type]
+        query: str
 
 
 def _resolve_token(token: str | None) -> str | None:
@@ -511,6 +521,32 @@ def create_app(*, token: str | None = None):
                 n: dataclasses.asdict(commands.llm_profiles[n])
                 for n in sorted(commands.llm_profiles)
             },
+        }
+
+    @app.post("/resolve-call", dependencies=[Depends(_check_auth)])
+    def resolve_call(req: ResolveCallRequest) -> dict[str, Any]:
+        """Resolve a business/place name to a phone number (Serper).
+
+        Used by the two-step "call" flow: the client shows "🔎 Searching…",
+        calls this, then dials the returned number. Keeps SERPER_API_KEY
+        server-side. Returns {ok, number, name, address} or {ok: false}.
+        """
+        from voicepipe.serper_client import SerperError, lookup_place
+
+        query = (req.query or "").strip()
+        if not query:
+            return {"ok": False, "error": "empty_query"}
+        try:
+            place = lookup_place(query)
+        except SerperError:
+            return {"ok": False, "error": "lookup_failed"}
+        if not place or not (place.get("phone") or "").strip():
+            return {"ok": False, "error": "not_found"}
+        return {
+            "ok": True,
+            "number": place["phone"],
+            "name": place.get("name", ""),
+            "address": place.get("address", ""),
         }
 
     @app.get("/log/tail", dependencies=[Depends(_check_auth)])

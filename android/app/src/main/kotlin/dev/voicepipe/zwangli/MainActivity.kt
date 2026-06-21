@@ -236,18 +236,48 @@ class MainActivity : AppCompatActivity() {
         val res = runCatching {
             withContext(Dispatchers.IO) { client.resolveCall(url, bearer, query) }
         }.getOrNull()
-        if (res?.ok == true && !res.number.isNullOrBlank()) {
-            val label = res.name?.takeIf { it.isNotBlank() } ?: query
-            setStatus(getString(R.string.status_found, label, res.number))
-            val dial = buildJsonObject {
-                put("type", JsonPrimitive("dial"))
-                put("number", JsonPrimitive(res.number))
-            }
-            executor.execute(listOf(dial))
-        } else {
+        if (res?.ok != true || res.number.isNullOrBlank()) {
             setStatus(getString(R.string.status_no_number, query))
+            return true
+        }
+        // Multiple matches → let the user choose; one → dial directly.
+        val candidates = res.candidates.filter { it.phone.isNotBlank() }
+        if (candidates.size > 1) {
+            promptCandidateChoice(query, candidates)
+        } else {
+            val label = res.name?.takeIf { it.isNotBlank() } ?: query
+            dialNumber(label, res.number)
         }
         return true
+    }
+
+    /** Show a chooser for ambiguous lookups; dial the picked candidate. */
+    private fun promptCandidateChoice(query: String, candidates: List<CallCandidate>) {
+        setStatus(getString(R.string.status_choose, query))
+        val labels = candidates.map { c ->
+            val name = c.name?.takeIf { it.isNotBlank() } ?: c.phone
+            val addr = c.address?.takeIf { it.isNotBlank() }
+            if (addr != null) "$name\n$addr — ${c.phone}" else "$name — ${c.phone}"
+        }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.call_choose_title, query))
+            .setItems(labels) { _, which ->
+                val c = candidates[which]
+                dialNumber(c.name?.takeIf { it.isNotBlank() } ?: query, c.phone)
+            }
+            .setNegativeButton(R.string.call_choose_cancel) { _, _ ->
+                setStatus(null)
+            }
+            .show()
+    }
+
+    private fun dialNumber(label: String, number: String) {
+        setStatus(getString(R.string.status_found, label, number))
+        val dial = buildJsonObject {
+            put("type", JsonPrimitive("dial"))
+            put("number", JsonPrimitive(number))
+        }
+        executor.execute(listOf(dial))
     }
 
     /** Concise status-pane line summarizing a dispatch round-trip outcome. */

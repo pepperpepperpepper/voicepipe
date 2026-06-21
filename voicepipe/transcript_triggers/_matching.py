@@ -20,6 +20,77 @@ class TranscriptTriggerMatch:
     reason: str
 
 
+# Fuzzy wake-word fallback tuning. STT renders "Zwangli" many ways (Zwang Li,
+# Zwang Lee, Zwongli, Swangli…); rather than enumerate every spelling, accept a
+# leading token within this edit distance of a configured trigger. Kept tight,
+# and only applied to triggers at least this long, so ordinary opening words
+# ("call", "open", "the") can't be mistaken for the wake word.
+_FUZZY_MAX_DISTANCE = 2
+_FUZZY_MIN_TRIGGER_LEN = 5
+
+
+def _edit_distance(a: str, b: str) -> int:
+    """Levenshtein distance (small strings; no dependency)."""
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(
+                min(
+                    prev[j] + 1,
+                    cur[j - 1] + 1,
+                    prev[j - 1] + (0 if ca == cb else 1),
+                )
+            )
+        prev = cur
+    return prev[-1]
+
+
+def _remainder_after_tokens(cleaned: str, ntokens: int) -> str:
+    rest = cleaned.split()[ntokens:]
+    return " ".join(rest).lstrip(" ,:;.").strip()
+
+
+def _fuzzy_wake_match(
+    lowered: str, cleaned: str, triggers: Mapping[str, str]
+) -> TranscriptTriggerMatch | None:
+    tokens = lowered.split()
+    if not tokens:
+        return None
+    # Compare the first token, and the first two tokens collapsed (so a spoken
+    # "zwang li" → "zwangli"), against each trigger's space-collapsed form.
+    heads: list[tuple[int, str]] = [(1, tokens[0])]
+    if len(tokens) >= 2:
+        heads.append((2, tokens[0] + tokens[1]))
+
+    best: tuple[int, int, str, str] | None = None  # (dist, ntok, trigger, action)
+    for raw_trigger, raw_action in triggers.items():
+        trigger = (raw_trigger or "").strip().lower()
+        collapsed = trigger.replace(" ", "")
+        if len(collapsed) < _FUZZY_MIN_TRIGGER_LEN:
+            continue
+        action = (raw_action or "").strip().lower() or "strip"
+        for ntok, head in heads:
+            dist = _edit_distance(head, collapsed)
+            if dist <= _FUZZY_MAX_DISTANCE and (best is None or dist < best[0]):
+                best = (dist, ntok, trigger, action)
+    if best is None:
+        return None
+    dist, ntok, trigger, action = best
+    return TranscriptTriggerMatch(
+        trigger=trigger,
+        action=action,
+        remainder=_remainder_after_tokens(cleaned, ntok),
+        reason=f"fuzzy:{dist}",
+    )
+
+
 def match_transcript_trigger(
     text: str,
     *,
@@ -114,4 +185,5 @@ def match_transcript_trigger(
                 reason="prefix:space",
             )
 
-    return None
+    # No exact/prefix hit — try a fuzzy wake-word match on the leading token(s).
+    return _fuzzy_wake_match(lowered, cleaned, triggers)

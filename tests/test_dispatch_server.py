@@ -236,32 +236,27 @@ def test_server_actuator_call_business_requires_dial_capability(monkeypatch) -> 
     assert act.call_business("anything") is False
 
 
-def test_resolve_call_endpoint_returns_number(client, monkeypatch) -> None:
+def test_resolve_call_endpoint_returns_candidates(client, monkeypatch) -> None:
     import voicepipe.serper_client as serper_client
 
-    monkeypatch.setattr(
-        serper_client,
-        "lookup_place",
-        lambda q, **k: {
-            "name": "The Sukhothai Shanghai",
-            "phone": "+86 21 5237 8888",
-            "address": "380 Weihai Rd",
-        },
-    )
-    resp = client.post("/resolve-call", json={"query": "Sukhothai Hotel Shanghai"})
+    candidates = [
+        {"name": "The Sukhothai Shanghai", "phone": "+86 21 5237 8888", "address": "380 Weihai Rd"},
+        {"name": "Sukhothai Restaurant", "phone": "+86 21 1111 2222", "address": "Other Rd"},
+    ]
+    monkeypatch.setattr(serper_client, "lookup_places", lambda q, **k: list(candidates))
+    resp = client.post("/resolve-call", json={"query": "Sukhothai Shanghai"})
     assert resp.status_code == 200
-    assert resp.json() == {
-        "ok": True,
-        "number": "+86 21 5237 8888",
-        "name": "The Sukhothai Shanghai",
-        "address": "380 Weihai Rd",
-    }
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["number"] == "+86 21 5237 8888"  # top match (back-compat)
+    assert body["name"] == "The Sukhothai Shanghai"
+    assert body["candidates"] == candidates
 
 
 def test_resolve_call_endpoint_not_found(client, monkeypatch) -> None:
     import voicepipe.serper_client as serper_client
 
-    monkeypatch.setattr(serper_client, "lookup_place", lambda q, **k: None)
+    monkeypatch.setattr(serper_client, "lookup_places", lambda q, **k: [])
     resp = client.post("/resolve-call", json={"query": "nope"})
     assert resp.status_code == 200
     assert resp.json() == {"ok": False, "error": "not_found"}

@@ -18,11 +18,19 @@ data class ResolveCallRequest(
 )
 
 @Serializable
+data class CallCandidate(
+    val name: String? = null,
+    val phone: String,
+    val address: String? = null,
+)
+
+@Serializable
 data class ResolveCallResponse(
     val ok: Boolean,
     val number: String? = null,
     val name: String? = null,
     val address: String? = null,
+    val candidates: List<CallCandidate> = emptyList(),
     val error: String? = null,
 )
 

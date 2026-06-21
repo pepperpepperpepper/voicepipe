@@ -73,6 +73,61 @@ def lookup_place(
     }
 
 
+def lookup_places(
+    query: str,
+    *,
+    limit: int = 5,
+    api_key: str | None = None,
+    timeout: float = 8.0,
+) -> list[dict[str, Any]]:
+    """Return up to ``limit`` place candidates that have a phone number.
+
+    Each item carries ``name``/``phone``/``address``. Used to offer a chooser
+    when a spoken name is ambiguous. Returns ``[]`` for no key / no query /
+    no results; raises :class:`SerperError` on a transport failure.
+    """
+    q = (query or "").strip()
+    if not q:
+        return []
+    key = _resolve_api_key(api_key)
+    if not key:
+        return []
+
+    payload = json.dumps({"q": q}).encode("utf-8")
+    req = urllib.request.Request(
+        _PLACES_ENDPOINT,
+        data=payload,
+        headers={"X-API-KEY": key, "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, TimeoutError, ValueError) as e:
+        raise SerperError(f"Serper lookup failed: {e}") from e
+
+    places = data.get("places")
+    if not isinstance(places, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for p in places:
+        if not isinstance(p, dict):
+            continue
+        phone = str(p.get("phoneNumber") or "").strip()
+        if not phone:
+            continue
+        out.append(
+            {
+                "name": str(p.get("title") or "").strip(),
+                "phone": phone,
+                "address": str(p.get("address") or "").strip(),
+            }
+        )
+        if len(out) >= limit:
+            break
+    return out
+
+
 def lookup_phone(query: str, **kwargs: Any) -> str | None:
     """Convenience: the phone number for ``query``'s best place match, or None.
 

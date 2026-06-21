@@ -531,22 +531,26 @@ def create_app(*, token: str | None = None):
         calls this, then dials the returned number. Keeps SERPER_API_KEY
         server-side. Returns {ok, number, name, address} or {ok: false}.
         """
-        from voicepipe.serper_client import SerperError, lookup_place
+        from voicepipe.serper_client import SerperError, lookup_places
 
         query = (req.query or "").strip()
         if not query:
             return {"ok": False, "error": "empty_query"}
         try:
-            place = lookup_place(query)
+            places = lookup_places(query, limit=5)
         except SerperError:
             return {"ok": False, "error": "lookup_failed"}
-        if not place or not (place.get("phone") or "").strip():
+        if not places:
             return {"ok": False, "error": "not_found"}
+        top = places[0]
+        # Top-level fields = best match (back-compat); `candidates` lets the
+        # client offer a chooser when the name was ambiguous.
         return {
             "ok": True,
-            "number": place["phone"],
-            "name": place.get("name", ""),
-            "address": place.get("address", ""),
+            "number": top["phone"],
+            "name": top.get("name", ""),
+            "address": top.get("address", ""),
+            "candidates": places,
         }
 
     @app.get("/log/tail", dependencies=[Depends(_check_auth)])

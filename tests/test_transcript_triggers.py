@@ -74,8 +74,30 @@ def test_match_transcript_trigger_allows_separator_words() -> None:
 
 
 def test_match_transcript_trigger_requires_boundary() -> None:
+    # An unrelated longer word that isn't within fuzzy wake-word distance must
+    # not match (no exact/prefix hit, and edit distance > threshold).
     triggers = {"zwingly": "zwingli"}
-    assert tt.match_transcript_trigger("zwinglyx do it", triggers=triggers) is None
+    assert tt.match_transcript_trigger("zwinglberforest do it", triggers=triggers) is None
+
+
+def test_fuzzy_wake_word_matches_near_misses() -> None:
+    # The whole point of fuzzy matching: STT renderings of the wake word that
+    # aren't explicitly registered still route. "zwangli" is the registered
+    # llm_route trigger; these are within edit distance 2.
+    triggers = {"zwangli": "llm_route"}
+    for spoken in ("Zwang Li call mom", "Zwongli call mom", "Zwangly call mom"):
+        m = tt.match_transcript_trigger(spoken, triggers=triggers)
+        assert m is not None, spoken
+        assert m.action == "llm_route"
+        assert m.remainder == "call mom"
+        assert m.reason.startswith("fuzzy:")
+
+
+def test_fuzzy_wake_word_ignores_ordinary_words() -> None:
+    # Short/ordinary opening words must not be mistaken for the wake word.
+    triggers = {"zwangli": "llm_route"}
+    for spoken in ("call the hotel", "open the door", "set a timer"):
+        assert tt.match_transcript_trigger(spoken, triggers=triggers) is None, spoken
 
 
 def test_apply_transcript_triggers_no_match_returns_original() -> None:

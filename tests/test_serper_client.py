@@ -51,6 +51,38 @@ def test_lookup_place_extracts_top_result(monkeypatch) -> None:
     assert serper_client.lookup_phone("Sukhothai Hotel Shanghai") == "+86 21 5237 8888"
 
 
+def test_lookup_places_returns_only_those_with_phones(monkeypatch) -> None:
+    monkeypatch.setenv("SERPER_API_KEY", "test-key")
+    monkeypatch.setattr(
+        serper_client.urllib.request,
+        "urlopen",
+        _fake_urlopen(
+            {
+                "places": [
+                    {"title": "A", "phoneNumber": "+1 1", "address": "addr A"},
+                    {"title": "No Phone", "address": "addr B"},  # skipped
+                    {"title": "C", "phoneNumber": "+1 3", "address": "addr C"},
+                ]
+            }
+        ),
+    )
+    places = serper_client.lookup_places("query", limit=5)
+    assert [p["name"] for p in places] == ["A", "C"]
+    assert places[0] == {"name": "A", "phone": "+1 1", "address": "addr A"}
+
+
+def test_lookup_places_respects_limit(monkeypatch) -> None:
+    monkeypatch.setenv("SERPER_API_KEY", "test-key")
+    monkeypatch.setattr(
+        serper_client.urllib.request,
+        "urlopen",
+        _fake_urlopen(
+            {"places": [{"title": str(i), "phoneNumber": f"+{i}"} for i in range(10)]}
+        ),
+    )
+    assert len(serper_client.lookup_places("q", limit=3)) == 3
+
+
 def test_lookup_place_no_results_returns_none(monkeypatch) -> None:
     monkeypatch.setenv("SERPER_API_KEY", "test-key")
     monkeypatch.setattr(

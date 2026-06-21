@@ -25,6 +25,7 @@ from voicepipe.transcript_triggers._actuator import (
     InMemoryActuator,
 )
 from voicepipe.transcript_triggers._intents import (
+    _action_call,
     _normalize_open_url,
     parse_alarm_args,
     parse_alarm_offset_args,
@@ -291,6 +292,27 @@ def test_dial_verb_strips_punctuation() -> None:
     assert out == ""
     assert meta["meta"]["handler_meta"]["ok"] is True
     assert act.dial_calls == ["+15555550100"]
+
+
+def test_call_verb_routes_business_name_to_call_business() -> None:
+    act = InMemoryActuator()
+    out, meta = tt.apply_transcript_triggers(
+        "zwingli call Sukhothai Hotel Shanghai",
+        commands=_commands_for("call", "call"),
+        actuator=act,
+    )
+    assert out == ""
+    assert meta["meta"]["handler_meta"]["ok"] is True
+    assert act.call_business_calls == ["Sukhothai Hotel Shanghai"]
+
+
+def test_call_verb_without_dial_capability_skips() -> None:
+    from voicepipe.transcript_triggers._actuator import CAP_WEB_SEARCH
+
+    act = InMemoryActuator(caps=frozenset({CAP_WEB_SEARCH}))  # no dial
+    _out, meta = _action_call("Joe's Pizza", actuator=act)
+    assert meta["error"] == "capability_unsupported"
+    assert act.call_business_calls == []
 
 
 @pytest.mark.parametrize(

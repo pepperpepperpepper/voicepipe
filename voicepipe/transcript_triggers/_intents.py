@@ -181,6 +181,7 @@ _UNSUPPORTED = {
     "alarm": "Setting alarms is not supported on this device.",
     "timer": "Setting timers is not supported on this device.",
     "dial": "Dialing is not supported on this device.",
+    "call": "Calling is not supported on this device.",
     "navigate": "Navigation is not supported on this device.",
     "accessibility_global": "System navigation is not supported on this device.",
     "calendar": "Creating calendar events is not supported on this device.",
@@ -479,6 +480,34 @@ def _action_dial(
     if not act.dial(number):
         return _unsupported("dial")
     return "", {"ok": True, "intent": "dial", "number": number}
+
+
+def _action_call(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Call a business/place looked up by NAME ("the Sukhothai Hotel in
+    Shanghai"). The server resolves the phone number (Serper) and emits a
+    dial action; the client opens the dialer pre-filled. Use `dial` when the
+    user already gave a phone number."""
+    del verb_cfg, profiles, captures, commands
+    query = (prompt or "").strip()
+    if not query:
+        return _bad_args("call", "expected a business or place name")
+    act = resolve_actuator(actuator)
+    if CAP_DIAL not in act.capabilities():
+        return _unsupported("call")
+    if not act.call_business(query):
+        return (
+            "⚠ zwingli: couldn't find a phone number for that",
+            {"ok": False, "error": "lookup_failed", "intent": "call", "query": query},
+        )
+    return "", {"ok": True, "intent": "call", "query": query}
 
 
 # Spoken travel-mode tokens → canonical mode strings. The canonical values

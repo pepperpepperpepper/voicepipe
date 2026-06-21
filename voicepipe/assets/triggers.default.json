@@ -18,6 +18,7 @@
     "strip": { "type": "builtin" },
     "rewrite": { "type": "llm", "profile": "rewrite" },
     "email": { "type": "builtin", "enabled": true },
+    "call": { "type": "builtin", "enabled": true },
     "subprocess": { "type": "shell", "enabled": true, "timeout_seconds": 10 },
     "execute": { "type": "execute", "enabled": true, "timeout_seconds": 10 },
     "type": { "type": "type", "enabled": true },

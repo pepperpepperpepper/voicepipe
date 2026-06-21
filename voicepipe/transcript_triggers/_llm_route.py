@@ -59,7 +59,8 @@ ROUTER_PROFILE_NAME = "router"
 _VERB_DESCRIPTIONS: dict[str, str] = {
     "alarm": 'set an alarm — use whenever the user says "alarm". args: "<time> [<message>]" accepting EITHER an absolute clock time ("7:30am wake up", "19:30") OR a relative offset ("in 5 minutes", "two minutes from now" → "2 minutes from now"). Pass the time/offset through; the device resolves a relative offset to the actual wall-clock time.',
     "timer": 'start a countdown timer — use when the user says "timer". args: "<duration> [<message>]" e.g. "5 minutes pasta", "1h 30m big bake", "90 seconds".',
-    "dial": 'place a phone call. args: "<phone number>" — keep `+` and digits, strip words',
+    "dial": 'call a phone NUMBER the user already spoke. args: "<phone number>" — keep `+` and digits, strip words. Use ONLY when actual digits were given.',
+    "call": 'call a business/place/person looked up by NAME (the server finds the number via web search). args: "<name + any location>" e.g. "Sukhothai Hotel Shanghai", "Joe\'s Pizza near me". Use when the user names who/what to call instead of giving digits.',
     "search": 'web search. args: "<query>"',
     "open": 'open a URL. args: "<url or host>" e.g. "https://example.com"',
     "navigate": 'maps directions. args: "[<mode>] [to] <destination>" mode ∈ {driving, walking, bicycling, transit}',

@@ -199,6 +199,33 @@ class ServerActuator:
         self.client_actions.append({"type": "dial", "number": number})
         return True
 
+    def call_business(self, query: str) -> bool:
+        # Resolve a business/place NAME to a phone number via Serper, then queue
+        # a standard dial action the client already knows how to execute. The
+        # SERPER_API_KEY is a server secret; this never runs client-side.
+        if CAP_DIAL not in self._caps or not query.strip():
+            return False
+        from voicepipe.serper_client import SerperError, lookup_place
+
+        try:
+            place = lookup_place(query)
+        except SerperError:
+            return False
+        if not place:
+            return False
+        phone = (place.get("phone") or "").strip()
+        if not phone:
+            return False
+        entry: dict[str, Any] = {"type": "dial", "number": phone}
+        # Carry the resolved name/address for display/debugging; the client
+        # ignores unknown keys but they show in the response payload.
+        if place.get("name"):
+            entry["label"] = place["name"]
+        if place.get("address"):
+            entry["address"] = place["address"]
+        self.client_actions.append(entry)
+        return True
+
     def navigate(self, destination: str, mode: str | None = None) -> bool:
         if CAP_NAVIGATE not in self._caps or not destination.strip():
             return False

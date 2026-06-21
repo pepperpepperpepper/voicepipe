@@ -20,6 +20,11 @@ Parameters:
     NoEcho: true
     Default: ""
     Description: OpenAI API key (optional; only if STT/LLM is repointed to OpenAI).
+  SerperApiKey:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: serper.dev API key for the `call <business>` lookup. Empty disables business-name resolution.
   SttModel:
     Type: String
     Default: "groq:whisper-large-v3-turbo"
@@ -54,6 +59,7 @@ Resources:
           VOICEPIPE_DISPATCH_TOKEN: !Ref DispatchToken
           GROQ_API_KEY: !Ref GroqApiKey
           OPENAI_API_KEY: !Ref OpenAiApiKey
+          SERPER_API_KEY: !Ref SerperApiKey
           VOICEPIPE_DISPATCH_STT_MODEL: !Ref SttModel
           VOICEPIPE_ZWINGLI_MODEL: !Ref RouterModel
       FunctionUrlConfig:

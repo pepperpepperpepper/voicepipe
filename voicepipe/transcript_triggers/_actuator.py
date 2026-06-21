@@ -131,6 +131,14 @@ class Actuator(Protocol):
     def dial(self, number: str) -> bool:
         ...
 
+    def call_business(self, query: str) -> bool:
+        """Resolve a business/place NAME to a phone number and queue a dial.
+
+        Server-side implementations look the number up (e.g. via Serper) and
+        emit a ``dial`` action; clients with no lookup capability return False.
+        """
+        ...
+
     def navigate(self, destination: str, mode: str | None = None) -> bool:
         ...
 
@@ -292,6 +300,10 @@ class DesktopActuator:
         # No standard desktop equivalent; not in capabilities().
         return False
 
+    def call_business(self, query: str) -> bool:
+        # No standard desktop equivalent; not in capabilities().
+        return False
+
     def navigate(self, destination: str, mode: str | None = None) -> bool:
         # No standard desktop equivalent; not in capabilities().
         return False
@@ -347,6 +359,7 @@ class InMemoryActuator:
     set_alarm_calls: list[dict[str, Any]] = field(default_factory=list)
     set_timer_calls: list[dict[str, Any]] = field(default_factory=list)
     dial_calls: list[str] = field(default_factory=list)
+    call_business_calls: list[str] = field(default_factory=list)
     navigate_calls: list[dict[str, Any]] = field(default_factory=list)
     accessibility_global_calls: list[str] = field(default_factory=list)
     calendar_event_calls: list[str] = field(default_factory=list)
@@ -428,6 +441,14 @@ class InMemoryActuator:
         if CAP_DIAL not in self.caps:
             return False
         self.dial_calls.append(number)
+        return True
+
+    def call_business(self, query: str) -> bool:
+        # Test double: record the query; no network. Gated on CAP_DIAL since the
+        # real implementation emits a dial action.
+        if CAP_DIAL not in self.caps:
+            return False
+        self.call_business_calls.append(query)
         return True
 
     def navigate(self, destination: str, mode: str | None = None) -> bool:

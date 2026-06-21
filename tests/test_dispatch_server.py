@@ -183,6 +183,46 @@ def test_server_actuator_set_alarm_relative_rejects_out_of_range() -> None:
     assert act.client_actions == []
 
 
+def test_server_actuator_call_business_resolves_and_queues_dial(monkeypatch) -> None:
+    import voicepipe.serper_client as serper_client
+
+    monkeypatch.setattr(
+        serper_client,
+        "lookup_place",
+        lambda q, **k: {
+            "name": "The Sukhothai Shanghai",
+            "phone": "+86 21 5237 8888",
+            "address": "380 Weihai Rd",
+        },
+    )
+    act = ServerActuator()
+    assert act.call_business("Sukhothai Hotel Shanghai") is True
+    assert act.client_actions == [
+        {
+            "type": "dial",
+            "number": "+86 21 5237 8888",
+            "label": "The Sukhothai Shanghai",
+            "address": "380 Weihai Rd",
+        }
+    ]
+
+
+def test_server_actuator_call_business_no_phone_returns_false(monkeypatch) -> None:
+    import voicepipe.serper_client as serper_client
+
+    monkeypatch.setattr(
+        serper_client, "lookup_place", lambda q, **k: {"name": "X", "phone": "", "address": ""}
+    )
+    act = ServerActuator()
+    assert act.call_business("place with no phone") is False
+    assert act.client_actions == []
+
+
+def test_server_actuator_call_business_requires_dial_capability(monkeypatch) -> None:
+    act = ServerActuator(capabilities=set())  # no dial
+    assert act.call_business("anything") is False
+
+
 def test_server_actuator_set_timer_queues_with_optional_message() -> None:
     act = ServerActuator()
     assert act.set_timer(300, "pasta") is True

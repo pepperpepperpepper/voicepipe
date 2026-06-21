@@ -28,7 +28,7 @@ COPY voicepipe ${LAMBDA_TASK_ROOT}/voicepipe
 # trigger-less config), and (2) without the intent verbs the llm_route LLM
 # has no intent verb to route "set a timer" to and falls back to `type`.
 # Generating from the asset keeps this in sync with the shipped defaults.
-RUN python -c "import json,os,pathlib as p; r=p.Path(os.environ['LAMBDA_TASK_ROOT']); c=json.loads((r/'voicepipe/assets/triggers.default.json').read_text()); v=c.setdefault('verbs',{}); [v.setdefault(x,{'type':'builtin','enabled':True}) for x in ('search','open','alarm','timer','dial','navigate','calendar','back','home','recents','notifications','quick_settings')]; (r/'triggers.json').write_text(json.dumps(c,indent=2)); print('baked triggers.json + intent verbs')"
+RUN python -c "import json,os,pathlib as p; r=p.Path(os.environ['LAMBDA_TASK_ROOT']); c=json.loads((r/'voicepipe/assets/triggers.default.json').read_text()); v=c.setdefault('verbs',{}); [v.setdefault(x,{'type':'builtin','enabled':True}) for x in ('search','open','alarm','timer','dial','call','navigate','calendar','back','home','recents','notifications','quick_settings')]; (r/'triggers.json').write_text(json.dumps(c,indent=2)); print('baked triggers.json + intent verbs')"
 ENV VOICEPIPE_TRIGGERS_JSON=${LAMBDA_TASK_ROOT}/triggers.json
 
 # Fail the build loudly if the slim set is missing an import the handler

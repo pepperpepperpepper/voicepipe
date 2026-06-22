@@ -41,6 +41,8 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
     private lateinit var transcript: EditText
     private lateinit var send: Button
     private lateinit var status: TextView
+    private lateinit var progressSpinner: View
+    private lateinit var levelMeter: android.widget.ProgressBar
     private lateinit var response: TextView
     private lateinit var historySection: LinearLayout
     private lateinit var historyChips: ChipGroup
@@ -69,6 +71,8 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
         transcript = findViewById(R.id.transcript)
         send = findViewById(R.id.send)
         status = findViewById(R.id.status)
+        progressSpinner = findViewById(R.id.progress_spinner)
+        levelMeter = findViewById(R.id.level_meter)
         response = findViewById(R.id.response)
         historySection = findViewById(R.id.history_section)
         historyChips = findViewById(R.id.history_chips)
@@ -142,7 +146,7 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
     private fun cancelRecording() {
         recorder.cancel()
         mic.text = getString(R.string.action_mic_start)
-        setStatus(getString(R.string.status_cancelled))
+        setPhase(Phase.ERROR, getString(R.string.status_cancelled))
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -185,16 +189,38 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
         mic.setOnClickListener { onMicClick() }
     }
 
-    /** Drive the status pane. Pass null to hide it. */
-    private fun setStatus(text: String?) {
-        if (text.isNullOrEmpty()) {
+    private enum class Phase { LISTENING, WORKING, DONE, ERROR, NONE }
+
+    /** Drive the status pane: text + color, a spinner during work, a live mic
+     *  meter while listening. */
+    private fun setPhase(phase: Phase, text: String?) {
+        if (text.isNullOrEmpty() || phase == Phase.NONE) {
             status.visibility = View.GONE
             status.text = ""
         } else {
             status.text = text
             status.visibility = View.VISIBLE
+            status.setTextColor(
+                when (phase) {
+                    Phase.LISTENING -> 0xFFD32F2F.toInt() // red — recording
+                    Phase.DONE -> 0xFF2E7D32.toInt()      // green
+                    Phase.ERROR -> 0xFFD32F2F.toInt()     // red
+                    else -> getColor(R.color.status_neutral)
+                },
+            )
+        }
+        progressSpinner.visibility = if (phase == Phase.WORKING) View.VISIBLE else View.GONE
+        if (phase == Phase.LISTENING) {
+            levelMeter.visibility = View.VISIBLE
+        } else {
+            levelMeter.visibility = View.GONE
+            levelMeter.progress = 0
         }
     }
+
+    /** Back-compat shim: plain text shown in the neutral/working style. */
+    private fun setStatus(text: String?) =
+        setPhase(if (text == null) Phase.NONE else Phase.WORKING, text)
 
     private fun onMicClick() {
         if (recorder.isRecording) {
@@ -214,9 +240,10 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
         // No silence auto-stop: recording runs until the user stops it (tap the
         // mic, press the assist button again, or release the volume combo). A
         // hard 45s cap releases the mic if a recording is ever left running.
-        val started = recorder.start {
-            runOnUiThread { if (recorder.isRecording) cancelRecording() }
-        }
+        val started = recorder.start(
+            onMaxReached = { runOnUiThread { if (recorder.isRecording) cancelRecording() } },
+            onLevel = { lvl -> runOnUiThread { levelMeter.progress = (lvl * 100).toInt() } },
+        )
         if (!started) {
             Toast.makeText(
                 this,
@@ -226,7 +253,7 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
             return
         }
         mic.text = getString(R.string.action_mic_listening)
-        setStatus(getString(R.string.status_listening))
+        setPhase(Phase.LISTENING, getString(R.string.status_listening))
     }
 
     private fun stopAndUpload() {
@@ -274,7 +301,7 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
             )
             response.text = rendered
             if (!handleResolveDial(result.getOrNull(), normalizedUrl, settings.token)) {
-                setStatus(statusForResult(result))
+                setPhase(phaseForResult(result), statusForResult(result))
             }
             mic.isEnabled = true
             send.isEnabled = true
@@ -301,12 +328,12 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
             ?.let { ClientActions.parseAll(it) }
             ?.filterIsInstance<ClientAction.ResolveDial>()
             ?.firstOrNull()?.query ?: return false
-        setStatus(getString(R.string.status_searching, query))
+        setPhase(Phase.WORKING, getString(R.string.status_searching, query))
         val res = runCatching {
             withContext(Dispatchers.IO) { client.resolveCall(url, bearer, query) }
         }.getOrNull()
         if (res?.ok != true || res.number.isNullOrBlank()) {
-            setStatus(getString(R.string.status_no_number, query))
+            setPhase(Phase.ERROR, getString(R.string.status_no_number, query))
             return true
         }
         // Multiple matches → let the user choose; one → dial directly.
@@ -322,7 +349,7 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
 
     /** Show a chooser for ambiguous lookups; dial the picked candidate. */
     private fun promptCandidateChoice(query: String, candidates: List<CallCandidate>) {
-        setStatus(getString(R.string.status_choose, query))
+        setPhase(Phase.WORKING, getString(R.string.status_choose, query))
         val labels = candidates.map { c ->
             val name = c.name?.takeIf { it.isNotBlank() } ?: c.phone
             val addr = c.address?.takeIf { it.isNotBlank() }
@@ -341,7 +368,7 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
     }
 
     private fun dialNumber(label: String, number: String) {
-        setStatus(getString(R.string.status_found, label, number))
+        setPhase(Phase.DONE, getString(R.string.status_found, label, number))
         val dial = buildJsonObject {
             put("type", JsonPrimitive("dial"))
             put("number", JsonPrimitive(number))
@@ -359,6 +386,9 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
             },
             onFailure = { getString(R.string.status_error, it.message ?: "request failed") },
         )
+
+    private fun phaseForResult(result: Result<DispatchResponse>): Phase =
+        if (result.isSuccess) Phase.DONE else Phase.ERROR
 
     private fun onSend() {
         val text = transcript.text.toString()
@@ -391,7 +421,7 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
             )
             response.text = rendered
             if (!handleResolveDial(result.getOrNull(), normalizedUrl, settings.token)) {
-                setStatus(statusForResult(result))
+                setPhase(phaseForResult(result), statusForResult(result))
             }
             send.isEnabled = true
             // Record the transcript on every successful HTTP round-trip,

@@ -27,19 +27,26 @@ class AudioRecorder {
     val isRecording: Boolean get() = recording
 
     /**
-     * Start recording. [onMaxReached] (if supplied) fires once, on the recorder
-     * thread, when a hard [MAX_BYTES] safety cap is hit — so the mic can never
-     * be held indefinitely if a recording is left running. This is NOT
-     * silence-based endpointing; it only bounds the maximum duration.
+     * Start recording.
+     * - [onMaxReached] (if supplied) fires once when a hard [MAX_BYTES] safety
+     *   cap is hit — the mic can never be held indefinitely. NOT silence-based.
+     * - [onLevel] (if supplied) fires ~10×/sec with a normalized 0..1 input
+     *   level, for a live mic meter. Display only; never stops recording.
+     * Both callbacks fire on the recorder thread.
      */
     @SuppressLint("MissingPermission") // caller verifies RECORD_AUDIO first
-    fun start(onMaxReached: (() -> Unit)? = null): Boolean {
+    fun start(
+        onMaxReached: (() -> Unit)? = null,
+        onLevel: ((Float) -> Unit)? = null,
+    ): Boolean {
         if (recording) return true
         val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL, ENCODING)
         if (minBuf <= 0) return false
-        val bufSize = maxOf(minBuf, SAMPLE_RATE) // ~1s of headroom
         val ar = try {
-            AudioRecord(MediaRecorder.AudioSource.MIC, SAMPLE_RATE, CHANNEL, ENCODING, bufSize)
+            AudioRecord(
+                MediaRecorder.AudioSource.MIC, SAMPLE_RATE, CHANNEL, ENCODING,
+                maxOf(minBuf, SAMPLE_RATE), // ~1s internal headroom
+            )
         } catch (e: Exception) {
             return false
         }
@@ -52,13 +59,15 @@ class AudioRecorder {
         recording = true
         ar.startRecording()
         thread = Thread {
-            val buf = ByteArray(bufSize)
+            // Read in ~100ms chunks so the level meter updates smoothly.
+            val buf = ByteArray(CHUNK_BYTES)
             var totalBytes = 0L
             var fired = false
             while (recording) {
                 val n = ar.read(buf, 0, buf.size)
                 if (n > 0) {
                     synchronized(pcm) { pcm.write(buf, 0, n) }
+                    if (onLevel != null) onLevel(level(buf, n))
                     if (onMaxReached != null && !fired) {
                         totalBytes += n
                         if (totalBytes >= MAX_BYTES) {
@@ -70,6 +79,21 @@ class AudioRecorder {
             }
         }.also { it.start() }
         return true
+    }
+
+    /** Normalized 0..1 RMS level of the first [len] bytes (LE 16-bit PCM). */
+    private fun level(buf: ByteArray, len: Int): Float {
+        val samples = len / 2
+        if (samples <= 0) return 0f
+        var sumSq = 0.0
+        var i = 0
+        while (i + 1 < len) {
+            val s = (buf[i].toInt() and 0xFF) or (buf[i + 1].toInt() shl 8)
+            sumSq += s.toDouble() * s.toDouble()
+            i += 2
+        }
+        val rms = kotlin.math.sqrt(sumSq / samples)
+        return (rms / LEVEL_FULL_SCALE).coerceIn(0.0, 1.0).toFloat()
     }
 
     /** Stop recording and return WAV bytes, or null if nothing was captured. */
@@ -144,5 +168,11 @@ class AudioRecorder {
         // 16-bit mono @16kHz (32000 bytes = 1s). Generous so it never clips a
         // real command — it only releases a recording left running.
         private const val MAX_BYTES = (SAMPLE_RATE * 2 * 45).toLong()
+
+        // ~100ms read chunks → smooth level-meter updates.
+        private const val CHUNK_BYTES = SAMPLE_RATE / 10 * 2
+        // RMS value treated as "full" on the 0..1 meter (speech peaks well below
+        // the 32767 max; this keeps normal speaking near the top of the meter).
+        private const val LEVEL_FULL_SCALE = 8000.0
     }
 }

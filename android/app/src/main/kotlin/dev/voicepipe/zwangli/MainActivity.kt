@@ -48,6 +48,10 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
 
     private val recorder = AudioRecorder()
     private var pendingAutoListen: Boolean = false
+    // True while the activity is stopped (backgrounded). Used to tell an assist
+    // press that RE-OPENS us (→ just open) from one while already foreground
+    // (→ advance the open→record→send cycle). Survives transient pause/resume.
+    private var wasStopped: Boolean = true
 
     private val requestMicPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -73,39 +77,48 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
         send.setOnClickListener { onSend() }
         configureMic()
         renderHistory(settings.transcriptHistory)
-        pendingAutoListen = shouldAutoListen(intent)
+        // Foreground-service notification tap auto-records; an assist launch
+        // only OPENS (no mic) — the user presses again to record, again to send.
+        pendingAutoListen = intent?.getBooleanExtra(
+            ZwangliForegroundService.EXTRA_AUTO_LISTEN, false,
+        ) == true
     }
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         setIntent(intent)
-        // A second side-button/assist press while we're already foreground
-        // toggles: start if idle, or stop+send if recording. onResume won't
-        // re-fire here (we're already resumed), so act directly.
-        if (shouldAutoListen(intent)) {
+        if (intent?.getBooleanExtra(ZwangliForegroundService.EXTRA_AUTO_LISTEN, false) == true) {
+            pendingAutoListen = true
+            return
+        }
+        // Assist long-press while already foreground = the next step in the
+        // open → record → send cycle (onMicClick toggles record/stop). If we're
+        // coming from the background (wasStopped), this press just re-opens us;
+        // the user presses again to record. onStart (which clears wasStopped)
+        // fires AFTER onNewIntent on a background→foreground bring-up, so this
+        // read is correct.
+        if (isAssistIntent(intent) && !wasStopped) {
             mic.post { onMicClick() }
         }
     }
 
-    /** True when we were launched to immediately start listening: the
-     *  foreground-service tap, or the assist gesture / "Hold for Assistant"
-     *  side button (ACTION_ASSIST / VOICE_COMMAND). */
-    private fun shouldAutoListen(intent: Intent?): Boolean {
-        if (intent == null) return false
-        if (intent.getBooleanExtra(ZwangliForegroundService.EXTRA_AUTO_LISTEN, false)) return true
-        return intent.action == Intent.ACTION_ASSIST ||
-            intent.action == Intent.ACTION_VOICE_COMMAND
+    override fun onStart() {
+        super.onStart()
+        wasStopped = false
     }
+
+    override fun onStop() {
+        wasStopped = true
+        super.onStop()
+    }
+
+    private fun isAssistIntent(intent: Intent?): Boolean =
+        intent?.action == Intent.ACTION_ASSIST || intent?.action == Intent.ACTION_VOICE_COMMAND
 
     override fun onResume() {
         super.onResume()
-        // PTT: registering applies a release that raced the launch. If we were
-        // launched to start talking and the gesture is still held, begin now.
+        // PTT bus is dormant (no caller) but kept registered harmlessly.
         Ptt.register(this)
-        if (intent?.getBooleanExtra(Ptt.EXTRA_PTT_START, false) == true) {
-            intent.removeExtra(Ptt.EXTRA_PTT_START)
-            if (Ptt.isArmed() && !recorder.isRecording) startRecording()
-        }
         maybeAutoListen()
     }
 

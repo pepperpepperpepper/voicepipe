@@ -2,10 +2,54 @@ package dev.voicepipe.zwangli
 
 import android.accessibilityservice.AccessibilityService
 import android.os.Bundle
+import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
 class ZwangliAccessibilityService : AccessibilityService() {
+
+    // Push-to-talk: hold Volume-Up + Volume-Down to record; release Volume-Down
+    // first → send, release Volume-Up first (keep Volume-Down) → cancel.
+    private var volUp = false
+    private var volDown = false
+    private var pttActive = false
+    private var consumeTrailingUp = false
+
+    override fun onKeyEvent(event: KeyEvent): Boolean {
+        val code = event.keyCode
+        if (code != KeyEvent.KEYCODE_VOLUME_UP && code != KeyEvent.KEYCODE_VOLUME_DOWN) {
+            return false
+        }
+        when (event.action) {
+            KeyEvent.ACTION_DOWN -> {
+                if (code == KeyEvent.KEYCODE_VOLUME_UP) volUp = true else volDown = true
+                if (pttActive) return true // swallow auto-repeat while talking
+                if (volUp && volDown) {
+                    pttActive = true
+                    Ptt.start(this)
+                    return true
+                }
+                return false // a single volume key → let the system change volume
+            }
+            KeyEvent.ACTION_UP -> {
+                val wasActive = pttActive
+                if (code == KeyEvent.KEYCODE_VOLUME_UP) volUp = false else volDown = false
+                if (wasActive) {
+                    pttActive = false
+                    consumeTrailingUp = true
+                    // Released Volume-Down first → send; Volume-Up first → cancel.
+                    Ptt.stop(send = code == KeyEvent.KEYCODE_VOLUME_DOWN)
+                    return true
+                }
+                if (consumeTrailingUp) {
+                    if (!volUp && !volDown) consumeTrailingUp = false
+                    return true // swallow the other key's release
+                }
+                return false
+            }
+        }
+        return false
+    }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         // No-op: we don't react to events; we only use this service as a

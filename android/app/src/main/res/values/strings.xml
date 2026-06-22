@@ -34,6 +34,7 @@
     <string name="status_working">⚙ Working…</string>
     <string name="status_heard_done">✓ \"%1$s\"</string>
     <string name="status_done">✓ Done</string>
+    <string name="status_cancelled">✕ Canceled</string>
     <string name="status_searching">🔎 Searching for %1$s…</string>
     <string name="status_found">✓ %1$s: %2$s — dialing</string>
     <string name="status_no_number">⚠ No number found for %1$s</string>

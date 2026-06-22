@@ -32,7 +32,7 @@ import kotlinx.serialization.json.buildJsonObject
  *  token, permissions, foreground service) lives in [ConfiguratorActivity],
  *  reached via the overflow menu.
  */
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), Ptt.Listener {
     private val client = DispatchClient()
     private lateinit var settings: Settings
     private lateinit var executor: ClientActionExecutor
@@ -99,7 +99,37 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        // PTT: registering applies a release that raced the launch. If we were
+        // launched to start talking and the gesture is still held, begin now.
+        Ptt.register(this)
+        if (intent?.getBooleanExtra(Ptt.EXTRA_PTT_START, false) == true) {
+            intent.removeExtra(Ptt.EXTRA_PTT_START)
+            if (Ptt.isArmed() && !recorder.isRecording) startRecording()
+        }
         maybeAutoListen()
+    }
+
+    override fun onPause() {
+        Ptt.unregister(this)
+        super.onPause()
+    }
+
+    // --- Ptt.Listener (volume-combo push-to-talk) ---
+    override fun onPttStart() {
+        runOnUiThread { if (!recorder.isRecording) startRecording() }
+    }
+
+    override fun onPttStop(send: Boolean) {
+        runOnUiThread {
+            if (!recorder.isRecording) return@runOnUiThread
+            if (send) stopAndUpload() else cancelRecording()
+        }
+    }
+
+    private fun cancelRecording() {
+        recorder.cancel()
+        mic.text = getString(R.string.action_mic_start)
+        setStatus(getString(R.string.status_cancelled))
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {

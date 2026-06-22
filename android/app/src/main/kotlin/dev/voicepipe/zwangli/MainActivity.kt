@@ -198,9 +198,12 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
     }
 
     private fun startRecording() {
-        // No auto-stop: recording runs until the user stops it (tap the mic, or
-        // press the assist/side button again — see onNewIntent toggle).
-        val started = recorder.start()
+        // No silence auto-stop: recording runs until the user stops it (tap the
+        // mic, press the assist button again, or release the volume combo). A
+        // hard 45s cap releases the mic if a recording is ever left running.
+        val started = recorder.start {
+            runOnUiThread { if (recorder.isRecording) cancelRecording() }
+        }
         if (!started) {
             Toast.makeText(
                 this,

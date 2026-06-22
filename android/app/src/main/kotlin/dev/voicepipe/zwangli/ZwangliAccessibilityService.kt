@@ -1,19 +1,31 @@
 package dev.voicepipe.zwangli
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Context
+import android.media.AudioManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
 class ZwangliAccessibilityService : AccessibilityService() {
 
-    // Push-to-talk: hold Volume-Up + Volume-Down to record; release Volume-Down
-    // first → send, release Volume-Up first (keep Volume-Down) → cancel.
+    // Push-to-talk on the volume rocker. We consume EVERY volume press and wait
+    // a short window to see if the other key joins:
+    //   • both keys down  → record (release Volume-Down → send, Volume-Up → cancel)
+    //   • single key only → re-emit a normal volume change ourselves
+    // This is the only way to suppress the volume jump the combo would otherwise
+    // cause, at the cost of a ~140ms delay on normal volume presses.
+    private val handler = Handler(Looper.getMainLooper())
     private var volUp = false
     private var volDown = false
     private var pttActive = false
     private var consumeTrailingUp = false
+    private var pendingVolumeKey = 0   // key awaiting the combo-window decision
+    private var pendingRunnable: Runnable? = null
+    private var adjustingVolumeKey = 0 // key committed to as a volume change
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
         val code = event.keyCode
@@ -24,17 +36,29 @@ class ZwangliAccessibilityService : AccessibilityService() {
             KeyEvent.ACTION_DOWN -> {
                 if (code == KeyEvent.KEYCODE_VOLUME_UP) volUp = true else volDown = true
                 if (pttActive) return true // swallow auto-repeat while talking
-                if (volUp && volDown) {
-                    pttActive = true
-                    Ptt.start(this)
-                    return true
+                if (volUp && volDown) { startPtt(); return true }
+                // Auto-repeat after we've committed to a volume change → keep adjusting.
+                if (adjustingVolumeKey == code) { adjustVolume(code); return true }
+                // First press of a single key → start the combo window.
+                if (event.repeatCount == 0 && pendingVolumeKey == 0) {
+                    pendingVolumeKey = code
+                    val r = Runnable {
+                        if (!pttActive && pendingVolumeKey == code) {
+                            pendingVolumeKey = 0
+                            pendingRunnable = null
+                            adjustingVolumeKey = code
+                            adjustVolume(code) // window elapsed → real volume change
+                        }
+                    }
+                    pendingRunnable = r
+                    handler.postDelayed(r, COMBO_WINDOW_MS)
                 }
-                return false // a single volume key → let the system change volume
+                return true // consume → suppress the immediate system volume change
             }
             KeyEvent.ACTION_UP -> {
-                val wasActive = pttActive
+                val wasPtt = pttActive
                 if (code == KeyEvent.KEYCODE_VOLUME_UP) volUp = false else volDown = false
-                if (wasActive) {
+                if (wasPtt) {
                     pttActive = false
                     consumeTrailingUp = true
                     // Released Volume-Down first → send; Volume-Up first → cancel.
@@ -43,12 +67,47 @@ class ZwangliAccessibilityService : AccessibilityService() {
                 }
                 if (consumeTrailingUp) {
                     if (!volUp && !volDown) consumeTrailingUp = false
-                    return true // swallow the other key's release
+                    return true
                 }
-                return false
+                if (adjustingVolumeKey == code) {
+                    adjustingVolumeKey = 0
+                    return true
+                }
+                if (pendingVolumeKey == code) {
+                    // Quick tap (released before the window) → adjust once now.
+                    cancelPendingVolume()
+                    adjustVolume(code)
+                    return true
+                }
+                return true
             }
         }
         return false
+    }
+
+    private fun startPtt() {
+        cancelPendingVolume()
+        adjustingVolumeKey = 0
+        pttActive = true
+        Ptt.start(this)
+    }
+
+    private fun cancelPendingVolume() {
+        pendingRunnable?.let { handler.removeCallbacks(it) }
+        pendingRunnable = null
+        pendingVolumeKey = 0
+    }
+
+    private fun adjustVolume(keyCode: Int) {
+        val dir = if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+            AudioManager.ADJUST_RAISE
+        } else {
+            AudioManager.ADJUST_LOWER
+        }
+        // adjustVolume() targets the system's context-relevant stream (music,
+        // call, ring, …) — closer to native behavior than a hardcoded stream.
+        (getSystemService(Context.AUDIO_SERVICE) as AudioManager)
+            .adjustVolume(dir, AudioManager.FLAG_SHOW_UI)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -66,6 +125,7 @@ class ZwangliAccessibilityService : AccessibilityService() {
     }
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
+        cancelPendingVolume()
         instance = null
         return super.onUnbind(intent)
     }
@@ -104,6 +164,11 @@ class ZwangliAccessibilityService : AccessibilityService() {
     }
 
     companion object {
+        // How long to wait for the second volume key before treating a press as
+        // a normal volume change. Long enough to catch a "simultaneous" squeeze,
+        // short enough to keep volume feeling responsive.
+        private const val COMBO_WINDOW_MS = 140L
+
         @Volatile
         private var instance: ZwangliAccessibilityService? = null
 

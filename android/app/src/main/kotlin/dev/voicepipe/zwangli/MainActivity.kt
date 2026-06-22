@@ -79,8 +79,11 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         setIntent(intent)
+        // A second side-button/assist press while we're already foreground
+        // toggles: start if idle, or stop+send if recording. onResume won't
+        // re-fire here (we're already resumed), so act directly.
         if (shouldAutoListen(intent)) {
-            pendingAutoListen = true
+            mic.post { onMicClick() }
         }
     }
 
@@ -165,11 +168,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startRecording() {
-        // Auto-stop when the user finishes speaking (endpointing). You can
-        // still tap to stop early. The callback fires on the recorder thread.
-        val started = recorder.start {
-            runOnUiThread { if (recorder.isRecording) stopAndUpload() }
-        }
+        // No auto-stop: recording runs until the user stops it (tap the mic, or
+        // press the assist/side button again — see onNewIntent toggle).
+        val started = recorder.start()
         if (!started) {
             Toast.makeText(
                 this,

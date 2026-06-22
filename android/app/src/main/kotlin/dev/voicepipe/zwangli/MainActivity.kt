@@ -96,10 +96,21 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (pendingAutoListen) {
-            pendingAutoListen = false
-            mic.post { onMicClick() }
-        }
+        maybeAutoListen()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        // Belt-and-suspenders: the mic needs the window focused to capture, and
+        // on an assist launch onResume can run a hair before focus settles.
+        if (hasFocus) maybeAutoListen()
+    }
+
+    private fun maybeAutoListen() {
+        if (!pendingAutoListen) return
+        if (recorder.isRecording) { pendingAutoListen = false; return }
+        pendingAutoListen = false
+        mic.post { onMicClick() }
     }
 
     override fun onDestroy() {
@@ -154,7 +165,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startRecording() {
-        if (!recorder.start()) {
+        // Auto-stop when the user finishes speaking (endpointing). You can
+        // still tap to stop early. The callback fires on the recorder thread.
+        val started = recorder.start {
+            runOnUiThread { if (recorder.isRecording) stopAndUpload() }
+        }
+        if (!started) {
             Toast.makeText(
                 this,
                 getString(R.string.mic_error_prefix) + "recorder unavailable",
@@ -162,7 +178,6 @@ class MainActivity : AppCompatActivity() {
             ).show()
             return
         }
-        // Tap again to stop + upload. (No on-device VAD; manual stop for v1.)
         mic.text = getString(R.string.action_mic_listening)
         setStatus(getString(R.string.status_listening))
     }

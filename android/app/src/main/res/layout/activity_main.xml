@@ -52,6 +52,15 @@
             android:layout_marginTop="8dp"
             android:text="@string/action_send" />
 
+        <Button
+            android:id="@+id/cancel"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/action_cancel"
+            android:visibility="gone" />
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

@@ -40,6 +40,7 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
     private lateinit var mic: Button
     private lateinit var transcript: EditText
     private lateinit var send: Button
+    private lateinit var cancel: Button
     private lateinit var status: TextView
     private lateinit var progressSpinner: View
     private lateinit var levelMeter: android.widget.ProgressBar
@@ -49,6 +50,8 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
     private lateinit var historyClear: Button
 
     private val recorder = AudioRecorder()
+    // The in-flight dispatch/upload coroutine, so Cancel can abort it.
+    private var inFlight: kotlinx.coroutines.Job? = null
     private var pendingAutoListen: Boolean = false
     // True while the activity is stopped (backgrounded). Used to tell an assist
     // press that RE-OPENS us (→ just open) from one while already foreground
@@ -70,6 +73,8 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
         mic = findViewById(R.id.mic)
         transcript = findViewById(R.id.transcript)
         send = findViewById(R.id.send)
+        cancel = findViewById(R.id.cancel)
+        cancel.setOnClickListener { cancelCurrent() }
         status = findViewById(R.id.status)
         progressSpinner = findViewById(R.id.progress_spinner)
         levelMeter = findViewById(R.id.level_meter)
@@ -216,6 +221,24 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
             levelMeter.visibility = View.GONE
             levelMeter.progress = 0
         }
+        // Cancel is available while we're recording or waiting on a request.
+        cancel.visibility =
+            if (phase == Phase.LISTENING || phase == Phase.WORKING) View.VISIBLE else View.GONE
+    }
+
+    /** Cancel whatever is in progress: discard a recording and/or abort an
+     *  in-flight dispatch so it never fires an action. */
+    private fun cancelCurrent() {
+        inFlight?.cancel()
+        inFlight = null
+        if (recorder.isRecording) {
+            recorder.cancel()
+            mic.text = getString(R.string.action_mic_start)
+        }
+        mic.isEnabled = true
+        send.isEnabled = true
+        response.text = getString(R.string.response_placeholder)
+        setPhase(Phase.ERROR, getString(R.string.status_cancelled))
     }
 
     /** Back-compat shim: plain text shown in the neutral/working style. */
@@ -279,7 +302,7 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
         mic.isEnabled = false
         send.isEnabled = false
         response.text = "…"
-        lifecycleScope.launch {
+        inFlight = lifecycleScope.launch {
             setStatus(getString(R.string.status_working))
             val bearer = settings.token
             val result = runCatching {
@@ -303,6 +326,7 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
             if (!handleResolveDial(result.getOrNull(), normalizedUrl, settings.token)) {
                 setPhase(phaseForResult(result), statusForResult(result))
             }
+            inFlight = null
             mic.isEnabled = true
             send.isEnabled = true
             // Record the server-returned transcript so the text path can replay it.
@@ -401,7 +425,7 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
         send.isEnabled = false
         response.text = "…"
         setStatus(getString(R.string.status_working))
-        lifecycleScope.launch {
+        inFlight = lifecycleScope.launch {
             val bearer = settings.token
             val result = runCatching {
                 withContext(Dispatchers.IO) {
@@ -423,6 +447,7 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
             if (!handleResolveDial(result.getOrNull(), normalizedUrl, settings.token)) {
                 setPhase(phaseForResult(result), statusForResult(result))
             }
+            inFlight = null
             send.isEnabled = true
             // Record the transcript on every successful HTTP round-trip,
             // even when the server returned ok=false. The history is the

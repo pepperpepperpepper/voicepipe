@@ -62,6 +62,10 @@ class ClientActionExecutor(
                     // Handled asynchronously by MainActivity (resolve → dial,
                     // with status). No-op here so it isn't counted as unknown.
                 }
+                is ClientAction.ReachContact -> {
+                    // Handled by MainActivity (contact lookup + chooser, then
+                    // fireContactCall/fireContactMessage/fireSms). No-op here.
+                }
                 is ClientAction.Navigate -> {
                     if (fireNavigate(action.destination, action.mode)) intentsFired++
                 }
@@ -236,6 +240,36 @@ class ClientActionExecutor(
             return false
         }
         return fireIntent(Intent(Intent.ACTION_DIAL, uri), "dial")
+    }
+
+    /**
+     * Open a contact's WhatsApp/Signal action — a voice call, video call, or
+     * chat — by ACTION_VIEW'ing the contact-data row [rowId] with the app's
+     * registered MIME type. Both apps publish per-contact data rows
+     * (vnd.com.whatsapp.* / vnd.org.thoughtcrime.securesms.*) whose row is the
+     * deep link into that action. Resolution of name → rowId happens in
+     * MainActivity (ContactResolver); this just fires the intent.
+     */
+    fun fireContactDataRow(rowId: Long, mimeType: String): Boolean {
+        val uri = android.content.ContentUris.withAppendedId(
+            android.provider.ContactsContract.Data.CONTENT_URI,
+            rowId,
+        )
+        val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, mimeType)
+        return fireIntent(intent, "reach_contact:$mimeType")
+    }
+
+    /**
+     * Open the SMS composer to [number], pre-filled with [body] if present.
+     * ACTION_SENDTO + smsto: targets messaging apps only (no chooser noise),
+     * and the user taps send.
+     */
+    fun fireSms(number: String, body: String?): Boolean {
+        val uri = Uri.fromParts("smsto", number, null)
+        val intent = Intent(Intent.ACTION_SENDTO, uri).apply {
+            if (!body.isNullOrBlank()) putExtra("sms_body", body)
+        }
+        return fireIntent(intent, "sms")
     }
 
     private fun fireAccessibilityGlobal(action: String): Boolean {

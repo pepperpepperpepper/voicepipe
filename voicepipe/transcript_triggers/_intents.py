@@ -38,6 +38,7 @@ from ._actuator import (
     CAP_EMAIL,
     CAP_NAVIGATE,
     CAP_OPEN_URL,
+    CAP_REACH_CONTACT,
     CAP_SET_ALARM,
     CAP_SET_TIMER,
     CAP_WEB_SEARCH,
@@ -182,6 +183,7 @@ _UNSUPPORTED = {
     "timer": "Setting timers is not supported on this device.",
     "dial": "Dialing is not supported on this device.",
     "call": "Calling is not supported on this device.",
+    "message": "Messaging contacts is not supported on this device.",
     "navigate": "Navigation is not supported on this device.",
     "accessibility_global": "System navigation is not supported on this device.",
     "calendar": "Creating calendar events is not supported on this device.",
@@ -482,6 +484,56 @@ def _action_dial(
     return "", {"ok": True, "intent": "dial", "number": number}
 
 
+# Spoken / written platform aliases → canonical {whatsapp, signal, sms, phone}.
+_VIA_ALIASES: dict[str, str] = {
+    "whatsapp": "whatsapp",
+    "whats app": "whatsapp",
+    "whatsap": "whatsapp",
+    "wa": "whatsapp",
+    "signal": "signal",
+    "sms": "sms",
+    "text": "sms",
+    "text message": "sms",
+    "message": "sms",
+    "phone": "phone",
+    "cell": "phone",
+    "cellphone": "phone",
+    "mobile": "phone",
+    "regular": "phone",
+}
+
+_TRUTHY = {"true", "1", "yes", "y", "video"}
+
+
+def parse_reach_args(args: str) -> tuple[str, str, str, bool]:
+    """Parse the router's ``name=…; via=…; body=…; video=…`` reach args.
+
+    Returns ``(name, via, body, video)``. ``via`` is normalized through
+    :data:`_VIA_ALIASES` (empty string if absent/unknown). When the string
+    carries no ``key=value`` pairs at all, the whole thing is taken as the
+    ``name`` (so a bare "Sam Spears" still works for a phone call).
+    """
+    name = via = body = ""
+    video = False
+    found = False
+    for part in (args or "").split(";"):
+        key, sep, val = part.partition("=")
+        if not sep:
+            continue
+        k, v = key.strip().lower(), val.strip()
+        if k == "name":
+            name, found = v, True
+        elif k in ("via", "platform", "on", "app"):
+            via, found = _VIA_ALIASES.get(v.lower(), v.lower()), True
+        elif k == "body":
+            body, found = v, True
+        elif k == "video":
+            video, found = v.lower() in _TRUTHY, True
+    if not found:
+        name = (args or "").strip()
+    return name, via, body, video
+
+
 def _action_call(
     prompt: str,
     *,
@@ -491,14 +543,40 @@ def _action_call(
     commands: TranscriptCommandsConfig | None = None,
     actuator: Actuator | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """Call a business/place looked up by NAME ("the Sukhothai Hotel in
-    Shanghai"). The server resolves the phone number (Serper) and emits a
-    dial action; the client opens the dialer pre-filled. Use `dial` when the
-    user already gave a phone number."""
+    """Call someone. Two paths:
+
+    * Phone — a business/place/person looked up by NAME ("the Sukhothai
+      Hotel in Shanghai", "Sam Spears"). The client checks contacts first,
+      else the server resolves the number (Serper); the dialer opens.
+    * App — a saved contact via WhatsApp or Signal ("call Mom on
+      WhatsApp"): ``via=whatsapp|signal`` (optionally ``video=true``)
+      resolves the contact on-device and starts the call in that app.
+    """
     del verb_cfg, profiles, captures, commands
-    query = (prompt or "").strip()
-    if not query:
-        return _bad_args("call", "expected a business or place name")
+    raw = (prompt or "").strip()
+    if not raw:
+        return _bad_args("call", "expected a name (optionally 'via=whatsapp|signal')")
+    name, via, _body, video = parse_reach_args(raw)
+    if via in ("whatsapp", "signal"):
+        target = (name or raw).strip()
+        if not target:
+            return _bad_args("call", "expected a contact name")
+        mode = "video" if video else "call"
+        act = resolve_actuator(actuator)
+        if CAP_REACH_CONTACT not in act.capabilities():
+            return _unsupported("call")
+        if not act.reach_contact(target, via, mode):
+            return _unsupported("call")
+        return "", {
+            "ok": True,
+            "intent": "reach_contact",
+            "platform": via,
+            "mode": mode,
+            "name": target,
+        }
+    # Phone path: a bare name (or via=phone). Use the raw query unless the
+    # router gave a structured name= field.
+    query = name if name else raw
     act = resolve_actuator(actuator)
     if CAP_DIAL not in act.capabilities():
         return _unsupported("call")
@@ -508,6 +586,46 @@ def _action_call(
             {"ok": False, "error": "lookup_failed", "intent": "call", "query": query},
         )
     return "", {"ok": True, "intent": "call", "query": query}
+
+
+def _action_message(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Text/chat a saved contact: SMS by default, or WhatsApp / Signal via
+    ``via=…``. The contact is resolved on-device; the messaging app opens
+    pre-filled with the body and the user taps send."""
+    del verb_cfg, profiles, captures, commands
+    raw = (prompt or "").strip()
+    if not raw:
+        return _bad_args("message", "expected 'name=…; via=sms|whatsapp|signal; body=…'")
+    name, via, body, _video = parse_reach_args(raw)
+    if not via or via == "phone":
+        via = "sms"
+    if via not in ("sms", "whatsapp", "signal"):
+        via = "sms"
+    if not name:
+        return _bad_args("message", "expected a contact name")
+    act = resolve_actuator(actuator)
+    if CAP_REACH_CONTACT not in act.capabilities():
+        return _unsupported("message")
+    if not act.reach_contact(name, via, "message", body=body or None):
+        return _unsupported("message")
+    meta: dict[str, Any] = {
+        "ok": True,
+        "intent": "reach_contact",
+        "platform": via,
+        "mode": "message",
+        "name": name,
+    }
+    if body:
+        meta["body"] = body
+    return "", meta
 
 
 # Spoken travel-mode tokens → canonical mode strings. The canonical values

@@ -41,6 +41,14 @@ CAP_NAVIGATE = "navigate"
 CAP_ACCESSIBILITY_GLOBAL = "accessibility_global"
 CAP_CALENDAR = "calendar"
 CAP_EMAIL = "email"
+# Client can reach a saved contact through a messaging app (WhatsApp / Signal)
+# or SMS — a voice/video call or a text — resolving the contact on-device.
+CAP_REACH_CONTACT = "reach_contact"
+
+# Messaging platforms a `reach_contact` action may target.
+REACH_PLATFORMS: frozenset[str] = frozenset({"whatsapp", "signal", "sms"})
+# Modes within a platform: a voice call, a video call, or a text message.
+REACH_MODES: frozenset[str] = frozenset({"call", "video", "message"})
 
 
 # Whitelist of global accessibility actions the dispatcher will dispatch.
@@ -152,6 +160,22 @@ class Actuator(Protocol):
         ...
 
     def compose_email(self, to: str, subject: str, body: str) -> bool:
+        ...
+
+    def reach_contact(
+        self,
+        name: str,
+        platform: str,
+        mode: str,
+        body: str | None = None,
+    ) -> bool:
+        """Reach a saved contact by NAME through ``platform`` (whatsapp /
+        signal / sms) with ``mode`` (call / video / message).
+
+        Resolution is entirely on-device (the contact's WhatsApp/Signal
+        data rows, or phone number for SMS), so server implementations just
+        queue a ``reach_contact`` client action; desktop returns False.
+        """
         ...
 
 
@@ -323,6 +347,16 @@ class DesktopActuator:
         # No standard desktop equivalent; not in capabilities().
         return False
 
+    def reach_contact(
+        self,
+        name: str,
+        platform: str,
+        mode: str,
+        body: str | None = None,
+    ) -> bool:
+        # No standard desktop equivalent; not in capabilities().
+        return False
+
 
 @dataclass
 class InMemoryActuator:
@@ -351,6 +385,7 @@ class InMemoryActuator:
                 CAP_ACCESSIBILITY_GLOBAL,
                 CAP_CALENDAR,
                 CAP_EMAIL,
+                CAP_REACH_CONTACT,
             }
         )
     )
@@ -367,6 +402,7 @@ class InMemoryActuator:
     accessibility_global_calls: list[str] = field(default_factory=list)
     calendar_event_calls: list[str] = field(default_factory=list)
     email_calls: list[dict[str, str]] = field(default_factory=list)
+    reach_contact_calls: list[dict[str, Any]] = field(default_factory=list)
     subprocess_result: SubprocessResult = field(
         default_factory=lambda: SubprocessResult(returncode=0, stdout="", stderr="")
     )
@@ -478,6 +514,22 @@ class InMemoryActuator:
         if CAP_EMAIL not in self.caps:
             return False
         self.email_calls.append({"to": to, "subject": subject, "body": body})
+        return True
+
+    def reach_contact(
+        self,
+        name: str,
+        platform: str,
+        mode: str,
+        body: str | None = None,
+    ) -> bool:
+        if CAP_REACH_CONTACT not in self.caps:
+            return False
+        if platform not in REACH_PLATFORMS or mode not in REACH_MODES:
+            return False
+        self.reach_contact_calls.append(
+            {"name": name, "platform": platform, "mode": mode, "body": body}
+        )
         return True
 
 

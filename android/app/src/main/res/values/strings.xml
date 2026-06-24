@@ -42,6 +42,16 @@
     <string name="status_choose">🔢 Multiple matches for %1$s — choose one</string>
     <string name="call_choose_title">Which \"%1$s\"?</string>
     <string name="call_choose_cancel">Cancel</string>
+    <string name="reach_choose_title">Which \"%1$s\"?</string>
+    <!-- "📞 Calling Mom on WhatsApp…" / "💬 Messaging Mom on Signal…" -->
+    <string name="status_reaching">%1$s %2$s on %3$s…</string>
+    <string name="reach_verb_call">📞 Calling</string>
+    <string name="reach_verb_message">💬 Messaging</string>
+    <string name="status_no_contact">⚠ No contact found for %1$s</string>
+    <string name="status_no_contact_app">⚠ %1$s isn\'t reachable on %2$s</string>
+    <string name="platform_whatsapp">WhatsApp</string>
+    <string name="platform_signal">Signal</string>
+    <string name="platform_sms">SMS</string>
     <string name="status_error">⚠ %1$s</string>
     <string name="mic_permission_denied">Microphone permission denied — using text input instead</string>
     <string name="mic_error_prefix">Speech: </string>

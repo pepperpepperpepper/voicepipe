@@ -111,4 +111,76 @@ object ContactResolver {
             emptyList()
         }
     }
+
+    /** A WhatsApp/Signal per-contact action row: the Data._ID to ACTION_VIEW. */
+    data class DataRow(val id: Long, val name: String?)
+
+    /**
+     * WhatsApp/Signal per-contact data rows whose display name matches [name],
+     * for the given [mimeType] (e.g. the WhatsApp "voice call" MIME). These
+     * rows exist only for contacts the app has synced. Exact name matches come
+     * first. Empty on no match / no permission / error.
+     */
+    fun dataRowsForName(context: Context, name: String, mimeType: String): List<DataRow> {
+        val query = name.trim()
+        if (query.isEmpty()) return emptyList()
+        if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.READ_CONTACTS)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            return emptyList()
+        }
+        return try {
+            context.contentResolver.query(
+                ContactsContract.Data.CONTENT_URI,
+                arrayOf(
+                    ContactsContract.Data._ID,
+                    ContactsContract.Data.DISPLAY_NAME_PRIMARY,
+                ),
+                "${ContactsContract.Data.DISPLAY_NAME_PRIMARY} LIKE ? AND " +
+                    "${ContactsContract.Data.MIMETYPE} = ?",
+                arrayOf("%$query%", mimeType),
+                null,
+            )?.use { cursor ->
+                val idIdx = cursor.getColumnIndex(ContactsContract.Data._ID)
+                val nameIdx = cursor.getColumnIndex(ContactsContract.Data.DISPLAY_NAME_PRIMARY)
+                if (idIdx < 0) return emptyList()
+                val seen = HashSet<Long>()
+                val exact = ArrayList<DataRow>()
+                val partial = ArrayList<DataRow>()
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(idIdx)
+                    if (!seen.add(id)) continue
+                    val display = if (nameIdx >= 0) cursor.getString(nameIdx).orEmpty() else ""
+                    val row = DataRow(id, display.ifBlank { null })
+                    if (display.equals(query, ignoreCase = true)) exact.add(row)
+                    else partial.add(row)
+                }
+                exact + partial
+            } ?: emptyList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    /**
+     * MIME type of the WhatsApp/Signal per-contact data row for a given
+     * platform + mode, or null if the combination has no app row (e.g. SMS,
+     * which dials by number instead). WhatsApp/Signal register these rows
+     * under stable vendor MIME types.
+     */
+    fun mimeTypeFor(platform: String, mode: String): String? = when (platform) {
+        "whatsapp" -> when (mode) {
+            "call" -> "vnd.android.cursor.item/vnd.com.whatsapp.voip.call"
+            "video" -> "vnd.android.cursor.item/vnd.com.whatsapp.video.call"
+            "message" -> "vnd.android.cursor.item/vnd.com.whatsapp.profile"
+            else -> null
+        }
+        "signal" -> when (mode) {
+            "call" -> "vnd.android.cursor.item/vnd.org.thoughtcrime.securesms.call"
+            "video" -> "vnd.android.cursor.item/vnd.org.thoughtcrime.securesms.video.call"
+            "message" -> "vnd.android.cursor.item/vnd.org.thoughtcrime.securesms.contact"
+            else -> null
+        }
+        else -> null
+    }
 }

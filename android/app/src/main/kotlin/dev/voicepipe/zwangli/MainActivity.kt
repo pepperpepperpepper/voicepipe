@@ -323,7 +323,9 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
                 onFailure = { "⚠ HTTP error: ${it.message}" },
             )
             response.text = rendered
-            if (!handleResolveDial(result.getOrNull(), normalizedUrl, settings.token)) {
+            if (!handleReachContact(result.getOrNull()) &&
+                !handleResolveDial(result.getOrNull(), normalizedUrl, settings.token)
+            ) {
                 setPhase(phaseForResult(result), statusForResult(result))
             }
             inFlight = null
@@ -412,6 +414,83 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
         executor.execute(listOf(dial))
     }
 
+    /**
+     * Reach a saved contact through WhatsApp / Signal / SMS. Resolves the
+     * spoken name on-device: SMS → phone number; WhatsApp/Signal → the app's
+     * per-contact action row. Multiple matches show a chooser; one fires
+     * directly. Returns true if it handled a reach_contact action.
+     */
+    private fun handleReachContact(resp: DispatchResponse?): Boolean {
+        val action = resp?.clientActions
+            ?.let { ClientActions.parseAll(it) }
+            ?.filterIsInstance<ClientAction.ReachContact>()
+            ?.firstOrNull() ?: return false
+        val name = action.name
+        if (action.platform == "sms") {
+            val contacts = ContactResolver.phonesForName(this, name)
+            if (contacts.isEmpty()) {
+                setPhase(Phase.ERROR, getString(R.string.status_no_contact, name))
+                return true
+            }
+            if (contacts.size > 1) {
+                AlertDialog.Builder(this)
+                    .setTitle(getString(R.string.reach_choose_title, name))
+                    .setItems(contacts.map { contactLabel(it.name, it.phone) }.toTypedArray()) { _, w ->
+                        sendSms(contacts[w].name ?: name, contacts[w].phone, action.body)
+                    }
+                    .setNegativeButton(R.string.call_choose_cancel) { _, _ -> setStatus(null) }
+                    .show()
+            } else {
+                sendSms(contacts[0].name ?: name, contacts[0].phone, action.body)
+            }
+            return true
+        }
+        // WhatsApp / Signal: ACTION_VIEW the contact's app-specific data row.
+        val mime = ContactResolver.mimeTypeFor(action.platform, action.mode) ?: return false
+        val rows = ContactResolver.dataRowsForName(this, name, mime)
+        val platformLabel = platformLabel(action.platform)
+        if (rows.isEmpty()) {
+            setPhase(Phase.ERROR, getString(R.string.status_no_contact_app, name, platformLabel))
+            return true
+        }
+        if (rows.size > 1) {
+            AlertDialog.Builder(this)
+                .setTitle(getString(R.string.reach_choose_title, name))
+                .setItems(rows.map { it.name ?: name }.toTypedArray()) { _, w ->
+                    fireReach(rows[w].name ?: name, rows[w].id, mime, action.platform, action.mode)
+                }
+                .setNegativeButton(R.string.call_choose_cancel) { _, _ -> setStatus(null) }
+                .show()
+        } else {
+            fireReach(rows[0].name ?: name, rows[0].id, mime, action.platform, action.mode)
+        }
+        return true
+    }
+
+    private fun fireReach(label: String, rowId: Long, mime: String, platform: String, mode: String) {
+        val verb = if (mode == "message") getString(R.string.reach_verb_message)
+        else getString(R.string.reach_verb_call)
+        setPhase(Phase.DONE, getString(R.string.status_reaching, verb, label, platformLabel(platform)))
+        if (!executor.fireContactDataRow(rowId, mime)) {
+            setPhase(Phase.ERROR, getString(R.string.status_no_contact_app, label, platformLabel(platform)))
+        }
+    }
+
+    private fun sendSms(label: String, number: String, body: String?) {
+        setPhase(Phase.DONE, getString(R.string.status_reaching,
+            getString(R.string.reach_verb_message), label, getString(R.string.platform_sms)))
+        executor.fireSms(number, body)
+    }
+
+    private fun contactLabel(name: String?, phone: String): String =
+        if (!name.isNullOrBlank()) "$name — $phone" else phone
+
+    private fun platformLabel(platform: String): String = when (platform) {
+        "whatsapp" -> getString(R.string.platform_whatsapp)
+        "signal" -> getString(R.string.platform_signal)
+        else -> getString(R.string.platform_sms)
+    }
+
     /** Concise status-pane line summarizing a dispatch round-trip outcome. */
     private fun statusForResult(result: Result<DispatchResponse>): String =
         result.fold(
@@ -456,7 +535,9 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
                 onFailure = { "⚠ HTTP error: ${it.message}" },
             )
             response.text = rendered
-            if (!handleResolveDial(result.getOrNull(), normalizedUrl, settings.token)) {
+            if (!handleReachContact(result.getOrNull()) &&
+                !handleResolveDial(result.getOrNull(), normalizedUrl, settings.token)
+            ) {
                 setPhase(phaseForResult(result), statusForResult(result))
             }
             inFlight = null

@@ -38,6 +38,15 @@
         <intent>
             <action android:name="android.intent.action.SET_TIMER" />
         </intent>
+        <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="smsto" />
+        </intent>
+        <!-- WhatsApp / Signal call & chat are launched via ACTION_VIEW on the
+             contact's app-specific data row; declare the packages so the rows
+             resolve under Android 11+ package visibility. -->
+        <package android:name="com.whatsapp" />
+        <package android:name="org.thoughtcrime.securesms" />
     </queries>
 
     <application

@@ -65,10 +65,13 @@ from voicepipe.transcript_triggers._actuator import (
     CAP_RESOLVE_DIAL,
     CAP_NAVIGATE,
     CAP_OPEN_URL,
+    CAP_REACH_CONTACT,
     CAP_SET_ALARM,
     CAP_SET_TIMER,
     CAP_SUBPROCESS,
     CAP_WEB_SEARCH,
+    REACH_MODES,
+    REACH_PLATFORMS,
     DesktopActuator,
     SubprocessResult,
 )
@@ -94,6 +97,7 @@ _ALL_CAPS: frozenset[str] = frozenset(
         CAP_ACCESSIBILITY_GLOBAL,
         CAP_CALENDAR,
         CAP_EMAIL,
+        CAP_REACH_CONTACT,
     }
 )
 
@@ -268,6 +272,28 @@ class ServerActuator:
             entry["subject"] = subject
         if body:
             entry["body"] = body
+        self.client_actions.append(entry)
+        return True
+
+    def reach_contact(
+        self,
+        name: str,
+        platform: str,
+        mode: str,
+        body: str | None = None,
+    ) -> bool:
+        if CAP_REACH_CONTACT not in self._caps or not name.strip():
+            return False
+        if platform not in REACH_PLATFORMS or mode not in REACH_MODES:
+            return False
+        entry: dict[str, Any] = {
+            "type": "reach_contact",
+            "name": name.strip(),
+            "platform": platform,
+            "mode": mode,
+        }
+        if body and body.strip():
+            entry["body"] = body.strip()
         self.client_actions.append(entry)
         return True
 

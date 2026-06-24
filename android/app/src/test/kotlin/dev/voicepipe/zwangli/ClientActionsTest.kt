@@ -20,12 +20,40 @@ class ClientActionsTest {
             "set_timer",
             "dial",
             "resolve_dial",
+            "reach_contact",
             "navigate",
             "accessibility_global",
             "calendar",
             "email",
         )
         assertEquals(expected, ClientActions.CAPABILITIES)
+    }
+
+    @Test
+    fun `reach_contact parses platform, mode, name, and optional body`() {
+        val a = ClientActions.parse(
+            parse("""{"type":"reach_contact","name":"Sam Spears","platform":"whatsapp","mode":"video"}"""),
+        )
+        assertEquals(ClientAction.ReachContact("Sam Spears", "whatsapp", "video", null), a)
+
+        val b = ClientActions.parse(
+            parse("""{"type":"reach_contact","name":"Mom","platform":"signal","mode":"message","body":"call me"}"""),
+        )
+        assertEquals(ClientAction.ReachContact("Mom", "signal", "message", "call me"), b)
+    }
+
+    @Test
+    fun `reach_contact rejects unknown platform or mode`() {
+        assertNull(
+            ClientActions.parse(
+                parse("""{"type":"reach_contact","name":"X","platform":"telegram","mode":"call"}"""),
+            ),
+        )
+        assertNull(
+            ClientActions.parse(
+                parse("""{"type":"reach_contact","name":"X","platform":"sms","mode":"fax"}"""),
+            ),
+        )
     }
 
     @Test

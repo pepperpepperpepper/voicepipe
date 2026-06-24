@@ -26,10 +26,12 @@ from voicepipe.transcript_triggers._actuator import (
 )
 from voicepipe.transcript_triggers._intents import (
     _action_call,
+    _action_message,
     _normalize_open_url,
     parse_alarm_args,
     parse_alarm_offset_args,
     parse_navigate_args,
+    parse_reach_args,
     parse_timer_args,
 )
 
@@ -313,6 +315,78 @@ def test_call_verb_without_dial_capability_skips() -> None:
     _out, meta = _action_call("Joe's Pizza", actuator=act)
     assert meta["error"] == "capability_unsupported"
     assert act.call_business_calls == []
+
+
+# ---------------------------------------------------------------------------
+# parse_reach_args / call-via-app / message
+# ---------------------------------------------------------------------------
+
+
+def test_parse_reach_args_structured_and_bare() -> None:
+    assert parse_reach_args("name=Mom; via=whatsapp; video=true") == (
+        "Mom",
+        "whatsapp",
+        "",
+        True,
+    )
+    assert parse_reach_args("name=Sam; via=signal; body=call me") == (
+        "Sam",
+        "signal",
+        "call me",
+        False,
+    )
+    # Aliases normalize; bare strings become the name with no platform.
+    assert parse_reach_args("name=Bob; via=text")[1] == "sms"
+    assert parse_reach_args("Sukhothai Hotel") == ("Sukhothai Hotel", "", "", False)
+
+
+def test_call_verb_via_whatsapp_routes_to_reach_contact() -> None:
+    act = InMemoryActuator()
+    out, meta = _action_call("name=Mom; via=whatsapp", actuator=act)
+    assert out == ""
+    assert meta["intent"] == "reach_contact"
+    assert meta["platform"] == "whatsapp"
+    assert meta["mode"] == "call"
+    assert act.reach_contact_calls == [
+        {"name": "Mom", "platform": "whatsapp", "mode": "call", "body": None}
+    ]
+    # Bare name still routes to the phone path (web/contact lookup).
+    assert act.call_business_calls == []
+
+
+def test_call_verb_via_signal_video() -> None:
+    act = InMemoryActuator()
+    _out, meta = _action_call("name=Dad; via=signal; video=true", actuator=act)
+    assert meta["mode"] == "video"
+    assert act.reach_contact_calls[0]["platform"] == "signal"
+
+
+def test_message_verb_defaults_to_sms() -> None:
+    act = InMemoryActuator()
+    out, meta = _action_message("name=Sam; body=running late", actuator=act)
+    assert out == ""
+    assert meta["intent"] == "reach_contact"
+    assert meta["platform"] == "sms"
+    assert meta["mode"] == "message"
+    assert act.reach_contact_calls == [
+        {"name": "Sam", "platform": "sms", "mode": "message", "body": "running late"}
+    ]
+
+
+def test_message_verb_whatsapp() -> None:
+    act = InMemoryActuator()
+    _out, meta = _action_message("name=Mom; via=whatsapp; body=hi", actuator=act)
+    assert meta["platform"] == "whatsapp"
+    assert act.reach_contact_calls[0]["body"] == "hi"
+
+
+def test_message_verb_without_reach_capability_skips() -> None:
+    from voicepipe.transcript_triggers._actuator import CAP_WEB_SEARCH
+
+    act = InMemoryActuator(caps=frozenset({CAP_WEB_SEARCH}))
+    _out, meta = _action_message("name=Sam; body=hi", actuator=act)
+    assert meta["error"] == "capability_unsupported"
+    assert act.reach_contact_calls == []
 
 
 @pytest.mark.parametrize(

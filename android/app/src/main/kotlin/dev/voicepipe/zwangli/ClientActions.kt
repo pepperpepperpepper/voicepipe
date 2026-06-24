@@ -28,6 +28,16 @@ sealed class ClientAction {
     // Resolve a business/place name → number via /resolve-call, then dial.
     // Handled by MainActivity (async + status), not the synchronous executor.
     data class ResolveDial(val query: String) : ClientAction()
+    // Reach a saved contact by name through WhatsApp / Signal / SMS. platform
+    // ∈ {whatsapp, signal, sms}; mode ∈ {call, video, message}. Resolved
+    // on-device (contact data row, or phone number for sms). Handled by
+    // MainActivity (contact lookup + chooser), not the synchronous executor.
+    data class ReachContact(
+        val name: String,
+        val platform: String,
+        val mode: String,
+        val body: String?,
+    ) : ClientAction()
     data class Navigate(
         val destination: String,
         val mode: String?,
@@ -53,6 +63,7 @@ object ClientActions {
         "set_timer",
         "dial",
         "resolve_dial",
+        "reach_contact",
         "navigate",
         "accessibility_global",
         "calendar",
@@ -92,6 +103,7 @@ object ClientActions {
             "resolve_dial" -> obj.stringField("query")
                 ?.takeIf { it.isNotBlank() }
                 ?.let(ClientAction::ResolveDial)
+            "reach_contact" -> parseReachContact(obj)
             "navigate" -> parseNavigate(obj)
             "accessibility_global" -> parseAccessibilityGlobal(obj)
             "calendar_event" -> obj.stringField("title")
@@ -104,6 +116,17 @@ object ClientActions {
             )
             else -> ClientAction.Unknown(type, obj)
         }
+    }
+
+    private val REACH_PLATFORMS = setOf("whatsapp", "signal", "sms")
+    private val REACH_MODES = setOf("call", "video", "message")
+
+    private fun parseReachContact(obj: JsonObject): ClientAction.ReachContact? {
+        val name = obj.stringField("name")?.takeIf { it.isNotBlank() } ?: return null
+        val platform = obj.stringField("platform")?.takeIf { it in REACH_PLATFORMS } ?: return null
+        val mode = obj.stringField("mode")?.takeIf { it in REACH_MODES } ?: return null
+        val body = obj.stringField("body")?.takeIf { it.isNotBlank() }
+        return ClientAction.ReachContact(name, platform, mode, body)
     }
 
     private fun parseSetAlarm(obj: JsonObject): ClientAction.SetAlarm? {

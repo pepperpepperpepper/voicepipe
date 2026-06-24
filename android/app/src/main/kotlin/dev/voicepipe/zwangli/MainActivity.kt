@@ -352,6 +352,18 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
             ?.let { ClientActions.parseAll(it) }
             ?.filterIsInstance<ClientAction.ResolveDial>()
             ?.firstOrNull()?.query ?: return false
+        // Contacts first: "call Sam Spears" should dial a person in your phone
+        // book, not trigger a web business search. Only fall through to the
+        // server's Serper lookup when no contact matches the spoken name.
+        val contacts = ContactResolver.phonesForName(this, query)
+        if (contacts.isNotEmpty()) {
+            if (contacts.size > 1) {
+                promptCandidateChoice(query, contacts)
+            } else {
+                dialNumber(contacts[0].name?.takeIf { it.isNotBlank() } ?: query, contacts[0].phone)
+            }
+            return true
+        }
         setPhase(Phase.WORKING, getString(R.string.status_searching, query))
         val res = runCatching {
             withContext(Dispatchers.IO) { client.resolveCall(url, bearer, query) }

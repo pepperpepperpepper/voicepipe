@@ -62,4 +62,53 @@ object ContactResolver {
             null
         }
     }
+
+    /**
+     * Phone numbers for contacts whose display name matches [name]. Used so
+     * "call Sam Spears" dials the contact rather than searching the web for a
+     * business. Exact (case-insensitive) display-name matches are returned
+     * first; otherwise any prefix/substring matches follow. De-duplicates by
+     * number. Returns an empty list on no match / no permission / any error.
+     */
+    fun phonesForName(context: Context, name: String): List<CallCandidate> {
+        val query = name.trim()
+        if (query.isEmpty()) return emptyList()
+        if (ContextCompat.checkSelfPermission(context, android.Manifest.permission.READ_CONTACTS)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            return emptyList()
+        }
+        return try {
+            context.contentResolver.query(
+                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                arrayOf(
+                    ContactsContract.CommonDataKinds.Phone.NUMBER,
+                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME_PRIMARY,
+                ),
+                "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME_PRIMARY} LIKE ?",
+                arrayOf("%$query%"),
+                null,
+            )?.use { cursor ->
+                val numIdx = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+                val nameIdx =
+                    cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME_PRIMARY)
+                if (numIdx < 0) return emptyList()
+                val seen = HashSet<String>()
+                val exact = ArrayList<CallCandidate>()
+                val partial = ArrayList<CallCandidate>()
+                while (cursor.moveToNext()) {
+                    val number = cursor.getString(numIdx)?.takeIf { it.isNotBlank() } ?: continue
+                    val display = if (nameIdx >= 0) cursor.getString(nameIdx).orEmpty() else ""
+                    val key = number.filter { !it.isWhitespace() }
+                    if (!seen.add(key)) continue
+                    val candidate = CallCandidate(name = display.ifBlank { null }, phone = number)
+                    if (display.equals(query, ignoreCase = true)) exact.add(candidate)
+                    else partial.add(candidate)
+                }
+                exact + partial
+            } ?: emptyList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
 }

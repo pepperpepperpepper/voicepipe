@@ -44,6 +44,10 @@ CAP_EMAIL = "email"
 # Client can reach a saved contact through a messaging app (WhatsApp / Signal)
 # or SMS — a voice/video call or a text — resolving the contact on-device.
 CAP_REACH_CONTACT = "reach_contact"
+# Client can launch a named app (WhatsApp, WeChat, Telegram, …) to its home
+# screen, optionally copying a contact/query to the clipboard so the user can
+# paste it into the app's own search (these apps expose no search deep link).
+CAP_OPEN_APP = "open_app"
 
 # Messaging platforms a `reach_contact` action may target.
 REACH_PLATFORMS: frozenset[str] = frozenset({"whatsapp", "signal", "sms"})
@@ -175,6 +179,14 @@ class Actuator(Protocol):
         Resolution is entirely on-device (the contact's WhatsApp/Signal
         data rows, or phone number for SMS), so server implementations just
         queue a ``reach_contact`` client action; desktop returns False.
+        """
+        ...
+
+    def open_app(self, app: str, query: str | None = None) -> bool:
+        """Launch a named app (``whatsapp``, ``wechat``, …) to its home
+        screen. If ``query`` is given, the client copies it to the clipboard
+        so the user can paste it into the app's own search. Server queues an
+        ``open_app`` client action; desktop returns False.
         """
         ...
 
@@ -357,6 +369,10 @@ class DesktopActuator:
         # No standard desktop equivalent; not in capabilities().
         return False
 
+    def open_app(self, app: str, query: str | None = None) -> bool:
+        # No standard desktop equivalent; not in capabilities().
+        return False
+
 
 @dataclass
 class InMemoryActuator:
@@ -386,6 +402,7 @@ class InMemoryActuator:
                 CAP_CALENDAR,
                 CAP_EMAIL,
                 CAP_REACH_CONTACT,
+                CAP_OPEN_APP,
             }
         )
     )
@@ -403,6 +420,7 @@ class InMemoryActuator:
     calendar_event_calls: list[str] = field(default_factory=list)
     email_calls: list[dict[str, str]] = field(default_factory=list)
     reach_contact_calls: list[dict[str, Any]] = field(default_factory=list)
+    open_app_calls: list[dict[str, Any]] = field(default_factory=list)
     subprocess_result: SubprocessResult = field(
         default_factory=lambda: SubprocessResult(returncode=0, stdout="", stderr="")
     )
@@ -530,6 +548,12 @@ class InMemoryActuator:
         self.reach_contact_calls.append(
             {"name": name, "platform": platform, "mode": mode, "body": body}
         )
+        return True
+
+    def open_app(self, app: str, query: str | None = None) -> bool:
+        if CAP_OPEN_APP not in self.caps or not app.strip():
+            return False
+        self.open_app_calls.append({"app": app, "query": query})
         return True
 
 

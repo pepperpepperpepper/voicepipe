@@ -52,6 +52,7 @@
     <string name="platform_whatsapp">WhatsApp</string>
     <string name="platform_signal">Signal</string>
     <string name="platform_sms">SMS</string>
+    <string name="open_app_query_copied">Copied \"%1$s\" — paste it into search</string>
     <string name="status_error">⚠ %1$s</string>
     <string name="mic_permission_denied">Microphone permission denied — using text input instead</string>
     <string name="mic_error_prefix">Speech: </string>

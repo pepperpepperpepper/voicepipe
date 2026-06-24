@@ -47,6 +47,13 @@
              resolve under Android 11+ package visibility. -->
         <package android:name="com.whatsapp" />
         <package android:name="org.thoughtcrime.securesms" />
+        <!-- "open WhatsApp / WeChat / …" launches apps by package; the
+             MAIN/LAUNCHER query makes all launchable apps visible so
+             getLaunchIntentForPackage() resolves them under Android 11+. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
     </queries>
 
     <application

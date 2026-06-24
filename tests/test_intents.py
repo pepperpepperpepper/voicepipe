@@ -27,9 +27,11 @@ from voicepipe.transcript_triggers._actuator import (
 from voicepipe.transcript_triggers._intents import (
     _action_call,
     _action_message,
+    _action_open_app,
     _normalize_open_url,
     parse_alarm_args,
     parse_alarm_offset_args,
+    parse_app_args,
     parse_navigate_args,
     parse_reach_args,
     parse_timer_args,
@@ -387,6 +389,41 @@ def test_message_verb_without_reach_capability_skips() -> None:
     _out, meta = _action_message("name=Sam; body=hi", actuator=act)
     assert meta["error"] == "capability_unsupported"
     assert act.reach_contact_calls == []
+
+
+# ---------------------------------------------------------------------------
+# parse_app_args / open_app
+# ---------------------------------------------------------------------------
+
+
+def test_parse_app_args_bare_structured_and_aliases() -> None:
+    assert parse_app_args("whatsapp") == ("whatsapp", None)
+    assert parse_app_args("whatsapp for bob") == ("whatsapp", "bob")
+    # Multi-word app name; "for" prefix on the query is stripped.
+    assert parse_app_args("we chat for Bob Smith") == ("wechat", "Bob Smith")
+    assert parse_app_args("app=wechat; query=Bob Smith") == ("wechat", "Bob Smith")
+    # Aliases normalize.
+    assert parse_app_args("ig") == ("instagram", None)
+    assert parse_app_args("x") == ("twitter", None)
+
+
+def test_open_app_verb_routes_to_actuator() -> None:
+    act = InMemoryActuator()
+    out, meta = _action_open_app("whatsapp for Bob", actuator=act)
+    assert out == ""
+    assert meta["intent"] == "open_app"
+    assert meta["app"] == "whatsapp"
+    assert meta["query"] == "Bob"
+    assert act.open_app_calls == [{"app": "whatsapp", "query": "Bob"}]
+
+
+def test_open_app_verb_without_capability_skips() -> None:
+    from voicepipe.transcript_triggers._actuator import CAP_WEB_SEARCH
+
+    act = InMemoryActuator(caps=frozenset({CAP_WEB_SEARCH}))
+    _out, meta = _action_open_app("whatsapp", actuator=act)
+    assert meta["error"] == "capability_unsupported"
+    assert act.open_app_calls == []
 
 
 @pytest.mark.parametrize(

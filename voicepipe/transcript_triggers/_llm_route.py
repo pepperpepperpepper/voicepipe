@@ -64,6 +64,7 @@ _VERB_DESCRIPTIONS: dict[str, str] = {
     "message": 'send a text/chat message to a saved contact. args: "name=<person>; via=sms|whatsapp|signal; body=<message text>". via defaults to sms (a normal text); use whatsapp/signal when the user names that app. e.g. "text Sam I\'m running late" → "name=Sam; via=sms; body=I\'m running late"; "message mom on signal saying call me" → "name=mom; via=signal; body=call me".',
     "search": 'web search. args: "<query>"',
     "open": 'open a URL. args: "<url or host>" e.g. "https://example.com"',
+    "open_app": 'launch an installed app by NAME (WhatsApp, WeChat, Signal, Telegram, Instagram, Messenger, …). args: "<app>" to just open it, or "app=<app>; query=<contact or search text>" to open it and copy the query to the clipboard for pasting into the app\'s own search (these apps have no external search link). e.g. "open WhatsApp" → "whatsapp"; "search WeChat for Bob Smith" → "app=wechat; query=Bob Smith".',
     "navigate": 'maps directions. args: "[<mode>] [to] <destination>" mode ∈ {driving, walking, bicycling, transit}',
     "calendar": 'create a calendar event. args: "<event title>" — just the title; omit date/time words (the user sets the time on-device). e.g. "dentist appointment", "team standup"',
     "email": 'compose an email (opens the mail composer; user picks account + sends). args: "to=<recipient or name>; subject=<subject>; body=<message>" — any field may be empty, e.g. "to=bob; subject=lunch; body=are you free at noon"',

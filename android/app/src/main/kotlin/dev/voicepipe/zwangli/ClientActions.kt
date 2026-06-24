@@ -38,6 +38,9 @@ sealed class ClientAction {
         val mode: String,
         val body: String?,
     ) : ClientAction()
+    // Launch a named app to its home screen; if [query] is set, copy it to the
+    // clipboard first so the user can paste it into the app's own search.
+    data class OpenApp(val app: String, val query: String?) : ClientAction()
     data class Navigate(
         val destination: String,
         val mode: String?,
@@ -64,6 +67,7 @@ object ClientActions {
         "dial",
         "resolve_dial",
         "reach_contact",
+        "open_app",
         "navigate",
         "accessibility_global",
         "calendar",
@@ -104,6 +108,9 @@ object ClientActions {
                 ?.takeIf { it.isNotBlank() }
                 ?.let(ClientAction::ResolveDial)
             "reach_contact" -> parseReachContact(obj)
+            "open_app" -> obj.stringField("app")
+                ?.takeIf { it.isNotBlank() }
+                ?.let { ClientAction.OpenApp(it, obj.stringField("query")?.takeIf { q -> q.isNotBlank() }) }
             "navigate" -> parseNavigate(obj)
             "accessibility_global" -> parseAccessibilityGlobal(obj)
             "calendar_event" -> obj.stringField("title")

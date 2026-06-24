@@ -66,6 +66,9 @@ class ClientActionExecutor(
                     // Handled by MainActivity (contact lookup + chooser, then
                     // fireContactCall/fireContactMessage/fireSms). No-op here.
                 }
+                is ClientAction.OpenApp -> {
+                    if (fireOpenApp(action.app, action.query)) intentsFired++
+                }
                 is ClientAction.Navigate -> {
                     if (fireNavigate(action.destination, action.mode)) intentsFired++
                 }
@@ -272,6 +275,39 @@ class ClientActionExecutor(
         return fireIntent(intent, "sms")
     }
 
+    /**
+     * Launch a named app to its home screen. If [query] is given, copy it to
+     * the clipboard first (with a toast hint) so the user can paste it into
+     * the app's own search — WhatsApp/WeChat/etc. expose no external search
+     * deep link. Returns false if the app isn't installed / not resolvable.
+     */
+    private fun fireOpenApp(app: String, query: String?): Boolean {
+        val pkg = APP_PACKAGES[app.trim().lowercase()] ?: run {
+            Log.w(TAG, "open_app: unknown app '$app'")
+            return false
+        }
+        val launch = context.packageManager.getLaunchIntentForPackage(pkg) ?: run {
+            Log.w(TAG, "open_app: '$app' ($pkg) not installed")
+            return false
+        }
+        if (!query.isNullOrBlank()) {
+            applyClipboard(query)
+            android.widget.Toast.makeText(
+                context,
+                context.getString(R.string.open_app_query_copied, query),
+                android.widget.Toast.LENGTH_LONG,
+            ).show()
+        }
+        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        return try {
+            context.startActivity(launch)
+            true
+        } catch (e: ActivityNotFoundException) {
+            Log.w(TAG, "open_app: launch failed for '$app'", e)
+            false
+        }
+    }
+
     private fun fireAccessibilityGlobal(action: String): Boolean {
         val actionId = when (action) {
             "back" -> AccessibilityService.GLOBAL_ACTION_BACK
@@ -344,6 +380,27 @@ class ClientActionExecutor(
 
     companion object {
         private const val TAG = "ClientActionExecutor"
+
+        /**
+         * Canonical app token (as normalized by the server's open_app handler)
+         * → Android package name. Used to launch a named app. Apps not listed
+         * here can't be opened by name (fireOpenApp returns false).
+         */
+        private val APP_PACKAGES: Map<String, String> = mapOf(
+            "whatsapp" to "com.whatsapp",
+            "wechat" to "com.tencent.mm",
+            "signal" to "org.thoughtcrime.securesms",
+            "telegram" to "org.telegram.messenger",
+            "instagram" to "com.instagram.android",
+            "messenger" to "com.facebook.orca",
+            "facebook" to "com.facebook.katana",
+            "twitter" to "com.twitter.android",
+            "snapchat" to "com.snapchat.android",
+            "discord" to "com.discord",
+            "slack" to "com.Slack",
+            "viber" to "com.viber.voip",
+            "line" to "jp.naver.line.android",
+        )
 
         /**
          * Wall-clock (hour, minute) for a relative alarm offset.

@@ -37,6 +37,7 @@ from ._actuator import (
     CAP_DIAL,
     CAP_EMAIL,
     CAP_NAVIGATE,
+    CAP_OPEN_APP,
     CAP_OPEN_URL,
     CAP_REACH_CONTACT,
     CAP_SET_ALARM,
@@ -184,6 +185,7 @@ _UNSUPPORTED = {
     "dial": "Dialing is not supported on this device.",
     "call": "Calling is not supported on this device.",
     "message": "Messaging contacts is not supported on this device.",
+    "open_app": "Launching apps is not supported on this device.",
     "navigate": "Navigation is not supported on this device.",
     "accessibility_global": "System navigation is not supported on this device.",
     "calendar": "Creating calendar events is not supported on this device.",
@@ -625,6 +627,114 @@ def _action_message(
     }
     if body:
         meta["body"] = body
+    return "", meta
+
+
+# Spoken / written app names → canonical app token. The client maps the
+# canonical token to an Android package. Unlisted names pass through
+# lower-cased (the client still tries to resolve them).
+_APP_ALIASES: dict[str, str] = {
+    "whatsapp": "whatsapp",
+    "whats app": "whatsapp",
+    "whatsap": "whatsapp",
+    "wa": "whatsapp",
+    "wechat": "wechat",
+    "we chat": "wechat",
+    "weixin": "wechat",
+    "signal": "signal",
+    "telegram": "telegram",
+    "instagram": "instagram",
+    "insta": "instagram",
+    "ig": "instagram",
+    "messenger": "messenger",
+    "facebook messenger": "messenger",
+    "facebook": "facebook",
+    "fb": "facebook",
+    "twitter": "twitter",
+    "x": "twitter",
+    "snapchat": "snapchat",
+    "snap": "snapchat",
+    "discord": "discord",
+    "slack": "slack",
+    "viber": "viber",
+    "line": "line",
+}
+
+# A leading "for"/"about" between the app and the search query is stripped so
+# "search whatsapp for bob" → query "bob" (not "for bob").
+_APP_QUERY_PREFIX_RE = re.compile(r"^(?:for|about)\s+", re.IGNORECASE)
+
+
+def _normalize_app(name: str) -> str:
+    key = " ".join((name or "").strip().lower().split())
+    return _APP_ALIASES.get(key, key)
+
+
+def parse_app_args(args: str) -> tuple[str, str | None]:
+    """Parse the router's ``open_app`` args into ``(app, query_or_None)``.
+
+    Accepts a structured ``app=…; query=…`` form, or a bare form where the
+    FIRST recognized app alias is the app and the rest is the search query:
+    ``"whatsapp"`` → ``("whatsapp", None)``; ``"whatsapp for bob"`` →
+    ``("whatsapp", "bob")``; ``"wechat bob smith"`` → ``("wechat", "bob
+    smith")``. The app token is normalized through :data:`_APP_ALIASES`.
+    """
+    text = (args or "").strip()
+    if not text:
+        return "", None
+    # Structured form.
+    if "=" in text and ("app=" in text.lower() or "query=" in text.lower()):
+        app = query = ""
+        for part in text.split(";"):
+            key, sep, val = part.partition("=")
+            if not sep:
+                continue
+            k, v = key.strip().lower(), val.strip()
+            if k == "app":
+                app = v
+            elif k in ("query", "for", "contact", "name"):
+                query = v
+        return _normalize_app(app), (query or None)
+    # Bare form: greedily match the longest leading app alias (handles
+    # multi-word names like "we chat" / "facebook messenger").
+    tokens = text.split()
+    for take in range(min(2, len(tokens)), 0, -1):
+        candidate = " ".join(tokens[:take]).lower()
+        if candidate in _APP_ALIASES:
+            rest = " ".join(tokens[take:]).strip()
+            rest = _APP_QUERY_PREFIX_RE.sub("", rest).strip()
+            return _APP_ALIASES[candidate], (rest or None)
+    # No known alias: treat the first token as the app, remainder as query.
+    rest = " ".join(tokens[1:]).strip()
+    rest = _APP_QUERY_PREFIX_RE.sub("", rest).strip()
+    return _normalize_app(tokens[0]), (rest or None)
+
+
+def _action_open_app(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Launch a named app ("open WhatsApp"). With a trailing contact/query
+    ("search WeChat for Bob"), the client copies the query to the clipboard
+    so the user can paste it into the app's own search — these apps expose no
+    external search deep link."""
+    del verb_cfg, profiles, captures, commands
+    app, query = parse_app_args(prompt or "")
+    if not app:
+        return _bad_args("open_app", "expected an app name, e.g. 'whatsapp'")
+    act = resolve_actuator(actuator)
+    if CAP_OPEN_APP not in act.capabilities():
+        return _unsupported("open_app")
+    if not act.open_app(app, query):
+        return _unsupported("open_app")
+    meta: dict[str, Any] = {"ok": True, "intent": "open_app", "app": app}
+    if query:
+        meta["query"] = query
     return "", meta
 
 

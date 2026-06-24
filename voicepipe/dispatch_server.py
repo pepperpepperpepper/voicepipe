@@ -64,6 +64,7 @@ from voicepipe.transcript_triggers._actuator import (
     CAP_DIAL,
     CAP_RESOLVE_DIAL,
     CAP_NAVIGATE,
+    CAP_OPEN_APP,
     CAP_OPEN_URL,
     CAP_REACH_CONTACT,
     CAP_SET_ALARM,
@@ -98,6 +99,7 @@ _ALL_CAPS: frozenset[str] = frozenset(
         CAP_CALENDAR,
         CAP_EMAIL,
         CAP_REACH_CONTACT,
+        CAP_OPEN_APP,
     }
 )
 
@@ -294,6 +296,15 @@ class ServerActuator:
         }
         if body and body.strip():
             entry["body"] = body.strip()
+        self.client_actions.append(entry)
+        return True
+
+    def open_app(self, app: str, query: str | None = None) -> bool:
+        if CAP_OPEN_APP not in self._caps or not app.strip():
+            return False
+        entry: dict[str, Any] = {"type": "open_app", "app": app.strip()}
+        if query and query.strip():
+            entry["query"] = query.strip()
         self.client_actions.append(entry)
         return True
 

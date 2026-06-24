@@ -21,6 +21,7 @@ class ClientActionsTest {
             "dial",
             "resolve_dial",
             "reach_contact",
+            "open_app",
             "navigate",
             "accessibility_global",
             "calendar",
@@ -40,6 +41,19 @@ class ClientActionsTest {
             parse("""{"type":"reach_contact","name":"Mom","platform":"signal","mode":"message","body":"call me"}"""),
         )
         assertEquals(ClientAction.ReachContact("Mom", "signal", "message", "call me"), b)
+    }
+
+    @Test
+    fun `open_app parses app and optional query`() {
+        assertEquals(
+            ClientAction.OpenApp("whatsapp", null),
+            ClientActions.parse(parse("""{"type":"open_app","app":"whatsapp"}""")),
+        )
+        assertEquals(
+            ClientAction.OpenApp("wechat", "Bob Smith"),
+            ClientActions.parse(parse("""{"type":"open_app","app":"wechat","query":"Bob Smith"}""")),
+        )
+        assertNull(ClientActions.parse(parse("""{"type":"open_app"}""")))
     }
 
     @Test

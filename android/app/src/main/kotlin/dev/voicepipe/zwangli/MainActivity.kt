@@ -552,6 +552,11 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
                         DispatchRequest(
                             transcript = text,
                             capabilities = ClientActions.CAPABILITIES,
+                            // Typing a command in the app's own box and hitting
+                            // Send is a command — the wake word is optional here
+                            // too, matching the voice path. A leading "zwangli"
+                            // is still matched/stripped if you include it.
+                            assumeCommand = true,
                         ),
                     )
                 }

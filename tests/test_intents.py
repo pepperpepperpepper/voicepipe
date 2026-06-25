@@ -763,6 +763,12 @@ def test_open_verb_via_server_actuator_queues_open_url_action() -> None:
         ("metro to downtown", ("downtown", "transit")),
         # Mode + leading "to" together.
         ("driving to paris", ("paris", "driving")),
+        # Mode word at the END (router sometimes appends it).
+        ("the library walking", ("the library", "walking")),
+        ("paris driving", ("paris", "driving")),
+        ("downtown transit", ("downtown", "transit")),
+        # A leading mode wins when both ends look like modes.
+        ("walking the bike shop", ("the bike shop", "walking")),
         # Case-insensitive mode words.
         ("WALKING the park", ("the park", "walking")),
         # Extra whitespace.

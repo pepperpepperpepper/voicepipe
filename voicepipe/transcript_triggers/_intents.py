@@ -770,6 +770,8 @@ def parse_navigate_args(args: str) -> tuple[str, str | None] | None:
     * ``driving paris`` → ``("paris", "driving")``
     * ``walking to the library`` → ``("the library", "walking")``
     * ``bike to alameda`` → ``("alameda", "bicycling")``
+    * ``the library walking`` → ``("the library", "walking")`` — a mode word
+      at the END is also accepted (the router sometimes appends it).
 
     Returns ``None`` for empty input or when the mode word consumes the
     whole tail (no destination left).
@@ -779,11 +781,14 @@ def parse_navigate_args(args: str) -> tuple[str, str | None] | None:
         return None
     tokens = text.split()
     mode: str | None = None
-    if tokens:
-        first = tokens[0].lower()
-        if first in _NAVIGATE_MODE_ALIASES:
-            mode = _NAVIGATE_MODE_ALIASES[first]
-            tokens = tokens[1:]
+    # Mode word may lead ("walking to X") or trail ("X walking"). Check the
+    # front first, then the back, so either router phrasing resolves.
+    if tokens and tokens[0].lower() in _NAVIGATE_MODE_ALIASES:
+        mode = _NAVIGATE_MODE_ALIASES[tokens[0].lower()]
+        tokens = tokens[1:]
+    elif len(tokens) > 1 and tokens[-1].lower() in _NAVIGATE_MODE_ALIASES:
+        mode = _NAVIGATE_MODE_ALIASES[tokens[-1].lower()]
+        tokens = tokens[:-1]
     # Drop a leading "to" once — works for "navigate to X" and
     # "navigate driving to X" alike.
     if tokens and tokens[0].lower() == "to":

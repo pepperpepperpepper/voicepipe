@@ -303,44 +303,57 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
             return
         }
         val normalizedUrl = Settings.normalizeUrl(url)
-        setStatus(getString(R.string.status_uploading))
+        setPhase(Phase.WORKING, getString(R.string.status_transcribing))
         mic.isEnabled = false
         send.isEnabled = false
         response.text = "…"
         inFlight = lifecycleScope.launch {
-            setStatus(getString(R.string.status_working))
             val bearer = settings.token
+            // Leg 1 — transcribe (STT only). Surfacing the recognized text here,
+            // before any action fires, is the whole point of the two-call split.
+            val sttResult = runCatching {
+                withContext(Dispatchers.IO) { client.transcribe(normalizedUrl, bearer, audio) }
+            }
+            val heard = sttResult.getOrNull()?.transcript?.takeIf { it.isNotBlank() }
+            if (heard == null) {
+                val msg = sttResult.exceptionOrNull()?.message ?: "no transcript"
+                response.text = "⚠ HTTP error: $msg"
+                setPhase(Phase.ERROR, getString(R.string.status_error, msg))
+                inFlight = null
+                mic.isEnabled = true
+                send.isEnabled = true
+                return@launch
+            }
+            transcript.setText(heard)
+            // Leg 2 — route + execute. The banner shows what was heard so a
+            // misrecognition is visible during the (short) routing window.
+            setPhase(Phase.WORKING, getString(R.string.status_routing, heard))
             val result = runCatching {
                 withContext(Dispatchers.IO) {
-                    client.transcribeDispatch(
+                    client.dispatch(
                         normalizedUrl,
                         bearer,
-                        audio,
-                        ClientActions.CAPABILITIES,
+                        DispatchRequest(
+                            transcript = heard,
+                            capabilities = ClientActions.CAPABILITIES,
+                        ),
                     )
                 }
             }
             val rendered = result.fold(
-                onSuccess = { resp ->
-                    resp.transcript?.let { transcript.setText(it) }
-                    renderSuccess(resp)
-                },
+                onSuccess = { resp -> renderSuccess(resp) },
                 onFailure = { "⚠ HTTP error: ${it.message}" },
             )
             response.text = rendered
             if (!handleReachContact(result.getOrNull()) &&
-                !handleResolveDial(result.getOrNull(), normalizedUrl, settings.token)
+                !handleResolveDial(result.getOrNull(), normalizedUrl, bearer)
             ) {
                 setPhase(phaseForResult(result), statusForResult(result))
             }
             inFlight = null
             mic.isEnabled = true
             send.isEnabled = true
-            // Record the server-returned transcript so the text path can replay it.
-            val heard = result.getOrNull()?.transcript
-            if (result.isSuccess && !heard.isNullOrEmpty()) {
-                renderHistory(settings.recordTranscript(heard))
-            }
+            if (result.isSuccess) renderHistory(settings.recordTranscript(heard))
         }
     }
 

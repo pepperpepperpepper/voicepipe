@@ -396,6 +396,55 @@ def _parse_capabilities(raw: str | None) -> set[str] | None:
     return set(parts) if parts else None
 
 
+def _transcribe_audio_or_http_error(
+    audio: bytes,
+    *,
+    model: str | None,
+    language: str | None,
+    filename: str,
+) -> str:
+    """Validate + transcribe an uploaded audio clip, raising HTTPException on
+    empty/oversize body (400/413) or STT provider failure (502). Shared by the
+    ``/transcribe`` (STT-only) and ``/transcribe-dispatch`` (STT+route)
+    endpoints so the size cap and model resolution can't drift apart."""
+    from fastapi import HTTPException
+
+    if not audio:
+        raise HTTPException(status_code=400, detail="empty audio body")
+    cap = _max_audio_bytes()
+    if len(audio) > cap:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "error": "audio_too_large",
+                "limit_bytes": cap,
+                "got_bytes": len(audio),
+            },
+        )
+    from voicepipe.transcription import TranscriptionError, transcribe_audio_bytes
+
+    stt_model = _resolve_stt_model(model)
+    try:
+        # apply_triggers=False: callers want the RAW transcript and run the
+        # dispatcher separately; letting STT apply triggers double-processes.
+        return transcribe_audio_bytes(
+            audio,
+            filename=filename or "audio.wav",
+            model=stt_model,
+            language=language,
+            apply_triggers=False,
+        )
+    except TranscriptionError as e:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error": "transcription_failed",
+                "model": stt_model,
+                "message": str(e),
+            },
+        ) from e
+
+
 def create_app(*, token: str | None = None):
     """Build the FastAPI ``app``.
 
@@ -457,6 +506,27 @@ def create_app(*, token: str | None = None):
             client_actions=actuator.client_actions,
         )
 
+    @app.post("/transcribe", dependencies=[Depends(_check_auth)])
+    def transcribe(
+        audio: bytes = Body(default=b"", media_type="application/octet-stream"),
+        model: str | None = None,
+        language: str | None = None,
+        filename: str = "audio.wav",
+    ) -> dict[str, Any]:
+        """Audio-in / text-out — STT only, no routing.
+
+        The first leg of the client's two-call flow: the phone uploads the
+        clip, shows the returned transcript ("Heard: …"), then POSTs that text
+        to :func:`dispatch` so it can surface the transcribe → route phases
+        separately. Same size cap / STT model resolution as
+        :func:`transcribe_dispatch` (shared helper). Status codes: 400 empty,
+        413 too large, 502 STT failed.
+        """
+        transcript = _transcribe_audio_or_http_error(
+            audio, model=model, language=language, filename=filename
+        )
+        return {"ok": True, "transcript": transcript}
+
     @app.post(
         "/transcribe-dispatch",
         response_model=DispatchResponse,
@@ -489,46 +559,9 @@ def create_app(*, token: str | None = None):
         Status codes: ``400`` empty body, ``413`` audio over the size cap,
         ``502`` the STT provider failed.
         """
-        if not audio:
-            raise HTTPException(status_code=400, detail="empty audio body")
-        cap = _max_audio_bytes()
-        if len(audio) > cap:
-            raise HTTPException(
-                status_code=413,
-                detail={
-                    "error": "audio_too_large",
-                    "limit_bytes": cap,
-                    "got_bytes": len(audio),
-                },
-            )
-
-        from voicepipe.transcription import (
-            TranscriptionError,
-            transcribe_audio_bytes,
+        transcript = _transcribe_audio_or_http_error(
+            audio, model=model, language=language, filename=filename
         )
-
-        stt_model = _resolve_stt_model(model)
-        try:
-            # apply_triggers=False: we want the RAW transcript here and then
-            # run the full dispatcher (with the ServerActuator) below — the
-            # same path /dispatch uses. Letting STT apply triggers too would
-            # double-process the text.
-            transcript = transcribe_audio_bytes(
-                audio,
-                filename=filename or "audio.wav",
-                model=stt_model,
-                language=language,
-                apply_triggers=False,
-            )
-        except TranscriptionError as e:
-            raise HTTPException(
-                status_code=502,
-                detail={
-                    "error": "transcription_failed",
-                    "model": stt_model,
-                    "message": str(e),
-                },
-            ) from e
 
         caps = _parse_capabilities(capabilities)
         actuator = ServerActuator(capabilities=caps)

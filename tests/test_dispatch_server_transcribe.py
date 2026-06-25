@@ -162,6 +162,47 @@ def test_requires_bearer_token_when_configured(patch_commands, monkeypatch) -> N
     assert ok.status_code == 200
 
 
+def test_transcribe_only_returns_text_without_dispatching(client, monkeypatch) -> None:
+    captured = _stub_stt(monkeypatch, returns="zwingli copy hello")
+
+    # The dispatcher must NOT run on the STT-only endpoint.
+    def fail_dispatch(*args, **kwargs):  # pragma: no cover - asserted not called
+        raise AssertionError("/transcribe must not invoke the dispatcher")
+
+    monkeypatch.setattr(
+        "voicepipe.dispatch_server.tt.apply_transcript_triggers", fail_dispatch
+    )
+
+    resp = client.post("/transcribe", content=b"RIFFfakeaudio", headers=_OCTET)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data == {"ok": True, "transcript": "zwingli copy hello"}
+    assert "client_actions" not in data
+    assert captured["audio"] == b"RIFFfakeaudio"
+    assert captured["apply_triggers"] is False
+
+
+def test_transcribe_only_shares_size_cap_and_errors(client, monkeypatch) -> None:
+    _stub_stt(monkeypatch)
+    assert client.post("/transcribe", content=b"", headers=_OCTET).status_code == 400
+
+    monkeypatch.setenv("VOICEPIPE_DISPATCH_MAX_AUDIO_BYTES", "8")
+    big = client.post("/transcribe", content=b"0123456789", headers=_OCTET)
+    assert big.status_code == 413
+    assert big.json()["detail"]["error"] == "audio_too_large"
+
+
+def test_transcribe_only_stt_failure_returns_502(client, monkeypatch) -> None:
+    def boom(*args, **kwargs):
+        raise TranscriptionError("groq exploded")
+
+    monkeypatch.setattr("voicepipe.transcription.transcribe_audio_bytes", boom)
+    resp = client.post("/transcribe", content=b"x", headers=_OCTET)
+    assert resp.status_code == 502
+    assert resp.json()["detail"]["error"] == "transcription_failed"
+
+
 def test_real_dispatcher_smoke(client, monkeypatch) -> None:
     # Only STT is stubbed; the real dispatcher runs on the fixture config.
     _stub_stt(monkeypatch, returns="zwingli copy hello world")

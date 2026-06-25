@@ -32,6 +32,8 @@
     <string name="status_listening">🎤 Listening…</string>
     <string name="status_uploading">⬆ Uploading audio…</string>
     <string name="status_working">⚙ Working…</string>
+    <string name="status_transcribing">✍️ Transcribing…</string>
+    <string name="status_routing">🧭 Routing: \"%1$s\"</string>
     <string name="status_heard_done">✓ \"%1$s\"</string>
     <string name="status_done">✓ Done</string>
     <string name="action_cancel">Cancel</string>

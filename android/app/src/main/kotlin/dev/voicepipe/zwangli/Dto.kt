@@ -35,6 +35,12 @@ data class ResolveCallResponse(
 )
 
 @Serializable
+data class TranscribeResponse(
+    val ok: Boolean = true,
+    val transcript: String? = null,
+)
+
+@Serializable
 data class DispatchResponse(
     val ok: Boolean,
     @SerialName("output_text") val outputText: String,

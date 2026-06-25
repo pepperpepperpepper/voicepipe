@@ -50,6 +50,36 @@ class DispatchClient(
     }
 
     /**
+     * Upload a recorded clip to `/transcribe` (STT only, no routing) and
+     * return the recognized text. First leg of the two-call flow: the client
+     * shows "Heard: …" from this, then POSTs the text to [dispatch] so the
+     * transcribe → route phases are visible separately.
+     */
+    fun transcribe(
+        baseUrl: String,
+        token: String?,
+        audio: ByteArray,
+        filename: String = "clip.wav",
+    ): TranscribeResponse {
+        val url = baseUrl.trimEnd('/').toHttpUrl().newBuilder()
+            .addPathSegment("transcribe")
+            .addQueryParameter("filename", filename)
+            .build()
+        val body = audio.toRequestBody(OCTET_STREAM_MEDIA_TYPE)
+        val builder = Request.Builder().url(url).post(body)
+        if (!token.isNullOrBlank()) builder.header("Authorization", "Bearer $token")
+        httpClient.newCall(builder.build()).execute().use { response ->
+            val responseBody = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw IOException(
+                    "HTTP ${response.code}: ${response.message} (${responseBody.take(200)})",
+                )
+            }
+            return json.decodeFromString(TranscribeResponse.serializer(), responseBody)
+        }
+    }
+
+    /**
      * Resolve a business/place name to a phone number via the server's
      * `/resolve-call` (which calls Serper). Used by the two-step "call" flow.
      */

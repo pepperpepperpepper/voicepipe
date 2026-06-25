@@ -88,11 +88,13 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
         send.setOnClickListener { onSend() }
         configureMic()
         renderHistory(settings.transcriptHistory)
-        // Foreground-service notification tap auto-records; an assist launch
-        // only OPENS (no mic) — the user presses again to record, again to send.
+        // An assist launch (power/side-button long-press) acts as the wake
+        // word: open AND start listening, so the user can speak the command
+        // straight away. The foreground-service notification tap auto-records
+        // the same way. (A plain icon tap just opens — no mic.)
         pendingAutoListen = intent?.getBooleanExtra(
             ZwangliForegroundService.EXTRA_AUTO_LISTEN, false,
-        ) == true
+        ) == true || isAssistIntent(intent)
     }
 
     override fun onNewIntent(intent: Intent?) {
@@ -102,14 +104,17 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
             pendingAutoListen = true
             return
         }
-        // Assist long-press while already foreground = the next step in the
-        // open → record → send cycle (onMicClick toggles record/stop). If we're
-        // coming from the background (wasStopped), this press just re-opens us;
-        // the user presses again to record. onStart (which clears wasStopped)
-        // fires AFTER onNewIntent on a background→foreground bring-up, so this
-        // read is correct.
-        if (isAssistIntent(intent) && !wasStopped) {
-            mic.post { onMicClick() }
+        // Assist long-press (power/side button) acts as the wake word:
+        // - From the background (wasStopped): this launch wakes us — auto-listen
+        //   once we resume (onResume/onWindowFocusChanged → maybeAutoListen).
+        // - While already foreground (!wasStopped): toggle the in-flight cycle —
+        //   onMicClick starts recording if idle, or stops+sends if recording, so
+        //   a second long-press sends. onStart (which clears wasStopped) fires
+        //   AFTER onNewIntent on a background→foreground bring-up, so this read
+        //   is correct.
+        if (isAssistIntent(intent)) {
+            if (wasStopped) pendingAutoListen = true
+            else mic.post { onMicClick() }
         }
     }
 

@@ -336,6 +336,9 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
                         DispatchRequest(
                             transcript = heard,
                             capabilities = ClientActions.CAPABILITIES,
+                            // We captured this audio, so it's a command —
+                            // "zwangli" is optional when the app is already open.
+                            assumeCommand = true,
                         ),
                     )
                 }

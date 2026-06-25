@@ -106,6 +106,47 @@ def test_apply_transcript_triggers_no_match_returns_original() -> None:
     assert meta is None
 
 
+def test_assume_command_routes_without_wake_word(monkeypatch) -> None:
+    # No wake word, but assume_command=True → routed through the LLM router
+    # as an implicit command (reason "assumed-command").
+    routed: list[str] = []
+
+    def _fake_route(remainder, *, commands, actuator):
+        routed.append(remainder)
+        return "", {"planner": "llm-route"}
+
+    monkeypatch.setattr(tt, "_llm_route_prompt", _fake_route)
+    out, meta = tt.apply_transcript_triggers(
+        "open whatsapp", triggers={"zwangli": "llm_route"}, assume_command=True
+    )
+    assert routed == ["open whatsapp"]
+    assert meta is not None and meta["reason"] == "assumed-command"
+    assert meta["action"] == "llm_route"
+
+
+def test_assume_command_still_strips_explicit_wake_word(monkeypatch) -> None:
+    # If the wake word IS present it's matched/stripped as usual — the
+    # remainder routed is the command only, never double-counted.
+    routed: list[str] = []
+
+    def _fake_route(remainder, *, commands, actuator):
+        routed.append(remainder)
+        return "", {"planner": "llm-route"}
+
+    monkeypatch.setattr(tt, "_llm_route_prompt", _fake_route)
+    tt.apply_transcript_triggers(
+        "zwangli open whatsapp", triggers={"zwangli": "llm_route"}, assume_command=True
+    )
+    assert routed == ["open whatsapp"]
+
+
+def test_assume_command_ignores_empty_transcript() -> None:
+    out, meta = tt.apply_transcript_triggers(
+        "   ", triggers={"zwangli": "llm_route"}, assume_command=True
+    )
+    assert meta is None
+
+
 def test_apply_transcript_triggers_invokes_handler(monkeypatch) -> None:
     calls: list[str] = []
 

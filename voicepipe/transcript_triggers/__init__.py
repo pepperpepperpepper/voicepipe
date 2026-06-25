@@ -114,6 +114,7 @@ def apply_transcript_triggers(
     commands: TranscriptCommandsConfig | None = None,
     triggers: Mapping[str, str] | None = None,
     actuator: Actuator | None = None,
+    assume_command: bool = False,
 ) -> tuple[str, dict[str, Any] | None]:
     """Apply a configured transcript trigger, returning (output_text, metadata).
 
@@ -123,6 +124,13 @@ def apply_transcript_triggers(
     clipboard, audio feedback). Defaults to the process-wide
     :class:`DesktopActuator` singleton, preserving prior behaviour for
     every existing call site.
+
+    ``assume_command=True`` means the caller already knows this transcript is
+    a command (e.g. the Zwangli app captured the audio itself), so the wake
+    word is optional: if a trigger word IS present it's matched and stripped
+    as usual, but if NONE matches the whole transcript is routed through the
+    LLM router anyway instead of being returned untouched. Lets "open
+    whatsapp" work the same as "zwangli open whatsapp" when the app is open.
     """
     act = resolve_actuator(actuator)
 
@@ -141,6 +149,17 @@ def apply_transcript_triggers(
         resolved_triggers = get_transcript_triggers(load_env=False)
 
     match = match_transcript_trigger(text, triggers=resolved_triggers)
+    if match is None and assume_command and (text or "").strip():
+        # No wake word, but the caller guarantees this is a command — route
+        # the whole transcript through the LLM router as if "zwangli" preceded
+        # it. (A transcript that DID start with a trigger took the branch above
+        # and had the wake word stripped, so we never double-route.)
+        match = TranscriptTriggerMatch(
+            trigger="(implicit)",
+            action="llm_route",
+            remainder=text.strip(),
+            reason="assumed-command",
+        )
     if match is None:
         return text, None
 

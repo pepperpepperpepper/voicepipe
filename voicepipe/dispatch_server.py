@@ -331,6 +331,10 @@ if _PydanticBaseModel is not None:
         transcript: str
         session_id: str | None = None
         capabilities: list[str] | None = None
+        # True when the caller (the Zwangli app) captured the audio itself and
+        # so this transcript is known to be a command — the wake word becomes
+        # optional. See apply_transcript_triggers(assume_command=...).
+        assume_command: bool = False
 
     class DispatchResponse(_PydanticBaseModel):  # type: ignore[misc,valid-type]
         ok: bool
@@ -497,7 +501,10 @@ def create_app(*, token: str | None = None):
         actuator = ServerActuator(capabilities=caps)
         commands = get_transcript_commands_config(load_env=False)
         output_text, payload = tt.apply_transcript_triggers(
-            req.transcript, commands=commands, actuator=actuator
+            req.transcript,
+            commands=commands,
+            actuator=actuator,
+            assume_command=req.assume_command,
         )
         return DispatchResponse(
             ok=bool(payload is None or payload.get("ok", True)),

@@ -10,6 +10,9 @@ data class DispatchRequest(
     val transcript: String,
     @SerialName("session_id") val sessionId: String? = null,
     val capabilities: List<String>? = null,
+    // True when Zwangli itself captured the audio, so the transcript is known
+    // to be a command and the "zwangli" wake word is optional server-side.
+    @SerialName("assume_command") val assumeCommand: Boolean = false,
 )
 
 @Serializable

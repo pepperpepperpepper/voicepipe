@@ -42,6 +42,7 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
     private lateinit var send: Button
     private lateinit var cancel: Button
     private lateinit var status: TextView
+    private lateinit var statusBanner: View
     private lateinit var progressSpinner: View
     private lateinit var levelMeter: android.widget.ProgressBar
     private lateinit var response: TextView
@@ -76,6 +77,7 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
         cancel = findViewById(R.id.cancel)
         cancel.setOnClickListener { cancelCurrent() }
         status = findViewById(R.id.status)
+        statusBanner = findViewById(R.id.status_banner)
         progressSpinner = findViewById(R.id.progress_spinner)
         levelMeter = findViewById(R.id.level_meter)
         response = findViewById(R.id.response)
@@ -200,16 +202,19 @@ class MainActivity : AppCompatActivity(), Ptt.Listener {
      *  meter while listening. */
     private fun setPhase(phase: Phase, text: String?) {
         if (text.isNullOrEmpty() || phase == Phase.NONE) {
-            status.visibility = View.GONE
+            statusBanner.visibility = View.GONE
             status.text = ""
         } else {
             status.text = text
-            status.visibility = View.VISIBLE
-            status.setTextColor(
+            statusBanner.visibility = View.VISIBLE
+            // Tint the whole banner per phase; the rounded drawable keeps its
+            // corners under the tint. White bold text reads on every color.
+            statusBanner.backgroundTintList = android.content.res.ColorStateList.valueOf(
                 when (phase) {
                     Phase.LISTENING -> 0xFFD32F2F.toInt() // red — recording
+                    Phase.WORKING -> 0xFF1565C0.toInt()   // blue — thinking/working
                     Phase.DONE -> 0xFF2E7D32.toInt()      // green
-                    Phase.ERROR -> 0xFFD32F2F.toInt()     // red
+                    Phase.ERROR -> 0xFFC62828.toInt()     // red
                     else -> getColor(R.color.status_neutral)
                 },
             )

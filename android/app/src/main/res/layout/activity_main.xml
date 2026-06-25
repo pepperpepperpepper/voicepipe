@@ -62,19 +62,26 @@
             android:visibility="gone" />
 
         <LinearLayout
+            android:id="@+id/status_banner"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/status_banner_bg"
             android:gravity="center_vertical"
-            android:orientation="horizontal">
+            android:minHeight="64dp"
+            android:orientation="horizontal"
+            android:paddingHorizontal="20dp"
+            android:paddingVertical="16dp"
+            android:visibility="gone">
 
             <ProgressBar
                 android:id="@+id/progress_spinner"
-                style="?android:attr/progressBarStyleSmall"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginEnd="10dp"
+                style="?android:attr/progressBarStyle"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_marginEnd="16dp"
                 android:indeterminate="true"
+                android:indeterminateTint="@android:color/white"
                 android:visibility="gone" />
 
             <TextView
@@ -82,16 +89,17 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:textAppearance="?attr/textAppearanceTitleMedium"
-                android:visibility="gone" />
+                android:textColor="@android:color/white"
+                android:textSize="22sp"
+                android:textStyle="bold" />
         </LinearLayout>
 
         <ProgressBar
             android:id="@+id/level_meter"
             style="?android:attr/progressBarStyleHorizontal"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
+            android:layout_height="8dp"
+            android:layout_marginTop="6dp"
             android:max="100"
             android:visibility="gone" />
 

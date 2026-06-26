@@ -56,18 +56,18 @@ def test_gpt4_prompt_includes_non_speech_directive() -> None:
     assert "[BLANK_AUDIO]" in text
 
 
-def test_transcribe_file_sends_gpt4_prompt_with_non_speech_directive() -> None:
+def test_transcribe_file_sends_no_prompt_by_default() -> None:
+    # gpt-4* models no longer auto-inject GPT4_PROMPT: that "dictation mode /
+    # spoken words only" framing made gpt-4o-transcribe emit filler words.
+    # With no caller-supplied prompt we send none, matching AnySoftKeyboard's
+    # clean default output.
     transcriber, fake = _make_transcriber("gpt-4o-transcribe")
     transcriber.transcribe_file(io.BytesIO(b"audio"))
-    sent_prompt = fake.audio.transcriptions.last_params.get("prompt")
-    assert isinstance(sent_prompt, str)
-    assert "Do not annotate non-speech sounds" in sent_prompt
+    assert "prompt" not in fake.audio.transcriptions.last_params
 
 
-def test_transcribe_file_appends_user_prompt_after_builtin() -> None:
+def test_transcribe_file_sends_only_the_caller_prompt() -> None:
     transcriber, fake = _make_transcriber("gpt-4o-transcribe")
     transcriber.transcribe_file(io.BytesIO(b"audio"), prompt="my custom hint")
     sent_prompt = fake.audio.transcriptions.last_params.get("prompt")
-    assert isinstance(sent_prompt, str)
-    assert sent_prompt.startswith(WhisperTranscriber.GPT4_PROMPT)
-    assert sent_prompt.endswith("my custom hint")
+    assert sent_prompt == "my custom hint"

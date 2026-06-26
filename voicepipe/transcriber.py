@@ -59,16 +59,16 @@ Transcribe spoken words only. Do not annotate non-speech sounds such as breaths,
         self.base_url = base_url
 
     def _resolve_prompt(self, *, prompt: Optional[str], effective_model: str) -> Optional[str]:
-        builtin: Optional[str] = None
-        if effective_model.startswith("gpt-4"):
-            builtin = self.GPT4_PROMPT
-
+        # Only send a prompt when the caller explicitly supplies one. We used
+        # to auto-inject GPT4_PROMPT ("transcribe in dictation mode … spoken
+        # words only") for every gpt-4* model, but that framing makes
+        # gpt-4o-transcribe behave verbatim and faithfully emit filler words
+        # ("um", "uh", "er"). AnySoftKeyboard hits the same model with no
+        # prompt and gets gpt-4o's default tidied-up output — so we match that
+        # and leave GPT4_PROMPT available only as an opt-in (pass it via
+        # `prompt=`/VOICEPIPE_TRANSCRIBE_PROMPT).
         cleaned = (prompt or "").strip()
-        if cleaned:
-            if builtin:
-                return f"{builtin}\n\n{cleaned}"
-            return cleaned
-        return builtin
+        return cleaned or None
 
     def transcribe_file(
         self,

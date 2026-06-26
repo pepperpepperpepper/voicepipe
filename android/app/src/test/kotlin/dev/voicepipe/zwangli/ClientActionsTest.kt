@@ -31,6 +31,9 @@ class ClientActionsTest {
             "accessibility_global",
             "calendar",
             "email",
+            "note",
+            "weather",
+            "dnd",
         )
         assertEquals(expected, ClientActions.CAPABILITIES)
     }
@@ -102,6 +105,47 @@ class ClientActionsTest {
             ClientAction.AccessibilityGlobal("lock_screen"),
             ClientActions.parse(parse("""{"type":"accessibility_global","action":"lock_screen"}""")),
         )
+    }
+
+    @Test
+    fun `calendar_event parses optional time fields`() {
+        assertEquals(
+            ClientAction.CalendarEvent("lunch"),
+            ClientActions.parse(parse("""{"type":"calendar_event","title":"lunch"}""")),
+        )
+        assertEquals(
+            ClientAction.CalendarEvent("dentist", null, 15, 0, "friday"),
+            ClientActions.parse(
+                parse("""{"type":"calendar_event","title":"dentist","hour":15,"minutes":0,"day":"friday"}"""),
+            ),
+        )
+        assertEquals(
+            ClientAction.CalendarEvent("call mom", 7200, null, null, null),
+            ClientActions.parse(
+                parse("""{"type":"calendar_event","title":"call mom","in_seconds":7200}"""),
+            ),
+        )
+    }
+
+    @Test
+    fun `note weather dnd parse`() {
+        assertEquals(
+            ClientAction.Note("buy milk"),
+            ClientActions.parse(parse("""{"type":"note","text":"buy milk"}""")),
+        )
+        assertEquals(
+            ClientAction.Weather("Paris"),
+            ClientActions.parse(parse("""{"type":"weather","location":"Paris"}""")),
+        )
+        assertEquals(
+            ClientAction.Weather(null),
+            ClientActions.parse(parse("""{"type":"weather"}""")),
+        )
+        assertEquals(
+            ClientAction.Dnd("on"),
+            ClientActions.parse(parse("""{"type":"dnd","state":"on"}""")),
+        )
+        assertNull(ClientActions.parse(parse("""{"type":"dnd","state":"maybe"}""")))
     }
 
     @Test

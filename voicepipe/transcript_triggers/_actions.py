@@ -24,6 +24,7 @@ from ._intents import (
     _action_call,
     _action_camera,
     _action_dial,
+    _action_dnd,
     _action_email,
     _action_flashlight,
     _action_home,
@@ -31,6 +32,7 @@ from ._intents import (
     _action_media,
     _action_message,
     _action_navigate,
+    _action_note,
     _action_notifications,
     _action_open,
     _action_open_app,
@@ -41,6 +43,7 @@ from ._intents import (
     _action_search,
     _action_timer,
     _action_volume,
+    _action_weather,
 )
 from ._llm import _action_zwingli
 from ._pending import _action_no, _action_yes
@@ -86,6 +89,9 @@ _ACTIONS: dict[str, ActionHandler] = {
     "volume": _action_volume,
     "flashlight": _action_flashlight,
     "camera": _action_camera,
+    "note": _action_note,
+    "weather": _action_weather,
+    "dnd": _action_dnd,
 }
 
 # Keys returned by handlers in their inner_meta that the dispatcher should

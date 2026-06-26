@@ -101,10 +101,19 @@ class ClientActionExecutor(
                     if (fireAccessibilityGlobal(action.action)) globalActionsFired++
                 }
                 is ClientAction.CalendarEvent -> {
-                    if (fireCalendarEvent(action.title)) intentsFired++
+                    if (fireCalendarEvent(action)) intentsFired++
                 }
                 is ClientAction.Email -> {
                     if (fireEmail(action.to, action.subject, action.body)) intentsFired++
+                }
+                is ClientAction.Note -> {
+                    if (fireNote(action.text)) intentsFired++
+                }
+                is ClientAction.Weather -> {
+                    if (fireWeather(action.location)) intentsFired++
+                }
+                is ClientAction.Dnd -> {
+                    if (fireDnd(action.state)) intentsFired++
                 }
                 is ClientAction.Unknown -> {
                     unknownCount++
@@ -231,14 +240,106 @@ class ClientActionExecutor(
         return fireIntent(intent, "set_timer")
     }
 
-    private fun fireCalendarEvent(title: String): Boolean {
+    private fun fireCalendarEvent(action: ClientAction.CalendarEvent): Boolean {
         // ACTION_INSERT opens the calendar app's new-event screen pre-filled
-        // with the title (Google Calendar on a GMS device); the user picks the
-        // time. No WRITE_CALENDAR permission needed.
+        // (Google Calendar on a GMS device); the user confirms. No
+        // WRITE_CALENDAR permission needed. A resolved start time pre-fills
+        // BEGIN/END (end defaults to +1h); else it's title-only as before.
         val intent = Intent(Intent.ACTION_INSERT)
             .setData(CalendarContract.Events.CONTENT_URI)
-            .putExtra(CalendarContract.Events.TITLE, title)
+            .putExtra(CalendarContract.Events.TITLE, action.title)
+        val beginMs = calendarBeginMillis(action)
+        if (beginMs != null) {
+            intent.putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, beginMs)
+            intent.putExtra(CalendarContract.EXTRA_EVENT_END_TIME, beginMs + 60 * 60 * 1000)
+        }
         return fireIntent(intent, "calendar_event")
+    }
+
+    /** Resolve a calendar event's start to epoch millis in the local tz, or
+     *  null for a title-only (time-less) event. */
+    private fun calendarBeginMillis(a: ClientAction.CalendarEvent): Long? {
+        if (a.inSeconds != null) {
+            return System.currentTimeMillis() + a.inSeconds * 1000L
+        }
+        if (a.hour == null) return null
+        val cal = Calendar.getInstance().apply {
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+            set(Calendar.HOUR_OF_DAY, a.hour)
+            set(Calendar.MINUTE, a.minutes ?: 0)
+        }
+        when (val day = a.day) {
+            null, "today" -> {}
+            "tomorrow" -> cal.add(Calendar.DAY_OF_MONTH, 1)
+            else -> {
+                val date = day.takeIf { it.matches(Regex("""\d{4}-\d{2}-\d{2}""")) }
+                if (date != null) {
+                    val parts = date.split("-")
+                    cal.set(parts[0].toInt(), parts[1].toInt() - 1, parts[2].toInt())
+                } else {
+                    val target = WEEKDAY_TO_CALENDAR[day]
+                    if (target != null) {
+                        // Advance to the next occurrence of that weekday (incl. today
+                        // only if the time is still in the future).
+                        var guard = 0
+                        while (guard++ < 8 &&
+                            (cal.get(Calendar.DAY_OF_WEEK) != target ||
+                                cal.timeInMillis <= System.currentTimeMillis())
+                        ) {
+                            cal.add(Calendar.DAY_OF_MONTH, 1)
+                        }
+                    }
+                }
+            }
+        }
+        return cal.timeInMillis
+    }
+
+    private fun fireNote(text: String): Boolean {
+        // ACTION_SEND text/plain opens a notes app / share sheet pre-filled.
+        // Prefer Google Keep directly when installed; else let the user pick.
+        val base = Intent(Intent.ACTION_SEND)
+            .setType("text/plain")
+            .putExtra(Intent.EXTRA_TEXT, text)
+        val keep = Intent(base).setPackage("com.google.android.keep")
+        if (fireIntent(keep, "note:keep")) return true
+        return fireIntent(Intent.createChooser(base, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), "note")
+    }
+
+    private fun fireWeather(location: String?): Boolean {
+        // No universal weather intent; open the Google weather result (which
+        // renders the weather card). Empty location → uses device location.
+        val q = if (location.isNullOrBlank()) "weather" else "weather ${location.trim()}"
+        val uri = Uri.parse("https://www.google.com/search?q=${Uri.encode(q)}")
+        return fireIntent(Intent(Intent.ACTION_VIEW, uri), "weather")
+    }
+
+    private fun fireDnd(state: String): Boolean {
+        val nm = context.getSystemService(android.app.NotificationManager::class.java)
+            ?: return false
+        if (!nm.isNotificationPolicyAccessGranted) {
+            // Can't change DND without policy access — send the user to grant it.
+            android.widget.Toast.makeText(
+                context,
+                context.getString(R.string.dnd_needs_permission),
+                android.widget.Toast.LENGTH_LONG,
+            ).show()
+            val intent = Intent(android.provider.Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
+            return fireIntent(intent, "dnd_permission")
+        }
+        val filter = if (state == "on") {
+            android.app.NotificationManager.INTERRUPTION_FILTER_PRIORITY
+        } else {
+            android.app.NotificationManager.INTERRUPTION_FILTER_ALL
+        }
+        return try {
+            nm.setInterruptionFilter(filter)
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "dnd: setInterruptionFilter failed", e)
+            false
+        }
     }
 
     private fun fireEmail(to: String?, subject: String?, body: String?): Boolean {
@@ -505,6 +606,16 @@ class ClientActionExecutor(
 
     companion object {
         private const val TAG = "ClientActionExecutor"
+
+        private val WEEKDAY_TO_CALENDAR: Map<String, Int> = mapOf(
+            "sunday" to Calendar.SUNDAY,
+            "monday" to Calendar.MONDAY,
+            "tuesday" to Calendar.TUESDAY,
+            "wednesday" to Calendar.WEDNESDAY,
+            "thursday" to Calendar.THURSDAY,
+            "friday" to Calendar.FRIDAY,
+            "saturday" to Calendar.SATURDAY,
+        )
 
         /**
          * Canonical app token (as normalized by the server's open_app handler)

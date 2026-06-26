@@ -57,6 +57,11 @@ CAP_MEDIA_CONTROL = "media_control"  # play/pause/next/previous transport
 CAP_VOLUME = "volume"                # raise/lower/mute/set media volume
 CAP_FLASHLIGHT = "flashlight"        # torch on/off/toggle
 CAP_CAMERA = "camera"                # open the camera (photo/video/selfie)
+CAP_NOTE = "note"                    # jot a note to self (Keep / share)
+CAP_WEATHER = "weather"              # show the weather (optionally for a place)
+CAP_DND = "dnd"                      # toggle Do Not Disturb
+
+DND_STATES: frozenset[str] = frozenset({"on", "off"})
 
 # Valid argument values for the device-control verbs (shared client/server).
 MEDIA_ACTIONS: frozenset[str] = frozenset(
@@ -187,10 +192,35 @@ class Actuator(Protocol):
     def accessibility_global(self, action: str) -> bool:
         ...
 
-    def set_calendar_event(self, title: str) -> bool:
+    def set_calendar_event(
+        self,
+        title: str,
+        *,
+        in_seconds: int | None = None,
+        hour: int | None = None,
+        minutes: int | None = None,
+        day: str | None = None,
+    ) -> bool:
+        """Create a calendar event. Title-only opens the composer with no time;
+        a relative ``in_seconds`` or absolute ``hour``/``minutes`` (+ optional
+        ``day``: today/tomorrow/<weekday>/<YYYY-MM-DD>) pre-fills the start time.
+        The device resolves the wall-clock start (it knows now + timezone)."""
         ...
 
     def compose_email(self, to: str, subject: str, body: str) -> bool:
+        ...
+
+    def take_note(self, text: str) -> bool:
+        """Jot a quick note to self — the client opens a notes app (Keep) or a
+        share sheet pre-filled with ``text``."""
+        ...
+
+    def show_weather(self, location: str | None = None) -> bool:
+        """Show the weather, optionally for ``location`` (else current)."""
+        ...
+
+    def set_dnd(self, state: str) -> bool:
+        """Toggle Do Not Disturb: ``on`` / ``off``."""
         ...
 
     def reach_contact(
@@ -405,12 +435,29 @@ class DesktopActuator:
         # No standard desktop equivalent; not in capabilities().
         return False
 
-    def set_calendar_event(self, title: str) -> bool:
+    def set_calendar_event(
+        self,
+        title: str,
+        *,
+        in_seconds: int | None = None,
+        hour: int | None = None,
+        minutes: int | None = None,
+        day: str | None = None,
+    ) -> bool:
         # No standard desktop equivalent; not in capabilities().
         return False
 
     def compose_email(self, to: str, subject: str, body: str) -> bool:
         # No standard desktop equivalent; not in capabilities().
+        return False
+
+    def take_note(self, text: str) -> bool:
+        return False
+
+    def show_weather(self, location: str | None = None) -> bool:
+        return False
+
+    def set_dnd(self, state: str) -> bool:
         return False
 
     def reach_contact(
@@ -478,6 +525,9 @@ class InMemoryActuator:
                 CAP_VOLUME,
                 CAP_FLASHLIGHT,
                 CAP_CAMERA,
+                CAP_NOTE,
+                CAP_WEATHER,
+                CAP_DND,
             }
         )
     )
@@ -492,8 +542,11 @@ class InMemoryActuator:
     call_business_calls: list[str] = field(default_factory=list)
     navigate_calls: list[dict[str, Any]] = field(default_factory=list)
     accessibility_global_calls: list[str] = field(default_factory=list)
-    calendar_event_calls: list[str] = field(default_factory=list)
+    calendar_event_calls: list[dict[str, Any]] = field(default_factory=list)
     email_calls: list[dict[str, str]] = field(default_factory=list)
+    note_calls: list[str] = field(default_factory=list)
+    weather_calls: list[str | None] = field(default_factory=list)
+    dnd_calls: list[str] = field(default_factory=list)
     reach_contact_calls: list[dict[str, Any]] = field(default_factory=list)
     open_app_calls: list[dict[str, Any]] = field(default_factory=list)
     find_places_calls: list[str] = field(default_factory=list)
@@ -602,10 +655,26 @@ class InMemoryActuator:
         self.accessibility_global_calls.append(action)
         return True
 
-    def set_calendar_event(self, title: str) -> bool:
+    def set_calendar_event(
+        self,
+        title: str,
+        *,
+        in_seconds: int | None = None,
+        hour: int | None = None,
+        minutes: int | None = None,
+        day: str | None = None,
+    ) -> bool:
         if CAP_CALENDAR not in self.caps:
             return False
-        self.calendar_event_calls.append(title)
+        self.calendar_event_calls.append(
+            {
+                "title": title,
+                "in_seconds": in_seconds,
+                "hour": hour,
+                "minutes": minutes,
+                "day": day,
+            }
+        )
         return True
 
     def compose_email(self, to: str, subject: str, body: str) -> bool:
@@ -666,6 +735,24 @@ class InMemoryActuator:
         if CAP_CAMERA not in self.caps or mode not in CAMERA_MODES:
             return False
         self.camera_calls.append(mode)
+        return True
+
+    def take_note(self, text: str) -> bool:
+        if CAP_NOTE not in self.caps or not text.strip():
+            return False
+        self.note_calls.append(text)
+        return True
+
+    def show_weather(self, location: str | None = None) -> bool:
+        if CAP_WEATHER not in self.caps:
+            return False
+        self.weather_calls.append(location)
+        return True
+
+    def set_dnd(self, state: str) -> bool:
+        if CAP_DND not in self.caps or state not in DND_STATES:
+            return False
+        self.dnd_calls.append(state)
         return True
 
 

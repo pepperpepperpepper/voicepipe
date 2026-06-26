@@ -53,7 +53,17 @@ sealed class ClientAction {
         val mode: String?,
     ) : ClientAction()
     data class AccessibilityGlobal(val action: String) : ClientAction()
-    data class CalendarEvent(val title: String) : ClientAction()
+    data class CalendarEvent(
+        val title: String,
+        // Optional start time, resolved on-device to a wall-clock start.
+        val inSeconds: Int? = null,
+        val hour: Int? = null,
+        val minutes: Int? = null,
+        val day: String? = null, // today/tomorrow/<weekday>/YYYY-MM-DD
+    ) : ClientAction()
+    data class Note(val text: String) : ClientAction()
+    data class Weather(val location: String?) : ClientAction()
+    data class Dnd(val state: String) : ClientAction() // on/off
     data class Email(
         val to: String?,
         val subject: String?,
@@ -84,6 +94,9 @@ object ClientActions {
         "accessibility_global",
         "calendar",
         "email",
+        "note",
+        "weather",
+        "dnd",
     )
 
     val ACCESSIBILITY_GLOBAL_ACTIONS: Set<String> = setOf(
@@ -142,12 +155,25 @@ object ClientActions {
             "accessibility_global" -> parseAccessibilityGlobal(obj)
             "calendar_event" -> obj.stringField("title")
                 ?.takeIf { it.isNotBlank() }
-                ?.let(ClientAction::CalendarEvent)
+                ?.let {
+                    ClientAction.CalendarEvent(
+                        it,
+                        inSeconds = obj.intField("in_seconds"),
+                        hour = obj.intField("hour"),
+                        minutes = obj.intField("minutes"),
+                        day = obj.stringField("day")?.takeIf { d -> d.isNotBlank() },
+                    )
+                }
             "email" -> ClientAction.Email(
                 to = obj.stringField("to")?.takeIf { it.isNotBlank() },
                 subject = obj.stringField("subject")?.takeIf { it.isNotBlank() },
                 body = obj.stringField("body")?.takeIf { it.isNotBlank() },
             )
+            "note" -> obj.stringField("text")?.takeIf { it.isNotBlank() }?.let(ClientAction::Note)
+            "weather" -> ClientAction.Weather(
+                obj.stringField("location")?.takeIf { it.isNotBlank() },
+            )
+            "dnd" -> obj.stringField("state")?.takeIf { it in DND_STATES }?.let(ClientAction::Dnd)
             else -> ClientAction.Unknown(type, obj)
         }
     }
@@ -158,6 +184,7 @@ object ClientActions {
     private val VOLUME_ACTIONS = setOf("up", "down", "mute", "unmute", "set")
     private val FLASHLIGHT_STATES = setOf("on", "off", "toggle")
     private val CAMERA_MODES = setOf("photo", "video", "selfie")
+    private val DND_STATES = setOf("on", "off")
 
     private fun parseVolume(obj: JsonObject): ClientAction.Volume? {
         val action = obj.stringField("action")?.takeIf { it in VOLUME_ACTIONS } ?: return null

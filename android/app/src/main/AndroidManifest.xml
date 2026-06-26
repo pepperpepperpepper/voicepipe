@@ -7,6 +7,9 @@
          email address before opening the mail composer. Optional: without it,
          the raw name is passed through for the user to resolve in Gmail. -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <!-- Toggle Do Not Disturb (requires the user to also grant policy access
+         in Settings; we deep-link them there if it's missing). -->
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />

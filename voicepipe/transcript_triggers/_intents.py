@@ -37,18 +37,22 @@ from ._actuator import (
     CAP_CALENDAR,
     CAP_CAMERA,
     CAP_DIAL,
+    CAP_DND,
     CAP_EMAIL,
     CAP_FLASHLIGHT,
     CAP_MAP_SEARCH,
     CAP_MEDIA_CONTROL,
     CAP_NAVIGATE,
+    CAP_NOTE,
     CAP_OPEN_APP,
     CAP_OPEN_URL,
     CAP_REACH_CONTACT,
     CAP_SET_ALARM,
     CAP_SET_TIMER,
     CAP_VOLUME,
+    CAP_WEATHER,
     CAP_WEB_SEARCH,
+    DND_STATES,
     FLASHLIGHT_STATES,
     MEDIA_ACTIONS,
     VOLUME_ACTIONS,
@@ -201,6 +205,9 @@ _UNSUPPORTED = {
     "volume": "Volume control is not supported on this device.",
     "flashlight": "The flashlight is not controllable on this device.",
     "camera": "Opening the camera is not supported on this device.",
+    "note": "Taking notes is not supported on this device.",
+    "weather": "Weather is not supported on this device.",
+    "dnd": "Do Not Disturb is not controllable on this device.",
     "accessibility_global": "System navigation is not supported on this device.",
     "calendar": "Creating calendar events is not supported on this device.",
     "email": "Composing email is not supported on this device.",
@@ -380,6 +387,84 @@ def _action_timer(
     return "", meta
 
 
+_WEEKDAY_ALIASES: dict[str, str] = {
+    "monday": "monday", "mon": "monday",
+    "tuesday": "tuesday", "tue": "tuesday", "tues": "tuesday",
+    "wednesday": "wednesday", "wed": "wednesday",
+    "thursday": "thursday", "thu": "thursday", "thurs": "thursday",
+    "friday": "friday", "fri": "friday",
+    "saturday": "saturday", "sat": "saturday",
+    "sunday": "sunday", "sun": "sunday",
+}
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _normalize_day(value: str) -> str | None:
+    v = (value or "").strip().lower()
+    if v in ("today", "tonight"):
+        return "today"
+    if v == "tomorrow":
+        return "tomorrow"
+    if v in _WEEKDAY_ALIASES:
+        return _WEEKDAY_ALIASES[v]
+    if _DATE_RE.match(v):
+        return v
+    return None
+
+
+def parse_calendar_args(args: str) -> tuple[str, dict[str, Any] | None] | None:
+    """Parse the router's calendar args into ``(title, when_or_None)``.
+
+    Structured form (preferred): ``title=<event>; day=<today|tomorrow|weekday|
+    YYYY-MM-DD>; time=<7:30am|15:00>`` or ``title=<event>; in=<duration>``. A
+    bare string with no ``key=value`` pairs is the whole title (time-less, the
+    original behavior). The device resolves ``when`` to a wall-clock start.
+    Returns ``None`` only for empty input (no title).
+    """
+    text = (args or "").strip()
+    if not text:
+        return None
+    title = day_str = time_str = in_str = ""
+    lowered = text.lower()
+    if "=" in text and any(
+        k in lowered for k in ("title=", "day=", "time=", "in=")
+    ):
+        for part in text.split(";"):
+            key, sep, val = part.partition("=")
+            if not sep:
+                continue
+            k, v = key.strip().lower(), val.strip()
+            if k == "title":
+                title = v
+            elif k == "day":
+                day_str = v
+            elif k == "time":
+                time_str = v
+            elif k == "in":
+                in_str = v
+    else:
+        title = text
+    if not title:
+        return None
+    day = _normalize_day(day_str) if day_str else None
+    when: dict[str, Any] = {}
+    if in_str:
+        parsed = parse_timer_args(in_str)
+        if parsed:
+            when["in_seconds"] = parsed[0]
+    elif time_str:
+        parsed_t = parse_alarm_args(time_str)
+        if parsed_t:
+            when["hour"], when["minutes"], _ = parsed_t
+            if day:
+                when["day"] = day
+    elif day:
+        # A day with no time → default to 9:00 on that day so the event lands
+        # somewhere sensible; the user adjusts in the composer.
+        when = {"hour": 9, "minutes": 0, "day": day}
+    return title, (when or None)
+
+
 def _action_calendar(
     prompt: str,
     *,
@@ -389,19 +474,23 @@ def _action_calendar(
     commands: TranscriptCommandsConfig | None = None,
     actuator: Actuator | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """Create a calendar event. v1 is title-only: the client opens its
-    calendar app pre-filled with the title and the user picks the time
-    (date/time parsing belongs on-device, which knows the timezone)."""
+    """Create a calendar event. Title-only opens the composer with no time;
+    a parsed time/day pre-fills the start. The device resolves the wall-clock
+    start (it knows now + the local timezone)."""
     del verb_cfg, profiles, captures, commands
-    title = (prompt or "").strip()
-    if not title:
+    parsed = parse_calendar_args(prompt or "")
+    if parsed is None:
         return _bad_args("calendar", "empty event title")
+    title, when = parsed
     act = resolve_actuator(actuator)
     if CAP_CALENDAR not in act.capabilities():
         return _unsupported("calendar")
-    if not act.set_calendar_event(title):
+    if not act.set_calendar_event(title, **(when or {})):
         return _unsupported("calendar")
-    return "", {"ok": True, "intent": "calendar_event", "title": title}
+    meta: dict[str, Any] = {"ok": True, "intent": "calendar_event", "title": title}
+    if when:
+        meta.update(when)
+    return "", meta
 
 
 def parse_email_args(args: str) -> tuple[str, str, str]:
@@ -1060,6 +1149,103 @@ def _action_camera(
     if not act.open_camera(mode):
         return _unsupported("camera")
     return "", {"ok": True, "intent": "camera", "mode": mode}
+
+
+# Leading filler stripped from a note ("note to self: …", "remember to …").
+_NOTE_PREFIX_RE = re.compile(
+    r"^(?:note(?:\s+to\s+self)?|remember|remind me)(?:\s+to)?\b[:,]?\s*",
+    re.IGNORECASE,
+)
+
+
+def _action_note(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Jot a note to self — the client opens a notes app (Keep) / share sheet
+    pre-filled with the text."""
+    del verb_cfg, profiles, captures, commands
+    text = _NOTE_PREFIX_RE.sub("", (prompt or "").strip()).strip()
+    if not text:
+        return _bad_args("note", "expected some note text")
+    act = resolve_actuator(actuator)
+    if CAP_NOTE not in act.capabilities():
+        return _unsupported("note")
+    if not act.take_note(text):
+        return _unsupported("note")
+    return "", {"ok": True, "intent": "note", "text": text}
+
+
+# Strip "what's the weather", "weather", leading "in/for/at" so only the
+# location (if any) remains.
+_WEATHER_STRIP_RE = re.compile(
+    r"\b(?:what(?:'s| is)|the|weather|forecast|temperature|like|today|now|"
+    r"outside)\b",
+    re.IGNORECASE,
+)
+
+
+def parse_weather_args(args: str) -> str | None:
+    """Extract an optional location from a weather request; None if none.
+    "what's the weather" → None; "weather in Paris" → "Paris"."""
+    text = _WEATHER_STRIP_RE.sub(" ", args or "")
+    text = " ".join(text.split())
+    text = re.sub(r"^(?:in|for|at)\s+", "", text, flags=re.IGNORECASE)
+    text = text.strip(" ?.,")
+    return text or None
+
+
+def _action_weather(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Show the weather, optionally for a named location."""
+    del verb_cfg, profiles, captures, commands
+    location = parse_weather_args(prompt or "")
+    act = resolve_actuator(actuator)
+    if CAP_WEATHER not in act.capabilities():
+        return _unsupported("weather")
+    if not act.show_weather(location):
+        return _unsupported("weather")
+    meta: dict[str, Any] = {"ok": True, "intent": "weather"}
+    if location:
+        meta["location"] = location
+    return "", meta
+
+
+def _action_dnd(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Toggle Do Not Disturb. "do not disturb" / "silence my phone" → on;
+    "turn off do not disturb" / "allow notifications" → off."""
+    del verb_cfg, profiles, captures, commands
+    words = (prompt or "").strip().lower().split()
+    if any(w in words for w in ("off", "disable", "allow", "stop", "end")):
+        state = "off"
+    else:
+        state = "on"
+    act = resolve_actuator(actuator)
+    if CAP_DND not in act.capabilities():
+        return _unsupported("dnd")
+    if not act.set_dnd(state):
+        return _unsupported("dnd")
+    return "", {"ok": True, "intent": "dnd", "state": state}
 
 
 # ---------------------------------------------------------------------------

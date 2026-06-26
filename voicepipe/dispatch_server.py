@@ -65,9 +65,11 @@ from voicepipe.transcript_triggers._actuator import (
     CAP_RESOLVE_DIAL,
     CAP_NAVIGATE,
     CAP_CAMERA,
+    CAP_DND,
     CAP_FLASHLIGHT,
     CAP_MAP_SEARCH,
     CAP_MEDIA_CONTROL,
+    CAP_NOTE,
     CAP_OPEN_APP,
     CAP_OPEN_URL,
     CAP_REACH_CONTACT,
@@ -75,8 +77,10 @@ from voicepipe.transcript_triggers._actuator import (
     CAP_SET_TIMER,
     CAP_SUBPROCESS,
     CAP_VOLUME,
+    CAP_WEATHER,
     CAP_WEB_SEARCH,
     CAMERA_MODES,
+    DND_STATES,
     FLASHLIGHT_STATES,
     MEDIA_ACTIONS,
     REACH_MODES,
@@ -114,6 +118,9 @@ _ALL_CAPS: frozenset[str] = frozenset(
         CAP_VOLUME,
         CAP_FLASHLIGHT,
         CAP_CAMERA,
+        CAP_NOTE,
+        CAP_WEATHER,
+        CAP_DND,
     }
 )
 
@@ -272,10 +279,29 @@ class ServerActuator:
         )
         return True
 
-    def set_calendar_event(self, title: str) -> bool:
+    def set_calendar_event(
+        self,
+        title: str,
+        *,
+        in_seconds: int | None = None,
+        hour: int | None = None,
+        minutes: int | None = None,
+        day: str | None = None,
+    ) -> bool:
         if CAP_CALENDAR not in self._caps:
             return False
-        self.client_actions.append({"type": "calendar_event", "title": title})
+        entry: dict[str, Any] = {"type": "calendar_event", "title": title}
+        # Time fields ride along only when present; a title-only event keeps
+        # the original {type, title} shape (device opens the composer, no time).
+        if in_seconds is not None:
+            entry["in_seconds"] = in_seconds
+        if hour is not None:
+            entry["hour"] = hour
+        if minutes is not None:
+            entry["minutes"] = minutes
+        if day:
+            entry["day"] = day
+        self.client_actions.append(entry)
         return True
 
     def compose_email(self, to: str, subject: str, body: str) -> bool:
@@ -355,6 +381,27 @@ class ServerActuator:
         if CAP_CAMERA not in self._caps or mode not in CAMERA_MODES:
             return False
         self.client_actions.append({"type": "camera", "mode": mode})
+        return True
+
+    def take_note(self, text: str) -> bool:
+        if CAP_NOTE not in self._caps or not text.strip():
+            return False
+        self.client_actions.append({"type": "note", "text": text.strip()})
+        return True
+
+    def show_weather(self, location: str | None = None) -> bool:
+        if CAP_WEATHER not in self._caps:
+            return False
+        entry: dict[str, Any] = {"type": "weather"}
+        if location and location.strip():
+            entry["location"] = location.strip()
+        self.client_actions.append(entry)
+        return True
+
+    def set_dnd(self, state: str) -> bool:
+        if CAP_DND not in self._caps or state not in DND_STATES:
+            return False
+        self.client_actions.append({"type": "dnd", "state": state})
         return True
 
 

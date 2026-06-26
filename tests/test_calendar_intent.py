@@ -12,7 +12,15 @@ def test_calendar_emits_calendar_event_action() -> None:
     out, meta = _action_calendar("dentist appointment", actuator=act)
     assert out == ""  # the action is the side effect; nothing typed
     assert meta == {"ok": True, "intent": "calendar_event", "title": "dentist appointment"}
-    assert act.calendar_event_calls == ["dentist appointment"]
+    assert act.calendar_event_calls == [
+        {
+            "title": "dentist appointment",
+            "in_seconds": None,
+            "hour": None,
+            "minutes": None,
+            "day": None,
+        }
+    ]
 
 
 def test_calendar_empty_title_is_bad_args() -> None:
@@ -39,3 +47,36 @@ def test_server_actuator_queues_calendar_client_action() -> None:
     assert CAP_CALENDAR in act.capabilities()
     _action_calendar("team standup", actuator=act)
     assert act.client_actions == [{"type": "calendar_event", "title": "team standup"}]
+
+
+def test_calendar_with_structured_time() -> None:
+    act = InMemoryActuator()
+    out, meta = _action_calendar("title=dentist; day=friday; time=3pm", actuator=act)
+    assert out == ""
+    assert meta == {
+        "ok": True,
+        "intent": "calendar_event",
+        "title": "dentist",
+        "hour": 15,
+        "minutes": 0,
+        "day": "friday",
+    }
+    assert act.calendar_event_calls == [
+        {
+            "title": "dentist",
+            "in_seconds": None,
+            "hour": 15,
+            "minutes": 0,
+            "day": "friday",
+        }
+    ]
+
+
+def test_calendar_relative_time() -> None:
+    from voicepipe.dispatch_server import ServerActuator
+
+    act = ServerActuator()
+    _action_calendar("title=call mom; in=2 hours", actuator=act)
+    assert act.client_actions == [
+        {"type": "calendar_event", "title": "call mom", "in_seconds": 7200}
+    ]

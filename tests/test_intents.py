@@ -28,18 +28,23 @@ from voicepipe.transcript_triggers._intents import (
     _action_call,
     _action_message,
     _action_camera,
+    _action_dnd,
     _action_flashlight,
     _action_media,
+    _action_note,
     _action_open_app,
     _action_places,
     _action_volume,
+    _action_weather,
     _normalize_open_url,
     parse_alarm_args,
     parse_alarm_offset_args,
     parse_app_args,
+    parse_calendar_args,
     parse_navigate_args,
     parse_places_args,
     parse_volume_args,
+    parse_weather_args,
     parse_reach_args,
     parse_timer_args,
 )
@@ -945,6 +950,80 @@ def test_device_verbs_skip_without_capability() -> None:
         act = InMemoryActuator(caps=bare)
         _out, meta = handler(arg, actuator=act)
         assert meta["error"] == "capability_unsupported"
+
+
+# ---------------------------------------------------------------------------
+# Tier-2: calendar time / note / weather / dnd
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "args,expected",
+    [
+        ("lunch", ("lunch", None)),
+        ("title=dentist; day=friday; time=3pm", ("dentist", {"hour": 15, "minutes": 0, "day": "friday"})),
+        ("title=standup; day=tomorrow; time=9am", ("standup", {"hour": 9, "minutes": 0, "day": "tomorrow"})),
+        ("title=call mom; in=2 hours", ("call mom", {"in_seconds": 7200})),
+        ("title=review; day=2026-07-01", ("review", {"hour": 9, "minutes": 0, "day": "2026-07-01"})),
+        ("title=note only", ("note only", None)),
+    ],
+)
+def test_parse_calendar_args(args, expected) -> None:
+    assert parse_calendar_args(args) == expected
+
+
+def test_note_verb_strips_prefix() -> None:
+    act = InMemoryActuator()
+    _out, meta = _action_note("note to self buy milk", actuator=act)
+    assert meta == {"ok": True, "intent": "note", "text": "buy milk"}
+    assert act.note_calls == ["buy milk"]
+
+
+def test_note_verb_remember_prefix() -> None:
+    act = InMemoryActuator()
+    _action_note("remember to call the dentist", actuator=act)
+    assert act.note_calls == ["call the dentist"]
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("what's the weather", None),
+        ("weather", None),
+        ("weather in Paris", "Paris"),
+        ("what's the weather in New York", "New York"),
+        ("forecast for Tokyo", "Tokyo"),
+    ],
+)
+def test_parse_weather_args(text, expected) -> None:
+    assert parse_weather_args(text) == expected
+
+
+def test_weather_verb_with_and_without_location() -> None:
+    act = InMemoryActuator()
+    _out, meta = _action_weather("weather in Paris", actuator=act)
+    assert meta == {"ok": True, "intent": "weather", "location": "Paris"}
+    act2 = InMemoryActuator()
+    _out2, meta2 = _action_weather("what's the weather", actuator=act2)
+    assert meta2 == {"ok": True, "intent": "weather"}
+    assert act2.weather_calls == [None]
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("do not disturb", "on"),
+        ("silence my phone", "on"),
+        ("turn on do not disturb", "on"),
+        ("turn off do not disturb", "off"),
+        ("allow notifications", "off"),
+    ],
+)
+def test_dnd_verb(text, expected) -> None:
+    act = InMemoryActuator()
+    _out, meta = _action_dnd(text, actuator=act)
+    assert meta["state"] == expected
+    assert act.dnd_calls == [expected]
 
 
 # ---------------------------------------------------------------------------

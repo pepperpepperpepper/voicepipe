@@ -28,11 +28,13 @@ from voicepipe.transcript_triggers._intents import (
     _action_call,
     _action_message,
     _action_open_app,
+    _action_places,
     _normalize_open_url,
     parse_alarm_args,
     parse_alarm_offset_args,
     parse_app_args,
     parse_navigate_args,
+    parse_places_args,
     parse_reach_args,
     parse_timer_args,
 )
@@ -795,6 +797,45 @@ def test_parse_navigate_args_accepts(text: str, expected: tuple[str, str | None]
 )
 def test_parse_navigate_args_rejects(text: str) -> None:
     assert parse_navigate_args(text) is None
+
+
+# ---------------------------------------------------------------------------
+# parse_places_args / places (map search)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("show me nearby gas stations", "gas stations"),
+        ("find gas stations near me", "gas stations"),
+        ("where's the nearest pharmacy", "pharmacy"),
+        ("where is the nearest pharmacy", "pharmacy"),
+        ("nearest coffee", "coffee"),
+        ("find me a hardware store", "hardware store"),
+        ("gas stations", "gas stations"),
+    ],
+)
+def test_parse_places_args(text: str, expected: str) -> None:
+    assert parse_places_args(text) == expected
+
+
+def test_places_verb_routes_to_find_places() -> None:
+    act = InMemoryActuator()
+    out, meta = _action_places("show me nearby gas stations", actuator=act)
+    assert out == ""
+    assert meta["intent"] == "map_search"
+    assert meta["query"] == "gas stations"
+    assert act.find_places_calls == ["gas stations"]
+
+
+def test_places_verb_without_capability_skips() -> None:
+    from voicepipe.transcript_triggers._actuator import CAP_WEB_SEARCH
+
+    act = InMemoryActuator(caps=frozenset({CAP_WEB_SEARCH}))
+    _out, meta = _action_places("gas stations", actuator=act)
+    assert meta["error"] == "capability_unsupported"
+    assert act.find_places_calls == []
 
 
 # ---------------------------------------------------------------------------

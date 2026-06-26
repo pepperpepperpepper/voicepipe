@@ -41,6 +41,8 @@ sealed class ClientAction {
     // Launch a named app to its home screen; if [query] is set, copy it to the
     // clipboard first so the user can paste it into the app's own search.
     data class OpenApp(val app: String, val query: String?) : ClientAction()
+    // Open a map showing a places search near the current location.
+    data class MapSearch(val query: String) : ClientAction()
     data class Navigate(
         val destination: String,
         val mode: String?,
@@ -69,6 +71,7 @@ object ClientActions {
         "reach_contact",
         "open_app",
         "navigate",
+        "map_search",
         "accessibility_global",
         "calendar",
         "email",
@@ -111,6 +114,9 @@ object ClientActions {
             "open_app" -> obj.stringField("app")
                 ?.takeIf { it.isNotBlank() }
                 ?.let { ClientAction.OpenApp(it, obj.stringField("query")?.takeIf { q -> q.isNotBlank() }) }
+            "map_search" -> obj.stringField("query")
+                ?.takeIf { it.isNotBlank() }
+                ?.let(ClientAction::MapSearch)
             "navigate" -> parseNavigate(obj)
             "accessibility_global" -> parseAccessibilityGlobal(obj)
             "calendar_event" -> obj.stringField("title")

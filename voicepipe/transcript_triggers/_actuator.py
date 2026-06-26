@@ -48,6 +48,10 @@ CAP_REACH_CONTACT = "reach_contact"
 # screen, optionally copying a contact/query to the clipboard so the user can
 # paste it into the app's own search (these apps expose no search deep link).
 CAP_OPEN_APP = "open_app"
+# Client can open a map showing a places search ("nearby gas stations",
+# "nearest pharmacy") — results near the current location, not turn-by-turn
+# routing (that's `navigate`).
+CAP_MAP_SEARCH = "map_search"
 
 # Messaging platforms a `reach_contact` action may target.
 REACH_PLATFORMS: frozenset[str] = frozenset({"whatsapp", "signal", "sms"})
@@ -187,6 +191,14 @@ class Actuator(Protocol):
         screen. If ``query`` is given, the client copies it to the clipboard
         so the user can paste it into the app's own search. Server queues an
         ``open_app`` client action; desktop returns False.
+        """
+        ...
+
+    def find_places(self, query: str) -> bool:
+        """Open a map showing a places search for ``query`` near the current
+        location ("gas stations", "pharmacy"). Distinct from :meth:`navigate`,
+        which routes to one destination. Server queues a ``map_search`` client
+        action; desktop returns False.
         """
         ...
 
@@ -373,6 +385,10 @@ class DesktopActuator:
         # No standard desktop equivalent; not in capabilities().
         return False
 
+    def find_places(self, query: str) -> bool:
+        # No standard desktop equivalent; not in capabilities().
+        return False
+
 
 @dataclass
 class InMemoryActuator:
@@ -403,6 +419,7 @@ class InMemoryActuator:
                 CAP_EMAIL,
                 CAP_REACH_CONTACT,
                 CAP_OPEN_APP,
+                CAP_MAP_SEARCH,
             }
         )
     )
@@ -421,6 +438,7 @@ class InMemoryActuator:
     email_calls: list[dict[str, str]] = field(default_factory=list)
     reach_contact_calls: list[dict[str, Any]] = field(default_factory=list)
     open_app_calls: list[dict[str, Any]] = field(default_factory=list)
+    find_places_calls: list[str] = field(default_factory=list)
     subprocess_result: SubprocessResult = field(
         default_factory=lambda: SubprocessResult(returncode=0, stdout="", stderr="")
     )
@@ -554,6 +572,12 @@ class InMemoryActuator:
         if CAP_OPEN_APP not in self.caps or not app.strip():
             return False
         self.open_app_calls.append({"app": app, "query": query})
+        return True
+
+    def find_places(self, query: str) -> bool:
+        if CAP_MAP_SEARCH not in self.caps or not query.strip():
+            return False
+        self.find_places_calls.append(query)
         return True
 
 

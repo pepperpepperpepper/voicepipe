@@ -72,6 +72,9 @@ class ClientActionExecutor(
                 is ClientAction.Navigate -> {
                     if (fireNavigate(action.destination, action.mode)) intentsFired++
                 }
+                is ClientAction.MapSearch -> {
+                    if (fireMapSearch(action.query)) intentsFired++
+                }
                 is ClientAction.AccessibilityGlobal -> {
                     if (fireAccessibilityGlobal(action.action)) globalActionsFired++
                 }
@@ -356,6 +359,21 @@ class ClientActionExecutor(
         if (fireIntent(navIntent, "navigate")) return true
         val geoIntent = Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=$encoded"))
         return fireIntent(geoIntent, "navigate")
+    }
+
+    private fun fireMapSearch(query: String): Boolean {
+        // geo:0,0?q=<query> opens a maps app with a SEARCH for the query near
+        // the current location (a list of results), as opposed to
+        // google.navigation: which starts turn-by-turn to one place. Fall back
+        // to the Google Maps web search URL if no geo: handler is installed.
+        val encoded = Uri.encode(query)
+        val geo = Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=$encoded"))
+        if (fireIntent(geo, "map_search")) return true
+        val web = Intent(
+            Intent.ACTION_VIEW,
+            Uri.parse("https://www.google.com/maps/search/?api=1&query=$encoded"),
+        )
+        return fireIntent(web, "map_search")
     }
 
     private fun fireIntent(intent: Intent, label: String): Boolean {

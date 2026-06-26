@@ -36,6 +36,7 @@ from ._actuator import (
     CAP_CALENDAR,
     CAP_DIAL,
     CAP_EMAIL,
+    CAP_MAP_SEARCH,
     CAP_NAVIGATE,
     CAP_OPEN_APP,
     CAP_OPEN_URL,
@@ -187,6 +188,7 @@ _UNSUPPORTED = {
     "message": "Messaging contacts is not supported on this device.",
     "open_app": "Launching apps is not supported on this device.",
     "navigate": "Navigation is not supported on this device.",
+    "places": "Map search is not supported on this device.",
     "accessibility_global": "System navigation is not supported on this device.",
     "calendar": "Creating calendar events is not supported on this device.",
     "email": "Composing email is not supported on this device.",
@@ -826,6 +828,51 @@ def _action_navigate(
     if mode:
         meta["mode"] = mode
     return "", meta
+
+
+# Spoken filler stripped from a places query so "show me nearby gas stations"
+# → "gas stations". "near me" / "nearby" / "around here" are dropped because
+# the map already searches around the current location.
+_PLACES_STRIP_RE = re.compile(
+    r"\b(?:show me|find me|find|where(?:'s| is)|the nearest|nearest|"
+    r"nearby|near me|around here|close by|closest)\b",
+    re.IGNORECASE,
+)
+
+
+def parse_places_args(args: str) -> str:
+    """Reduce a spoken places request to the bare query: drop filler like
+    "show me", "nearby", "near me", "nearest". "show me nearby gas stations"
+    → "gas stations"; "where's the nearest pharmacy" → "pharmacy"."""
+    text = _PLACES_STRIP_RE.sub(" ", args or "")
+    # Collapse whitespace and strip leading "for"/"a"/"an"/"to" left behind.
+    text = " ".join(text.split())
+    text = re.sub(r"^(?:for|a|an|to)\s+", "", text, flags=re.IGNORECASE)
+    return text.strip()
+
+
+def _action_places(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Open a map showing a places search ("nearby gas stations", "nearest
+    pharmacy") — results around the current location, not turn-by-turn routing
+    (that's `navigate`)."""
+    del verb_cfg, profiles, captures, commands
+    query = parse_places_args(prompt or "")
+    if not query:
+        return _bad_args("places", "expected a place type, e.g. 'gas stations'")
+    act = resolve_actuator(actuator)
+    if CAP_MAP_SEARCH not in act.capabilities():
+        return _unsupported("places")
+    if not act.find_places(query):
+        return _unsupported("places")
+    return "", {"ok": True, "intent": "map_search", "query": query}
 
 
 # ---------------------------------------------------------------------------

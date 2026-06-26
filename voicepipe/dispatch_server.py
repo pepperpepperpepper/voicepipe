@@ -64,6 +64,7 @@ from voicepipe.transcript_triggers._actuator import (
     CAP_DIAL,
     CAP_RESOLVE_DIAL,
     CAP_NAVIGATE,
+    CAP_MAP_SEARCH,
     CAP_OPEN_APP,
     CAP_OPEN_URL,
     CAP_REACH_CONTACT,
@@ -100,6 +101,7 @@ _ALL_CAPS: frozenset[str] = frozenset(
         CAP_EMAIL,
         CAP_REACH_CONTACT,
         CAP_OPEN_APP,
+        CAP_MAP_SEARCH,
     }
 )
 
@@ -306,6 +308,12 @@ class ServerActuator:
         if query and query.strip():
             entry["query"] = query.strip()
         self.client_actions.append(entry)
+        return True
+
+    def find_places(self, query: str) -> bool:
+        if CAP_MAP_SEARCH not in self._caps or not query.strip():
+            return False
+        self.client_actions.append({"type": "map_search", "query": query.strip()})
         return True
 
 

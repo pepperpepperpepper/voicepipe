@@ -23,6 +23,7 @@ class ClientActionsTest {
             "reach_contact",
             "open_app",
             "navigate",
+            "map_search",
             "accessibility_global",
             "calendar",
             "email",
@@ -54,6 +55,15 @@ class ClientActionsTest {
             ClientActions.parse(parse("""{"type":"open_app","app":"wechat","query":"Bob Smith"}""")),
         )
         assertNull(ClientActions.parse(parse("""{"type":"open_app"}""")))
+    }
+
+    @Test
+    fun `map_search parses query`() {
+        assertEquals(
+            ClientAction.MapSearch("gas stations"),
+            ClientActions.parse(parse("""{"type":"map_search","query":"gas stations"}""")),
+        )
+        assertNull(ClientActions.parse(parse("""{"type":"map_search","query":""}""")))
     }
 
     @Test

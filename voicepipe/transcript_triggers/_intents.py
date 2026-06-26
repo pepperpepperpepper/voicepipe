@@ -32,18 +32,26 @@ from voicepipe.config import (
 
 from ._actuator import (
     ACCESSIBILITY_GLOBAL_ACTIONS,
+    CAMERA_MODES,
     CAP_ACCESSIBILITY_GLOBAL,
     CAP_CALENDAR,
+    CAP_CAMERA,
     CAP_DIAL,
     CAP_EMAIL,
+    CAP_FLASHLIGHT,
     CAP_MAP_SEARCH,
+    CAP_MEDIA_CONTROL,
     CAP_NAVIGATE,
     CAP_OPEN_APP,
     CAP_OPEN_URL,
     CAP_REACH_CONTACT,
     CAP_SET_ALARM,
     CAP_SET_TIMER,
+    CAP_VOLUME,
     CAP_WEB_SEARCH,
+    FLASHLIGHT_STATES,
+    MEDIA_ACTIONS,
+    VOLUME_ACTIONS,
     Actuator,
     resolve_actuator,
 )
@@ -189,6 +197,10 @@ _UNSUPPORTED = {
     "open_app": "Launching apps is not supported on this device.",
     "navigate": "Navigation is not supported on this device.",
     "places": "Map search is not supported on this device.",
+    "media": "Media control is not supported on this device.",
+    "volume": "Volume control is not supported on this device.",
+    "flashlight": "The flashlight is not controllable on this device.",
+    "camera": "Opening the camera is not supported on this device.",
     "accessibility_global": "System navigation is not supported on this device.",
     "calendar": "Creating calendar events is not supported on this device.",
     "email": "Composing email is not supported on this device.",
@@ -875,6 +887,181 @@ def _action_places(
     return "", {"ok": True, "intent": "map_search", "query": query}
 
 
+# --- Device controls: media / volume / flashlight / camera ----------------
+
+# Spoken word → canonical media transport action.
+_MEDIA_ALIASES: dict[str, str] = {
+    "play": "play",
+    "resume": "play",
+    "unpause": "play",
+    "pause": "pause",
+    "stop": "stop",
+    "next": "next",
+    "skip": "next",
+    "forward": "next",
+    "previous": "previous",
+    "back": "previous",
+    "prev": "previous",
+    "rewind": "previous",
+    "toggle": "play_pause",
+    "play pause": "play_pause",
+}
+
+
+def _action_media(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Media transport control: play / pause / next / previous / stop."""
+    del verb_cfg, profiles, captures, commands
+    raw = " ".join((prompt or "").strip().lower().split())
+    action = _MEDIA_ALIASES.get(raw)
+    if action is None:
+        # Fall back to the first recognized word ("play the next song" → play
+        # is wrong; prefer the most specific). Check skip/next/previous first.
+        for word in raw.split():
+            if word in _MEDIA_ALIASES:
+                action = _MEDIA_ALIASES[word]
+                break
+    if action is None or action not in MEDIA_ACTIONS:
+        return _bad_args("media", "expected play/pause/next/previous/stop")
+    act = resolve_actuator(actuator)
+    if CAP_MEDIA_CONTROL not in act.capabilities():
+        return _unsupported("media")
+    if not act.media_control(action):
+        return _unsupported("media")
+    return "", {"ok": True, "intent": "media", "action": action}
+
+
+# Pull a 0–100 level out of a spoken volume arg ("50", "50 percent", "halfway").
+_VOLUME_NUM_RE = re.compile(r"(\d{1,3})")
+_VOLUME_WORD_LEVELS: dict[str, int] = {
+    "max": 100, "maximum": 100, "full": 100, "all the way": 100,
+    "min": 0, "minimum": 0, "zero": 0, "off": 0,
+    "half": 50, "halfway": 50, "medium": 50,
+}
+
+
+def parse_volume_args(args: str) -> tuple[str, int | None] | None:
+    """Parse a spoken volume arg into ``(action, level_or_None)``.
+
+    ``up`` / ``down`` / ``mute`` / ``unmute`` map straight through; a number
+    or level word ("50", "50 percent", "max", "half") → ``("set", level)``.
+    Returns ``None`` if nothing recognizable.
+    """
+    text = " ".join((args or "").strip().lower().split())
+    if not text:
+        return None
+    if text in ("up", "raise", "louder", "increase", "higher"):
+        return "up", None
+    if text in ("down", "lower", "quieter", "decrease", "softer"):
+        return "down", None
+    if text in ("mute", "silence", "silent"):
+        return "mute", None
+    if text in ("unmute",):
+        return "unmute", None
+    for word, lvl in _VOLUME_WORD_LEVELS.items():
+        if word in text:
+            return "set", lvl
+    m = _VOLUME_NUM_RE.search(text)
+    if m:
+        return "set", max(0, min(100, int(m.group(1))))
+    # Bare "raise/lower" verbs embedded in a phrase.
+    if "up" in text.split() or "raise" in text:
+        return "up", None
+    if "down" in text.split() or "lower" in text:
+        return "down", None
+    return None
+
+
+def _action_volume(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Media-volume control: up / down / mute / unmute / set to a level."""
+    del verb_cfg, profiles, captures, commands
+    parsed = parse_volume_args(prompt or "")
+    if parsed is None:
+        return _bad_args("volume", "expected up/down/mute or a level like '50'")
+    action, level = parsed
+    act = resolve_actuator(actuator)
+    if CAP_VOLUME not in act.capabilities():
+        return _unsupported("volume")
+    if not act.set_volume(action, level):
+        return _unsupported("volume")
+    meta: dict[str, Any] = {"ok": True, "intent": "volume", "action": action}
+    if action == "set":
+        meta["level"] = level
+    return "", meta
+
+
+def _action_flashlight(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Torch on / off / toggle. Bare "flashlight" toggles."""
+    del verb_cfg, profiles, captures, commands
+    # Word-based (not substring) so "flashlight" doesn't match "light" → "on".
+    words = (prompt or "").strip().lower().split()
+    if any(w in words for w in ("off", "disable", "kill", "stop")):
+        state = "off"
+    elif any(w in words for w in ("on", "enable")):
+        state = "on"
+    else:
+        state = "toggle"
+    if state not in FLASHLIGHT_STATES:
+        return _bad_args("flashlight", "expected on/off")
+    act = resolve_actuator(actuator)
+    if CAP_FLASHLIGHT not in act.capabilities():
+        return _unsupported("flashlight")
+    if not act.flashlight(state):
+        return _unsupported("flashlight")
+    return "", {"ok": True, "intent": "flashlight", "state": state}
+
+
+def _action_camera(
+    prompt: str,
+    *,
+    verb_cfg: TranscriptVerbConfig | None = None,
+    profiles: Mapping[str, TranscriptLLMProfileConfig] | None = None,
+    captures: Mapping[str, str] | None = None,
+    commands: TranscriptCommandsConfig | None = None,
+    actuator: Actuator | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Open the camera: photo (default) / video / selfie."""
+    del verb_cfg, profiles, captures, commands
+    text = " ".join((prompt or "").strip().lower().split())
+    if any(w in text for w in ("video", "record", "movie")):
+        mode = "video"
+    elif any(w in text for w in ("selfie", "front", "myself")):
+        mode = "selfie"
+    else:
+        mode = "photo"
+    if mode not in CAMERA_MODES:
+        return _bad_args("camera", "expected photo/video/selfie")
+    act = resolve_actuator(actuator)
+    if CAP_CAMERA not in act.capabilities():
+        return _unsupported("camera")
+    if not act.open_camera(mode):
+        return _unsupported("camera")
+    return "", {"ok": True, "intent": "camera", "mode": mode}
+
+
 # ---------------------------------------------------------------------------
 # Accessibility-global verbs (back / home / recents / notifications /
 # quick_settings) — one verb per action, all sharing the same handler.
@@ -924,3 +1111,5 @@ _action_home = _make_accessibility_global_handler("home")
 _action_recents = _make_accessibility_global_handler("recents")
 _action_notifications = _make_accessibility_global_handler("notifications")
 _action_quick_settings = _make_accessibility_global_handler("quick_settings")
+_action_screenshot = _make_accessibility_global_handler("screenshot")
+_action_lock_screen = _make_accessibility_global_handler("lock_screen")

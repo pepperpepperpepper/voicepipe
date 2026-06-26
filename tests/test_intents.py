@@ -27,14 +27,19 @@ from voicepipe.transcript_triggers._actuator import (
 from voicepipe.transcript_triggers._intents import (
     _action_call,
     _action_message,
+    _action_camera,
+    _action_flashlight,
+    _action_media,
     _action_open_app,
     _action_places,
+    _action_volume,
     _normalize_open_url,
     parse_alarm_args,
     parse_alarm_offset_args,
     parse_app_args,
     parse_navigate_args,
     parse_places_args,
+    parse_volume_args,
     parse_reach_args,
     parse_timer_args,
 )
@@ -836,6 +841,110 @@ def test_places_verb_without_capability_skips() -> None:
     _out, meta = _action_places("gas stations", actuator=act)
     assert meta["error"] == "capability_unsupported"
     assert act.find_places_calls == []
+
+
+# ---------------------------------------------------------------------------
+# Device controls: media / volume / flashlight / camera
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("play", "play"),
+        ("resume", "play"),
+        ("pause the music", "pause"),
+        ("next", "next"),
+        ("skip", "next"),
+        ("skip this song", "next"),
+        ("previous", "previous"),
+        ("go back", "previous"),
+        ("stop", "stop"),
+    ],
+)
+def test_media_verb_actions(text: str, expected: str) -> None:
+    act = InMemoryActuator()
+    _out, meta = _action_media(text, actuator=act)
+    assert meta["action"] == expected
+    assert act.media_control_calls == [expected]
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("up", ("up", None)),
+        ("louder", ("up", None)),
+        ("down", ("down", None)),
+        ("mute", ("mute", None)),
+        ("unmute", ("unmute", None)),
+        ("50", ("set", 50)),
+        ("set volume to 30", ("set", 30)),
+        ("30 percent", ("set", 30)),
+        ("max", ("set", 100)),
+        ("half", ("set", 50)),
+        ("200", ("set", 100)),  # clamped
+    ],
+)
+def test_parse_volume_args(text: str, expected) -> None:
+    assert parse_volume_args(text) == expected
+
+
+def test_volume_verb_set_level() -> None:
+    act = InMemoryActuator()
+    _out, meta = _action_volume("set volume to 30", actuator=act)
+    assert meta == {"ok": True, "intent": "volume", "action": "set", "level": 30}
+    assert act.volume_calls == [{"action": "set", "level": 30}]
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("on", "on"),
+        ("turn on the flashlight", "on"),
+        ("off", "off"),
+        ("turn it off", "off"),
+        ("flashlight", "toggle"),
+    ],
+)
+def test_flashlight_verb(text: str, expected: str) -> None:
+    act = InMemoryActuator()
+    _out, meta = _action_flashlight(text, actuator=act)
+    assert meta["state"] == expected
+    assert act.flashlight_calls == [expected]
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("", "photo"),
+        ("photo", "photo"),
+        ("take a picture", "photo"),
+        ("video", "video"),
+        ("record a video", "video"),
+        ("selfie", "selfie"),
+        ("take a selfie", "selfie"),
+    ],
+)
+def test_camera_verb(text: str, expected: str) -> None:
+    act = InMemoryActuator()
+    _out, meta = _action_camera(text, actuator=act)
+    assert meta["mode"] == expected
+    assert act.camera_calls == [expected]
+
+
+def test_device_verbs_skip_without_capability() -> None:
+    from voicepipe.transcript_triggers._actuator import CAP_WEB_SEARCH
+
+    bare = frozenset({CAP_WEB_SEARCH})
+    for handler, arg in (
+        (_action_media, "play"),
+        (_action_volume, "up"),
+        (_action_flashlight, "on"),
+        (_action_camera, "photo"),
+    ):
+        act = InMemoryActuator(caps=bare)
+        _out, meta = handler(arg, actuator=act)
+        assert meta["error"] == "capability_unsupported"
 
 
 # ---------------------------------------------------------------------------

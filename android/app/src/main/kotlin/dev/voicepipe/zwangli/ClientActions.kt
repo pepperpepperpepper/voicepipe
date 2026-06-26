@@ -43,6 +43,11 @@ sealed class ClientAction {
     data class OpenApp(val app: String, val query: String?) : ClientAction()
     // Open a map showing a places search near the current location.
     data class MapSearch(val query: String) : ClientAction()
+    // Device controls.
+    data class Media(val action: String) : ClientAction()       // play/pause/next/previous/stop/play_pause
+    data class Volume(val action: String, val level: Int?) : ClientAction() // up/down/mute/unmute/set
+    data class Flashlight(val state: String) : ClientAction()    // on/off/toggle
+    data class Camera(val mode: String) : ClientAction()         // photo/video/selfie
     data class Navigate(
         val destination: String,
         val mode: String?,
@@ -72,6 +77,10 @@ object ClientActions {
         "open_app",
         "navigate",
         "map_search",
+        "media_control",
+        "volume",
+        "flashlight",
+        "camera",
         "accessibility_global",
         "calendar",
         "email",
@@ -83,6 +92,8 @@ object ClientActions {
         "recents",
         "notifications",
         "quick_settings",
+        "screenshot",
+        "lock_screen",
     )
 
     fun parseAll(actions: List<JsonElement>): List<ClientAction> =
@@ -118,6 +129,16 @@ object ClientActions {
                 ?.takeIf { it.isNotBlank() }
                 ?.let(ClientAction::MapSearch)
             "navigate" -> parseNavigate(obj)
+            "media" -> obj.stringField("action")
+                ?.takeIf { it in MEDIA_ACTIONS }
+                ?.let(ClientAction::Media)
+            "volume" -> parseVolume(obj)
+            "flashlight" -> obj.stringField("state")
+                ?.takeIf { it in FLASHLIGHT_STATES }
+                ?.let(ClientAction::Flashlight)
+            "camera" -> obj.stringField("mode")
+                ?.takeIf { it in CAMERA_MODES }
+                ?.let(ClientAction::Camera)
             "accessibility_global" -> parseAccessibilityGlobal(obj)
             "calendar_event" -> obj.stringField("title")
                 ?.takeIf { it.isNotBlank() }
@@ -133,6 +154,17 @@ object ClientActions {
 
     private val REACH_PLATFORMS = setOf("whatsapp", "signal", "sms")
     private val REACH_MODES = setOf("call", "video", "message")
+    private val MEDIA_ACTIONS = setOf("play", "pause", "play_pause", "next", "previous", "stop")
+    private val VOLUME_ACTIONS = setOf("up", "down", "mute", "unmute", "set")
+    private val FLASHLIGHT_STATES = setOf("on", "off", "toggle")
+    private val CAMERA_MODES = setOf("photo", "video", "selfie")
+
+    private fun parseVolume(obj: JsonObject): ClientAction.Volume? {
+        val action = obj.stringField("action")?.takeIf { it in VOLUME_ACTIONS } ?: return null
+        val level = obj.intField("level")
+        if (action == "set" && (level == null || level !in 0..100)) return null
+        return ClientAction.Volume(action, if (action == "set") level else null)
+    }
 
     private fun parseReachContact(obj: JsonObject): ClientAction.ReachContact? {
         val name = obj.stringField("name")?.takeIf { it.isNotBlank() } ?: return null

@@ -52,6 +52,21 @@ CAP_OPEN_APP = "open_app"
 # "nearest pharmacy") — results near the current location, not turn-by-turn
 # routing (that's `navigate`).
 CAP_MAP_SEARCH = "map_search"
+# Device controls.
+CAP_MEDIA_CONTROL = "media_control"  # play/pause/next/previous transport
+CAP_VOLUME = "volume"                # raise/lower/mute/set media volume
+CAP_FLASHLIGHT = "flashlight"        # torch on/off/toggle
+CAP_CAMERA = "camera"                # open the camera (photo/video/selfie)
+
+# Valid argument values for the device-control verbs (shared client/server).
+MEDIA_ACTIONS: frozenset[str] = frozenset(
+    {"play", "pause", "play_pause", "next", "previous", "stop"}
+)
+VOLUME_ACTIONS: frozenset[str] = frozenset(
+    {"up", "down", "mute", "unmute", "set"}
+)
+FLASHLIGHT_STATES: frozenset[str] = frozenset({"on", "off", "toggle"})
+CAMERA_MODES: frozenset[str] = frozenset({"photo", "video", "selfie"})
 
 # Messaging platforms a `reach_contact` action may target.
 REACH_PLATFORMS: frozenset[str] = frozenset({"whatsapp", "signal", "sms"})
@@ -65,7 +80,15 @@ REACH_MODES: frozenset[str] = frozenset({"call", "video", "message"})
 # the string back to the constant — keeping the wire format symbolic
 # means logs and tests don't depend on Android's numeric API.
 ACCESSIBILITY_GLOBAL_ACTIONS: frozenset[str] = frozenset(
-    {"back", "home", "recents", "notifications", "quick_settings"}
+    {
+        "back",
+        "home",
+        "recents",
+        "notifications",
+        "quick_settings",
+        "screenshot",
+        "lock_screen",
+    }
 )
 
 
@@ -200,6 +223,25 @@ class Actuator(Protocol):
         which routes to one destination. Server queues a ``map_search`` client
         action; desktop returns False.
         """
+        ...
+
+    def media_control(self, action: str) -> bool:
+        """Media transport control: ``play`` / ``pause`` / ``play_pause`` /
+        ``next`` / ``previous`` / ``stop``. The client dispatches the matching
+        media key to whatever app holds audio focus."""
+        ...
+
+    def set_volume(self, action: str, level: int | None = None) -> bool:
+        """Media-volume control: ``up`` / ``down`` / ``mute`` / ``unmute`` /
+        ``set`` (with ``level`` 0–100 for ``set``)."""
+        ...
+
+    def flashlight(self, state: str) -> bool:
+        """Torch ``on`` / ``off`` / ``toggle``."""
+        ...
+
+    def open_camera(self, mode: str) -> bool:
+        """Open the camera app: ``photo`` / ``video`` / ``selfie``."""
         ...
 
 
@@ -389,6 +431,18 @@ class DesktopActuator:
         # No standard desktop equivalent; not in capabilities().
         return False
 
+    def media_control(self, action: str) -> bool:
+        return False
+
+    def set_volume(self, action: str, level: int | None = None) -> bool:
+        return False
+
+    def flashlight(self, state: str) -> bool:
+        return False
+
+    def open_camera(self, mode: str) -> bool:
+        return False
+
 
 @dataclass
 class InMemoryActuator:
@@ -420,6 +474,10 @@ class InMemoryActuator:
                 CAP_REACH_CONTACT,
                 CAP_OPEN_APP,
                 CAP_MAP_SEARCH,
+                CAP_MEDIA_CONTROL,
+                CAP_VOLUME,
+                CAP_FLASHLIGHT,
+                CAP_CAMERA,
             }
         )
     )
@@ -439,6 +497,10 @@ class InMemoryActuator:
     reach_contact_calls: list[dict[str, Any]] = field(default_factory=list)
     open_app_calls: list[dict[str, Any]] = field(default_factory=list)
     find_places_calls: list[str] = field(default_factory=list)
+    media_control_calls: list[str] = field(default_factory=list)
+    volume_calls: list[dict[str, Any]] = field(default_factory=list)
+    flashlight_calls: list[str] = field(default_factory=list)
+    camera_calls: list[str] = field(default_factory=list)
     subprocess_result: SubprocessResult = field(
         default_factory=lambda: SubprocessResult(returncode=0, stdout="", stderr="")
     )
@@ -578,6 +640,32 @@ class InMemoryActuator:
         if CAP_MAP_SEARCH not in self.caps or not query.strip():
             return False
         self.find_places_calls.append(query)
+        return True
+
+    def media_control(self, action: str) -> bool:
+        if CAP_MEDIA_CONTROL not in self.caps or action not in MEDIA_ACTIONS:
+            return False
+        self.media_control_calls.append(action)
+        return True
+
+    def set_volume(self, action: str, level: int | None = None) -> bool:
+        if CAP_VOLUME not in self.caps or action not in VOLUME_ACTIONS:
+            return False
+        if action == "set" and (level is None or not 0 <= level <= 100):
+            return False
+        self.volume_calls.append({"action": action, "level": level})
+        return True
+
+    def flashlight(self, state: str) -> bool:
+        if CAP_FLASHLIGHT not in self.caps or state not in FLASHLIGHT_STATES:
+            return False
+        self.flashlight_calls.append(state)
+        return True
+
+    def open_camera(self, mode: str) -> bool:
+        if CAP_CAMERA not in self.caps or mode not in CAMERA_MODES:
+            return False
+        self.camera_calls.append(mode)
         return True
 
 

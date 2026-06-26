@@ -7,11 +7,16 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.net.Uri
 import android.provider.AlarmClock
 import android.provider.CalendarContract
+import android.provider.MediaStore
 import android.util.Log
+import android.view.KeyEvent
 import java.util.Calendar
 import kotlinx.serialization.json.JsonElement
 
@@ -22,6 +27,11 @@ class ClientActionExecutor(
         Settings.from(context).searchUrlTemplate.takeIf { it.isNotBlank() }
     },
 ) {
+
+    // Best-effort torch state for "toggle" — we track what we last set. If
+    // another app changes the torch we may be a beat out of sync, which only
+    // affects toggle (on/off are absolute).
+    private var torchOn = false
 
     interface FeedbackListener {
         fun onCompleted(event: String, success: Boolean)
@@ -74,6 +84,18 @@ class ClientActionExecutor(
                 }
                 is ClientAction.MapSearch -> {
                     if (fireMapSearch(action.query)) intentsFired++
+                }
+                is ClientAction.Media -> {
+                    if (fireMedia(action.action)) intentsFired++
+                }
+                is ClientAction.Volume -> {
+                    if (fireVolume(action.action, action.level)) intentsFired++
+                }
+                is ClientAction.Flashlight -> {
+                    if (fireFlashlight(action.state)) intentsFired++
+                }
+                is ClientAction.Camera -> {
+                    if (fireCamera(action.mode)) intentsFired++
                 }
                 is ClientAction.AccessibilityGlobal -> {
                     if (fireAccessibilityGlobal(action.action)) globalActionsFired++
@@ -318,6 +340,14 @@ class ClientActionExecutor(
             "recents" -> AccessibilityService.GLOBAL_ACTION_RECENTS
             "notifications" -> AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS
             "quick_settings" -> AccessibilityService.GLOBAL_ACTION_QUICK_SETTINGS
+            "screenshot" ->
+                if (android.os.Build.VERSION.SDK_INT >= 28)
+                    AccessibilityService.GLOBAL_ACTION_TAKE_SCREENSHOT
+                else return false
+            "lock_screen" ->
+                if (android.os.Build.VERSION.SDK_INT >= 28)
+                    AccessibilityService.GLOBAL_ACTION_LOCK_SCREEN
+                else return false
             else -> {
                 Log.w(TAG, "accessibility_global: unknown action '$action'")
                 return false
@@ -374,6 +404,83 @@ class ClientActionExecutor(
             Uri.parse("https://www.google.com/maps/search/?api=1&query=$encoded"),
         )
         return fireIntent(web, "map_search")
+    }
+
+    private fun fireMedia(action: String): Boolean {
+        val keyCode = when (action) {
+            "play" -> KeyEvent.KEYCODE_MEDIA_PLAY
+            "pause" -> KeyEvent.KEYCODE_MEDIA_PAUSE
+            "play_pause" -> KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+            "next" -> KeyEvent.KEYCODE_MEDIA_NEXT
+            "previous" -> KeyEvent.KEYCODE_MEDIA_PREVIOUS
+            "stop" -> KeyEvent.KEYCODE_MEDIA_STOP
+            else -> return false
+        }
+        val am = context.getSystemService(AudioManager::class.java) ?: return false
+        // A media key is a press: dispatch matching down + up events to
+        // whichever app holds audio focus.
+        am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
+        am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
+        return true
+    }
+
+    private fun fireVolume(action: String, level: Int?): Boolean {
+        val am = context.getSystemService(AudioManager::class.java) ?: return false
+        val stream = AudioManager.STREAM_MUSIC
+        val flags = AudioManager.FLAG_SHOW_UI
+        when (action) {
+            "up" -> am.adjustStreamVolume(stream, AudioManager.ADJUST_RAISE, flags)
+            "down" -> am.adjustStreamVolume(stream, AudioManager.ADJUST_LOWER, flags)
+            "mute" -> am.adjustStreamVolume(stream, AudioManager.ADJUST_MUTE, flags)
+            "unmute" -> am.adjustStreamVolume(stream, AudioManager.ADJUST_UNMUTE, flags)
+            "set" -> {
+                if (level == null) return false
+                val max = am.getStreamMaxVolume(stream)
+                val target = Math.round(level / 100f * max).coerceIn(0, max)
+                am.setStreamVolume(stream, target, flags)
+            }
+            else -> return false
+        }
+        return true
+    }
+
+    private fun fireFlashlight(state: String): Boolean {
+        val cm = context.getSystemService(CameraManager::class.java) ?: return false
+        return try {
+            val camId = cm.cameraIdList.firstOrNull { id ->
+                cm.getCameraCharacteristics(id)
+                    .get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+            } ?: run {
+                Log.w(TAG, "flashlight: no torch-capable camera")
+                return false
+            }
+            val on = when (state) {
+                "on" -> true
+                "off" -> false
+                else -> !torchOn
+            }
+            cm.setTorchMode(camId, on)
+            torchOn = on
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "flashlight: setTorchMode failed", e)
+            false
+        }
+    }
+
+    private fun fireCamera(mode: String): Boolean {
+        val intent = when (mode) {
+            "video" -> Intent(MediaStore.INTENT_ACTION_VIDEO_CAMERA)
+            else -> Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)
+        }
+        if (mode == "selfie") {
+            // Best-effort front-camera hints — honored by some camera apps,
+            // ignored (harmlessly) by others, which just open rear-facing.
+            intent.putExtra("android.intent.extras.CAMERA_FACING", 1)
+            intent.putExtra("android.intent.extras.LENS_FACING_FRONT", 1)
+            intent.putExtra("android.intent.extra.USE_FRONT_CAMERA", true)
+        }
+        return fireIntent(intent, "camera")
     }
 
     private fun fireIntent(intent: Intent, label: String): Boolean {

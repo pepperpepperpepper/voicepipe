@@ -24,6 +24,10 @@ class ClientActionsTest {
             "open_app",
             "navigate",
             "map_search",
+            "media_control",
+            "volume",
+            "flashlight",
+            "camera",
             "accessibility_global",
             "calendar",
             "email",
@@ -55,6 +59,49 @@ class ClientActionsTest {
             ClientActions.parse(parse("""{"type":"open_app","app":"wechat","query":"Bob Smith"}""")),
         )
         assertNull(ClientActions.parse(parse("""{"type":"open_app"}""")))
+    }
+
+    @Test
+    fun `media volume flashlight camera parse`() {
+        assertEquals(
+            ClientAction.Media("next"),
+            ClientActions.parse(parse("""{"type":"media","action":"next"}""")),
+        )
+        assertNull(ClientActions.parse(parse("""{"type":"media","action":"explode"}""")))
+
+        assertEquals(
+            ClientAction.Volume("up", null),
+            ClientActions.parse(parse("""{"type":"volume","action":"up"}""")),
+        )
+        assertEquals(
+            ClientAction.Volume("set", 30),
+            ClientActions.parse(parse("""{"type":"volume","action":"set","level":30}""")),
+        )
+        // set without a valid level → rejected.
+        assertNull(ClientActions.parse(parse("""{"type":"volume","action":"set"}""")))
+        assertNull(ClientActions.parse(parse("""{"type":"volume","action":"set","level":150}""")))
+
+        assertEquals(
+            ClientAction.Flashlight("on"),
+            ClientActions.parse(parse("""{"type":"flashlight","state":"on"}""")),
+        )
+        assertEquals(
+            ClientAction.Camera("selfie"),
+            ClientActions.parse(parse("""{"type":"camera","mode":"selfie"}""")),
+        )
+        assertNull(ClientActions.parse(parse("""{"type":"camera","mode":"hologram"}""")))
+    }
+
+    @Test
+    fun `accessibility_global accepts screenshot and lock_screen`() {
+        assertEquals(
+            ClientAction.AccessibilityGlobal("screenshot"),
+            ClientActions.parse(parse("""{"type":"accessibility_global","action":"screenshot"}""")),
+        )
+        assertEquals(
+            ClientAction.AccessibilityGlobal("lock_screen"),
+            ClientActions.parse(parse("""{"type":"accessibility_global","action":"lock_screen"}""")),
+        )
     }
 
     @Test

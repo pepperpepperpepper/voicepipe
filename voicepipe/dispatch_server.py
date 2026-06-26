@@ -64,16 +64,24 @@ from voicepipe.transcript_triggers._actuator import (
     CAP_DIAL,
     CAP_RESOLVE_DIAL,
     CAP_NAVIGATE,
+    CAP_CAMERA,
+    CAP_FLASHLIGHT,
     CAP_MAP_SEARCH,
+    CAP_MEDIA_CONTROL,
     CAP_OPEN_APP,
     CAP_OPEN_URL,
     CAP_REACH_CONTACT,
     CAP_SET_ALARM,
     CAP_SET_TIMER,
     CAP_SUBPROCESS,
+    CAP_VOLUME,
     CAP_WEB_SEARCH,
+    CAMERA_MODES,
+    FLASHLIGHT_STATES,
+    MEDIA_ACTIONS,
     REACH_MODES,
     REACH_PLATFORMS,
+    VOLUME_ACTIONS,
     DesktopActuator,
     SubprocessResult,
 )
@@ -102,6 +110,10 @@ _ALL_CAPS: frozenset[str] = frozenset(
         CAP_REACH_CONTACT,
         CAP_OPEN_APP,
         CAP_MAP_SEARCH,
+        CAP_MEDIA_CONTROL,
+        CAP_VOLUME,
+        CAP_FLASHLIGHT,
+        CAP_CAMERA,
     }
 )
 
@@ -314,6 +326,35 @@ class ServerActuator:
         if CAP_MAP_SEARCH not in self._caps or not query.strip():
             return False
         self.client_actions.append({"type": "map_search", "query": query.strip()})
+        return True
+
+    def media_control(self, action: str) -> bool:
+        if CAP_MEDIA_CONTROL not in self._caps or action not in MEDIA_ACTIONS:
+            return False
+        self.client_actions.append({"type": "media", "action": action})
+        return True
+
+    def set_volume(self, action: str, level: int | None = None) -> bool:
+        if CAP_VOLUME not in self._caps or action not in VOLUME_ACTIONS:
+            return False
+        if action == "set" and (level is None or not 0 <= level <= 100):
+            return False
+        entry: dict[str, Any] = {"type": "volume", "action": action}
+        if action == "set":
+            entry["level"] = level
+        self.client_actions.append(entry)
+        return True
+
+    def flashlight(self, state: str) -> bool:
+        if CAP_FLASHLIGHT not in self._caps or state not in FLASHLIGHT_STATES:
+            return False
+        self.client_actions.append({"type": "flashlight", "state": state})
+        return True
+
+    def open_camera(self, mode: str) -> bool:
+        if CAP_CAMERA not in self._caps or mode not in CAMERA_MODES:
+            return False
+        self.client_actions.append({"type": "camera", "mode": mode})
         return True
 
 

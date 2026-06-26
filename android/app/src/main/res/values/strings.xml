@@ -95,6 +95,8 @@
     <string name="perm_notifications_desc">Shows the persistent dictation notification with the Dictate / Stop actions.</string>
     <string name="perm_service_title">Persistent dictation</string>
     <string name="perm_service_desc">Foreground service that keeps Zwangli reachable from the status bar so you can dictate without opening the app first.</string>
+    <string name="perm_dnd_title">Do Not Disturb</string>
+    <string name="perm_dnd_desc">Lets voice commands turn Do Not Disturb on/off (\"silence my phone\"). Opens the system grant screen — enable Zwangli there.</string>
     <string name="perm_alarm_title">Alarm</string>
     <string name="perm_alarm_desc">Granted at install. Lets the Clock app create alarms and timers from voice commands.</string>
     <string name="configurator_header_search">Search</string>

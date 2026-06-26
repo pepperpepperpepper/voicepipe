@@ -47,12 +47,14 @@ class ConfiguratorActivity : AppCompatActivity() {
     private lateinit var badgeNotifications: TextView
     private lateinit var badgeService: TextView
     private lateinit var badgeAlarm: TextView
+    private lateinit var badgeDnd: TextView
 
     private lateinit var buttonAccessibility: Button
     private lateinit var buttonMicrophone: Button
     private lateinit var buttonContacts: Button
     private lateinit var buttonNotifications: Button
     private lateinit var buttonService: Button
+    private lateinit var buttonDnd: Button
     private lateinit var cardNotifications: View
     private lateinit var switchStartOnBoot: SwitchMaterial
 
@@ -122,11 +124,13 @@ class ConfiguratorActivity : AppCompatActivity() {
         badgeNotifications = findViewById(R.id.badge_notifications)
         badgeService = findViewById(R.id.badge_service)
         badgeAlarm = findViewById(R.id.badge_alarm)
+        badgeDnd = findViewById(R.id.badge_dnd)
         buttonAccessibility = findViewById(R.id.button_accessibility)
         buttonMicrophone = findViewById(R.id.button_microphone)
         buttonContacts = findViewById(R.id.button_contacts)
         buttonNotifications = findViewById(R.id.button_notifications)
         buttonService = findViewById(R.id.button_service)
+        buttonDnd = findViewById(R.id.button_dnd)
         cardNotifications = findViewById(R.id.card_notifications)
         switchStartOnBoot = findViewById(R.id.switch_start_on_boot)
         editServerUrl = findViewById(R.id.edit_server_url)
@@ -159,6 +163,11 @@ class ConfiguratorActivity : AppCompatActivity() {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return@setOnClickListener
             if (hasNotificationsPermission()) openAppDetails()
             else requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        buttonDnd.setOnClickListener {
+            // DND uses a special-access grant screen (not a runtime permission).
+            // If already granted, the same screen lets the user revoke.
+            startActivity(Intent(AndroidSettings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
         }
         buttonService.setOnClickListener {
             if (ZwangliForegroundService.isRunning()) {
@@ -233,6 +242,7 @@ class ConfiguratorActivity : AppCompatActivity() {
         refreshNotifications()
         refreshService()
         refreshAlarm()
+        refreshDnd()
         refreshTriggers()
     }
 
@@ -279,6 +289,16 @@ class ConfiguratorActivity : AppCompatActivity() {
             PackageManager.PERMISSION_GRANTED
         renderBadge(badgeAlarm, ok)
     }
+
+    private fun refreshDnd() {
+        val ok = hasDndAccess()
+        renderBadge(badgeDnd, ok)
+        buttonDnd.text = getString(if (ok) R.string.action_revisit else R.string.action_grant)
+    }
+
+    private fun hasDndAccess(): Boolean =
+        getSystemService(android.app.NotificationManager::class.java)
+            ?.isNotificationPolicyAccessGranted == true
 
     private fun renderBadge(badge: TextView, ok: Boolean) {
         badge.text = getString(if (ok) R.string.badge_granted else R.string.badge_missing)

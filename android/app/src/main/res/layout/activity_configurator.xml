@@ -33,6 +33,14 @@
             android:textAppearance="?attr/textAppearanceTitleMedium"
             android:textStyle="bold" />
 
+        <TextView
+            android:id="@+id/text_perm_summary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:textAppearance="?attr/textAppearanceBodyMedium"
+            android:textStyle="bold" />
+
         <!-- Accessibility card -->
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"

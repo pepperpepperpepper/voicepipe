@@ -76,6 +76,11 @@
     <string name="configurator_title">Zwangli configurator</string>
     <string name="menu_configurator">Configurator</string>
     <string name="configurator_header_permissions">Permissions</string>
+    <string name="perm_summary_all_granted">✓ All permissions granted</string>
+    <plurals name="perm_summary_missing">
+        <item quantity="one">⚠ %1$d permission still missing</item>
+        <item quantity="other">⚠ %1$d permissions still missing</item>
+    </plurals>
     <string name="configurator_header_server">Server</string>
     <string name="badge_granted">✓ Granted</string>
     <string name="badge_missing">✗ Missing</string>

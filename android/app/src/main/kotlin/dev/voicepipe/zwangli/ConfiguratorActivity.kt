@@ -41,6 +41,7 @@ class ConfiguratorActivity : AppCompatActivity() {
     private val tester = ConnectionTester()
     private val triggersClient = TriggersClient()
 
+    private lateinit var textPermSummary: TextView
     private lateinit var badgeAccessibility: TextView
     private lateinit var badgeMicrophone: TextView
     private lateinit var badgeContacts: TextView
@@ -118,6 +119,7 @@ class ConfiguratorActivity : AppCompatActivity() {
     }
 
     private fun bindViews() {
+        textPermSummary = findViewById(R.id.text_perm_summary)
         badgeAccessibility = findViewById(R.id.badge_accessibility)
         badgeMicrophone = findViewById(R.id.badge_microphone)
         badgeContacts = findViewById(R.id.badge_contacts)
@@ -243,7 +245,32 @@ class ConfiguratorActivity : AppCompatActivity() {
         refreshService()
         refreshAlarm()
         refreshDnd()
+        refreshPermSummary()
         refreshTriggers()
+    }
+
+    /** Top-of-section tally of grant-based permissions still missing. Excludes
+     *  Alarm (auto-granted at install) and the foreground-service toggle (not a
+     *  permission). Notifications only counts on SDK 33+, where its card shows. */
+    private fun refreshPermSummary() {
+        val grants = mutableListOf(
+            ZwangliAccessibilityService.isConnected(),
+            hasMicPermission(),
+            hasContactsPermission(),
+            hasDndAccess(),
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            grants.add(hasNotificationsPermission())
+        }
+        val missing = grants.count { !it }
+        if (missing == 0) {
+            textPermSummary.text = getString(R.string.perm_summary_all_granted)
+            textPermSummary.setTextColor(0xFF2E7D32.toInt())
+        } else {
+            textPermSummary.text =
+                resources.getQuantityString(R.plurals.perm_summary_missing, missing, missing)
+            textPermSummary.setTextColor(0xFFC62828.toInt())
+        }
     }
 
     private fun refreshAccessibility() {
